@@ -13,6 +13,13 @@ import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import { assertCompactionMessageReferences } from "@/modules/sessions/compaction/validation";
 import { sessionContextEditSchema } from "@/modules/sessions/context-edits";
 import { SESSION_LOG_IDENTIFIER_PATTERN } from "@/modules/sessions/session-log-identifiers";
+import {
+	type PluginSessionStateJsonValue,
+	serializePluginSessionStateValue,
+	validatePluginSessionStateKey,
+	validatePluginSessionStatePluginId,
+	validatePluginSessionStateSchemaVersion,
+} from "@/modules/sessions/session-plugin-state";
 import { editModeSchema } from "@/modules/tools/versioned/contracts";
 import type {
 	CompactionId,
@@ -21,7 +28,7 @@ import type {
 } from "@/shared/identifiers";
 import { getSessionRecordValidationError } from "./session-record";
 
-export const SESSION_LOG_FORMAT_VERSION = 1;
+export const SESSION_LOG_FORMAT_VERSION = 2;
 export const SESSION_LOG_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 
 export const SESSION_LOG_EVENT_TYPES = [
@@ -33,6 +40,8 @@ export const SESSION_LOG_EVENT_TYPES = [
 	"submission.status-updated",
 	"compaction.committed",
 	"usage.committed",
+	"plugin.state-replaced",
+	"plugin.state-deleted",
 	"session.activation-confirmed",
 	"session.forked",
 	"session.deleted",
@@ -358,6 +367,94 @@ export const parseSessionForkedPayload = (
 	value: unknown
 ): SessionForkedPayload => sessionForkedPayloadSchema.parse(value);
 
+const pluginSessionStateKeySchema = z.string().superRefine((key, context) => {
+	try {
+		validatePluginSessionStateKey(key);
+	} catch (error) {
+		context.addIssue({
+			code: "custom",
+			message:
+				error instanceof Error ? error.message : "Plugin State key is invalid.",
+		});
+	}
+});
+
+const pluginSessionStatePluginIdSchema = z
+	.string()
+	.superRefine((pluginId, context) => {
+		try {
+			validatePluginSessionStatePluginId(pluginId);
+		} catch (error) {
+			context.addIssue({
+				code: "custom",
+				message:
+					error instanceof Error
+						? error.message
+						: "Plugin Identifier is invalid.",
+			});
+		}
+	});
+
+const pluginSessionStateVersionSchema = z
+	.number()
+	.superRefine((version, context) => {
+		try {
+			validatePluginSessionStateSchemaVersion(version);
+		} catch (error) {
+			context.addIssue({
+				code: "custom",
+				message:
+					error instanceof Error
+						? error.message
+						: "Plugin State version is invalid.",
+			});
+		}
+	});
+
+const pluginSessionStateReplacedPayloadSchema = z
+	.object({
+		key: pluginSessionStateKeySchema,
+		pluginId: pluginSessionStatePluginIdSchema,
+		schemaVersion: pluginSessionStateVersionSchema,
+		value: z.unknown(),
+	})
+	.strict()
+	.superRefine((payload, context) => {
+		try {
+			serializePluginSessionStateValue(payload.value);
+		} catch (error) {
+			context.addIssue({
+				code: "custom",
+				message:
+					error instanceof Error
+						? error.message
+						: "Plugin State value is invalid.",
+				path: ["value"],
+			});
+		}
+	});
+
+const pluginSessionStateDeletedPayloadSchema = z
+	.object({
+		key: pluginSessionStateKeySchema,
+		pluginId: pluginSessionStatePluginIdSchema,
+		schemaVersion: pluginSessionStateVersionSchema,
+	})
+	.strict();
+
+export type PluginSessionStateReplacedPayload = Readonly<{
+	key: string;
+	pluginId: string;
+	schemaVersion: number;
+	value: PluginSessionStateJsonValue;
+}>;
+
+export type PluginSessionStateDeletedPayload = Readonly<{
+	key: string;
+	pluginId: string;
+	schemaVersion: number;
+}>;
+
 const usageCommittedPayloadSchema = z
 	.object({
 		compactionId: safeIdentifierSchema.nullable().optional(),
@@ -386,6 +483,8 @@ const eventPayloadSchemas: Readonly<
 	"submission.status-updated": submissionStatusPayloadSchema,
 	"compaction.committed": compactionPayloadSchema,
 	"usage.committed": usageCommittedPayloadSchema,
+	"plugin.state-replaced": pluginSessionStateReplacedPayloadSchema,
+	"plugin.state-deleted": pluginSessionStateDeletedPayloadSchema,
 	"session.activation-confirmed": z
 		.object({ bundleIdentity: z.string().regex(SESSION_LOG_HASH_PATTERN) })
 		.strict(),

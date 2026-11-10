@@ -10,6 +10,7 @@ import {
 
 export type JsonValueValidationOptions = Readonly<{
 	maxDepth?: number;
+	rejectSymbols?: boolean;
 	rejectToJSON?: boolean;
 }>;
 
@@ -34,8 +35,12 @@ const enqueueJsonChildren = (
 	value: UnknownRecord,
 	depth: number,
 	pending: PendingJsonValue[],
+	rejectSymbols: boolean,
 	rejectToJSON: boolean
 ): boolean => {
+	if (rejectSymbols && Object.getOwnPropertySymbols(value).length > 0) {
+		return false;
+	}
 	if (rejectToJSON && Object.hasOwn(value, "toJSON")) {
 		return false;
 	}
@@ -61,7 +66,7 @@ const enqueueJsonChildren = (
  * references and cyclic values are rejected because JSON values are trees.
  * Set rejectToJSON when host serialization must not invoke object hooks. The
  * default depth is unbounded; callers handling untrusted data should set
- * maxDepth.
+ * maxDepth. Set rejectSymbols when symbol-keyed properties must not be ignored.
  */
 export const isJsonValue = (
 	value: unknown,
@@ -93,6 +98,7 @@ export const isJsonValue = (
 					current.value,
 					current.depth + 1,
 					pending,
+					options.rejectSymbols ?? false,
 					options.rejectToJSON ?? false
 				)
 			) {

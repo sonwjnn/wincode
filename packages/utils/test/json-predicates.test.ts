@@ -36,6 +36,14 @@ describe("runtime JSON predicates", () => {
 		expect(isJsonValue(cyclic)).toBe(false);
 	});
 
+	test("can reject symbol-keyed properties that JSON serialization would drop", () => {
+		const symbolKey = Symbol("hidden JSON property");
+		const value = { visible: true, [symbolKey]: "hidden" };
+
+		expect(isJsonValue(value)).toBe(true);
+		expect(isJsonValue(value, { rejectSymbols: true })).toBe(false);
+	});
+
 	test("rejects custom JSON serialization hooks when requested", () => {
 		const arrayWithSerializer = ["value"];
 		Object.defineProperty(arrayWithSerializer, "toJSON", {

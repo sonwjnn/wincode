@@ -8,6 +8,7 @@ import {
 	isObjectLike,
 	isPlainObject,
 	logger,
+	omitUndefined,
 } from "@wincode/utils";
 import {
 	resourceSourcePrecedence,
@@ -20,6 +21,10 @@ import { codingToolNames } from "@/modules/tools";
 import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import {
+	validatePluginSessionStatePluginId,
+	validatePluginSessionStateSchemaVersion,
+} from "../sessions/session-plugin-state";
 import {
 	createPluginPromptSelectionBridge,
 	type PluginPromptSelectionBridge,
@@ -103,6 +108,7 @@ type MutablePluginDraft = {
 	sourcePath: string;
 	tools: Map<string, PluginTool>;
 	workspace: string;
+	sessionStateVersion?: number;
 };
 
 type PluginPath = Readonly<{
@@ -502,6 +508,10 @@ const createPluginAPI = (
 			) {
 				throw new Error("A Plugin must declare one non-empty identifier.");
 			}
+			if (identity.sessionStateVersion !== undefined) {
+				validatePluginSessionStatePluginId(identity.id);
+				validatePluginSessionStateSchemaVersion(identity.sessionStateVersion);
+			}
 			const draft: MutablePluginDraft = {
 				agents: new Map(),
 				commands: new Map(),
@@ -510,6 +520,7 @@ const createPluginAPI = (
 				resources: new Map(),
 				statusPanels: new Map(),
 				id: identity.id,
+				...omitUndefined({ sessionStateVersion: identity.sessionStateVersion }),
 				sourcePath: context.sourcePath,
 				tools: new Map(),
 				workspace: context.workspace,
@@ -586,6 +597,7 @@ const loadedPluginFromDraft = (
 		Object.freeze({
 			action: `plugin:${draft.id}:${tool.name}`,
 			description: tool.description,
+			...omitUndefined({ executionMode: tool.executionMode }),
 			...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 			handler: tool.handler,
 			inputSchema: tool.inputSchema,
@@ -645,6 +657,7 @@ const loadedPluginFromDraft = (
 		sourcePath: draft.sourcePath,
 		tools: Object.freeze(registeredTools),
 		workspace: draft.workspace,
+		...omitUndefined({ sessionStateVersion: draft.sessionStateVersion }),
 	});
 };
 

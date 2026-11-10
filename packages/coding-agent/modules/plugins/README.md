@@ -85,7 +85,9 @@ plugin.registerProvider({
 
 The Plugin supplies Provider behavior and its connect interaction; Wincode owns persistence. Plugin code receives no CredentialStore API and cannot look up stored credentials by Provider ID. At invocation, the SDK supplies only the credential stored for that registration's Plugin ID and canonical trusted source identity. The same owner identity scopes Known Model snapshots; a different source must connect again, and records for an absent Plugin remain quarantined. Provider IDs colliding with built-ins or another Plugin are rejected.
 
-Plugin Tool handlers receive an `AbortSignal`; parallel calls may invoke handlers concurrently, so Plugins coordinate shared mutable state themselves. Tool input schemas may be Zod or JSON Schema. Handlers return the common Tool outcome shape: `{ type: "success", output }` or `{ type: "failure", errorText }`. Successful output is bounded to 64 KiB of UTF-8 text or JSON; failures become safe failed Tool Calls.
+Plugin Tool handlers receive an `AbortSignal`. Calls within a Model Step run concurrently by default (`executionMode: "parallel"`, or omitted). Declare `executionMode: "sequential"` on a Tool that reads and modifies shared state: if any Tool in the batch requests sequential execution, the entire batch runs in model-emitted order, awaiting each handler before starting the next. This includes awaited work in the handler; read current state inside the handler, not before scheduling. Cancellation prevents remaining sequential calls from starting; an ordinary Tool failure does not skip siblings.
+
+`exclusiveInBatch: true` has a different meaning: the Tool must be the only call in its Model Step. A mixed batch containing an exclusive Tool is rejected before any handler runs, even if a Tool requests sequential execution. Sequential scheduling is not a global Plugin lock or a transaction: it does not coordinate Plugin Commands, background callbacks, other Sessions, or snapshots prepared earlier. Plugins must coordinate those writers themselves; earlier successful effects are not rolled back. Tool input schemas may be Zod or JSON Schema. Handlers return the common Tool outcome shape: `{ type: "success", output }` or `{ type: "failure", errorText }`. Successful output is bounded to 64 KiB of UTF-8 text or JSON; failures become safe failed Tool Calls.
 
 Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeAgentTurn(context, scope)`. The pre-Turn context contains the Session ID, Agent ID, workspace, and abort signal. Within one Plugin, Turn registrations override Session registrations, which override factory registrations. A same-scope registration replaces that Plugin's previous definition; `unregisterTool(name)` masks an outer definition only in that scope. Other Plugins cannot replace its tools. A failed pre-Turn hook contributes no tools for that Plugin on the affected Turn.
 
@@ -119,6 +121,47 @@ const child = await childSdk.openSession(childSessionId);
 The Wincode distribution includes MCP and Subagents factories by default for application entry points. Direct SDK callers select only the Plugins they need.
 
 Dispose child handles and child SDK runtimes when their work is complete. Coding and shell remain native Session tools; Skills remain native host capabilities.
+
+## Portable Plugin state
+
+A Plugin that stores small, declarative state about one conversation can opt in with `sessionStateVersion`. Wincode exposes a Session-bound `sessionState` capability in Session lifecycle hooks, pre-Agent-Turn and compaction contexts, Plugin Tool contexts, and Session-bound Plugin Command contexts. Factory/process contexts do not receive it; a command without a loaded Session continues to work without persistent state. The capability is bound to the current Plugin Identifier and Session, and exposes only `read(key)`, `set(key, value, operationId)`, and `delete(key, operationId)`.
+
+```ts
+const jira = api.definePlugin({ id: "jira", sessionStateVersion: 1 });
+
+jira.onSessionStart(async ({ sessionState }) => {
+  if (sessionState === undefined) return;
+  const plan = await sessionState.read("plan");
+  if (plan.kind === "value") {
+    // Use plan.value in Plugin logic; reads do not add it to model context.
+  }
+});
+
+jira.registerTool({
+  name: "record_plan",
+  description: "Record the current Jira investigation plan.",
+  inputSchema: z.object({ issue: z.string() }),
+  handler: async ({ issue }, { sessionState, toolCallId }) => {
+    if (sessionState === undefined) {
+      return { type: "failure", errorText: "No Session is active." };
+    }
+    await sessionState.set(
+      "plan",
+      { issue, status: "investigating" },
+      `plan-${new Bun.CryptoHasher("sha256").update(toolCallId).digest("hex")}`,
+    );
+    return { type: "success", output: { recorded: true } };
+  },
+});
+```
+
+For a complete executable example, see [the checklist Plugin](../../examples/checklist-plugin.ts). It validates restored data without replaying actions, reads the latest checklist inside a sequential handler, and commits each change before returning success. Enable it explicitly with `wincode --plugin packages/coding-agent/examples/checklist-plugin.ts` from the repository root. Persist when state changes, not only in `onSessionShutdown`: a crash need not run cleanup hooks. The example has no shutdown writes, task replay, or operational ownership transfer.
+
+Operation IDs must contain at most 512 ASCII characters, start with a letter or digit, and otherwise contain only letters, digits, `.`, `_`, or `-`. Hashing an opaque Tool Call ID produces a stable safe identifier; do not interpolate arbitrary IDs containing `:` or `/` directly. Retry with the same operation ID **and payload**. A rejected indeterminate write is not proof that nothing committed; keep the Session blocked until storage reconciliation, and do not invent a new operation ID to retry uncertain work.
+
+Values must be strict JSON and no larger than 64 KiB; keys are non-empty and at most 256 UTF-8 bytes. `read` returns `absent` for missing or deleted keys and `value` even when the stored JSON is `null`; an incompatible stored version returns `incompatible` with its version. `set` and `delete` reject an incompatible stored version with `PluginSessionStateVersionError`; Wincode does not automatically migrate or discard unknown state. Use a stable operation ID and the same payload when retrying a write.
+
+Session Bundles retain these entries. A Session Fork inherits only the effective state in the JSONL prefix ending at its selected Session Record: a state event appended after that Record is excluded, even if it was written during the same Agent Turn. Replacement and deletion append entries; they do not erase old payloads from the log, so this capability is not for secrets and deletion is not secure erasure. Plugin state never enters Session Context automatically and does not imply replay, task ownership transfer, or availability of external resources.
 
 ## Compaction hooks
 

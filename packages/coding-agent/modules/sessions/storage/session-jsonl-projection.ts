@@ -1120,6 +1120,8 @@ export const createSessionJsonlProjection = (
 					switch (envelope.type) {
 						case "session.header":
 						case "session.activation-confirmed":
+						case "plugin.state-replaced":
+						case "plugin.state-deleted":
 							break;
 						case "context.edited":
 							projectContextEdit(entry);

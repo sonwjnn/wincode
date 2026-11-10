@@ -28,6 +28,9 @@ type ToolValidationResult =
 	| { readonly success: true; readonly value: unknown }
 	| { readonly error: Error; readonly success: false };
 
+/** Scheduling policy for sibling Tool Calls in one Model Step. */
+export type ToolExecutionMode = "parallel" | "sequential";
+
 /**
  * The SDK-neutral declaration of one tool an Agent may invoke. Concrete tools
  * normally use Zod; dynamic catalogs may preserve their source JSON Schema.
@@ -35,6 +38,8 @@ type ToolValidationResult =
 export type ToolDefinition = Readonly<{
 	description: string;
 	exclusiveInBatch?: true;
+	/** A sequential Tool serializes every sibling call in the Model Step. */
+	executionMode?: ToolExecutionMode;
 	inputSchema: z.ZodType | ToolJsonSchema;
 	name: string;
 	outputSchema?: z.ZodType;
@@ -61,13 +66,17 @@ export const isToolDefinition = (value: unknown): value is ToolDefinition => {
 				![
 					"description",
 					"exclusiveInBatch",
+					"executionMode",
 					"inputSchema",
 					"name",
 					"outputSchema",
 				].includes(key)
 		) ||
 		(!isUndefined(definition.exclusiveInBatch) &&
-			definition.exclusiveInBatch !== true)
+			definition.exclusiveInBatch !== true) ||
+		(!isUndefined(definition.executionMode) &&
+			definition.executionMode !== "parallel" &&
+			definition.executionMode !== "sequential")
 	) {
 		return false;
 	}

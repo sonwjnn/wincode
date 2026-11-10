@@ -9,6 +9,7 @@ Wincode cần lịch sử đọc được bằng editor, di chuyển được c�
 ## Quyết định
 
 - JSONL chứa đủ metadata và Session Selection, Session Records, thay đổi Steering Status, compactions và Session Usage Entries để dựng lại trạng thái Session. Một checkpoint được ghi trọn trong một entry có version, identity và sequence; thay đổi được append, không sửa dòng cũ. Token deltas, Queued Submissions và runtime đang chạy không được persist thành log event.
+- Plugin Session State dùng các event JSONL v2 riêng cho replace-key và delete-key, với Plugin Identifier, key, schema version và strict JSON value có giới hạn. State không có bảng SQLite riêng; giá trị hiện hành được dựng lại từ log, Bundle mang theo event và Fork sao chép đúng prefix tới checkpoint với operation identity của log đích.
 - ACK commit chỉ được phát sau khi log và các attachment mới được tham chiếu đã sync; tạo/publish file còn phải bảo đảm độ bền directory entry. Mức bảo đảm chịu process/OS crash và mất điện giới hạn bởi filesystem/storage hỗ trợ đúng sync. Không tự hạ cấp khi sync hoặc OS locking không được hỗ trợ.
 - Log đã sync là đã commit dù SQLite lỗi. Projection cập nhật rows và cursor byte-offset/sequence/hash cùng một transaction. Khi projection lỗi, Session thể hiện commit đã thành công nhưng ngừng scheduling mới cho tới khi catch-up; không trả lỗi như thể input chưa được lưu. Ghi/sync không xác định kết quả phải dừng writer, đối soát log và retry cùng operation identity/payload, không append trùng. Điều này thay hợp đồng cũ của `SessionStore` rằng mọi rejected commit đều không có durable state.
 - DB projection tách khỏi DB vận hành. Rebuild không xóa prompt history, File Observations, File Transactions, path leases hoặc Unresolved Recovery. Attachment bytes được giữ riêng; liveness được quyết định từ nguồn chuẩn và các owner hợp lệ, không từ projection có thể tụt sau.
@@ -23,7 +24,7 @@ Wincode cần lịch sử đọc được bằng editor, di chuyển được c�
 
 UI và public SDK có pagination, history, statistics, fork/rewind và import/export; CLI có import/export, verify/rebuild và các thao tác Session tương ứng. RPC dùng chung application service, không có writer riêng. Không có full-text search, cây nhánh trong cùng Session, network/shared-filesystem coordination, tự resume interrupted turns, hoặc workspace rollback trong quyết định này.
 
-Clean cutover theo quy tắc solo-dev: không thêm migration hoặc legacy fallback. Không được dùng reset projection làm lý do tự xóa dữ liệu operational recovery. Giữ nguyên ownership của Stateful Agent/Session Host và Plugin theo ADR-0035/0040; không tạo event-sourced runtime hay đổi ý nghĩa Agent Turn. Giữ các tier/precedence của Session Selection theo ADR-0054, chỉ đổi nơi lưu nguồn chuẩn.
+Clean cutover theo quy tắc solo-dev: việc thêm event Plugin Session State nâng Session JSONL format lên v2; log v1 không được hỗ trợ và phải fail closed. Không thêm migration hoặc legacy fallback. Không được dùng reset projection làm lý do tự xóa dữ liệu operational recovery. Giữ nguyên ownership của Stateful Agent/Session Host và Plugin theo ADR-0035/0040; không tạo event-sourced runtime hay đổi ý nghĩa Agent Turn. Giữ các tier/precedence của Session Selection theo ADR-0054, chỉ đổi nơi lưu nguồn chuẩn.
 
 ## Tài liệu liên quan
 

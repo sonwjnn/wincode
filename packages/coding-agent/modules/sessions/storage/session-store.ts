@@ -61,6 +61,11 @@ export type {
 import type { SessionContextEdit } from "../context-edits";
 import type { SessionBundleImportResult } from "../session-bundle-contract";
 import type {
+	PluginSessionStateMutation,
+	PluginSessionStateMutationResult,
+	PluginSessionStateRecord,
+} from "../session-plugin-state";
+import type {
 	PreparedSessionBundleExport,
 	SessionBundleImportFileSystem,
 } from "./session-bundle";
@@ -427,5 +432,15 @@ export type SessionStore = Omit<
 	updateSessionSubmission: (
 		input: UpdateSessionSubmissionInput
 	) => Promise<SessionWriteOutcome>;
+	getPluginSessionState: (
+		sessionId: SessionId,
+		pluginId: string,
+		key: string
+	) => Promise<PluginSessionStateRecord | undefined>;
+	mutatePluginSessionState: (
+		sessionId: SessionId,
+		pluginId: string,
+		mutation: PluginSessionStateMutation
+	) => Promise<PluginSessionStateMutationResult>;
 };
 export const UNTITLED_SESSION_TITLE = "Untitled Session";

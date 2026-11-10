@@ -4,6 +4,7 @@ import type {
 	AgentTurnId,
 	ToolCallId,
 	ToolCallOutput,
+	ToolExecutionMode,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
 import type {
@@ -18,14 +19,53 @@ import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
 } from "../sessions/sdk-contract";
+import type {
+	PluginSessionStateJsonValue,
+	PluginSessionStateRead,
+} from "../sessions/session-plugin-state";
+import type { SessionWriteOutcome } from "../sessions/session-write-outcome";
 
-export type PluginJsonValue =
-	| null
-	| boolean
-	| number
-	| string
-	| readonly PluginJsonValue[]
-	| { readonly [key: string]: PluginJsonValue };
+export type PluginJsonValue = PluginSessionStateJsonValue;
+
+export type PluginSessionState = Readonly<{
+	/** Reads a snapshot without adding it to the Session Context. */
+	read: (key: string) => Promise<PluginSessionStateRead>;
+	/** Replaces the complete value under key using a stable operation identity. */
+	set: (
+		key: string,
+		value: PluginJsonValue,
+		operationId: string
+	) => Promise<void>;
+	/** Appends a tombstone for key using a stable operation identity. */
+	delete: (key: string, operationId: string) => Promise<void>;
+}>;
+
+export class PluginSessionStateVersionError extends Error {
+	readonly code = "plugin_session_state_version_mismatch" as const;
+	readonly storedSchemaVersion: number;
+
+	constructor(storedSchemaVersion: number) {
+		super(
+			`Plugin Session State uses schema version ${storedSchemaVersion}, which this Plugin does not support.`
+		);
+		this.name = "PluginSessionStateVersionError";
+		this.storedSchemaVersion = storedSchemaVersion;
+	}
+}
+
+export class PluginSessionStateWriteError extends Error {
+	readonly code = "plugin_session_state_write_failed" as const;
+	readonly writeOutcome: SessionWriteOutcome;
+
+	constructor(writeOutcome: SessionWriteOutcome, cause?: unknown) {
+		super(
+			"Plugin Session State was not durably committed.",
+			cause === undefined ? undefined : { cause }
+		);
+		this.name = "PluginSessionStateWriteError";
+		this.writeOutcome = writeOutcome;
+	}
+}
 
 /** The outcome a Plugin Tool returns to Wincode. */
 export type PluginToolResult = ToolCallOutput;
@@ -170,6 +210,7 @@ export type PluginSessionContext = Readonly<{
 	executionMode?: ExecutionMode;
 	sessionId: string;
 	sessionSdk?: SessionSdkOperations;
+	sessionState?: PluginSessionState;
 	workspace: string;
 }>;
 
@@ -229,6 +270,7 @@ export type PluginToolContext = PluginSessionContext &
 export type PluginCommandContext = Readonly<{
 	argument: string;
 	sessionId?: string;
+	sessionState?: PluginSessionState;
 	workspace: string;
 }>;
 
@@ -236,6 +278,7 @@ export type PluginToolRegistration<Schema extends PluginInputSchema> =
 	Readonly<{
 		description: string;
 		exclusiveInBatch?: true;
+		executionMode?: ToolExecutionMode;
 		handler: (
 			input: Schema extends z.ZodType ? z.output<Schema> : unknown,
 			context: PluginToolContext
@@ -322,7 +365,9 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 	}>;
 
 export type PluginAPI = Readonly<{
-	definePlugin: (identity: Readonly<{ id: string }>) => PluginDefinitionAPI;
+	definePlugin: (
+		identity: Readonly<{ id: string; sessionStateVersion?: number }>
+	) => PluginDefinitionAPI;
 	/** Set the focused Interactive composer model for future Submissions. */
 	setModel: (model: ProviderModelSelection) => Promise<boolean>;
 	/** Set or clear the focused composer ThinkingLevel for future Submissions; unsupported levels are ignored. */

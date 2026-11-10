@@ -345,6 +345,9 @@ const selectPluginToolProviderContext = (
 	...(context.pluginTools === undefined
 		? {}
 		: { pluginTools: context.pluginTools }),
+	...(context.pluginRuntime === undefined
+		? {}
+		: { pluginRuntime: context.pluginRuntime }),
 	...(context.signal === undefined ? {} : { signal: context.signal }),
 	...(context.pluginRuntime === undefined
 		? {}

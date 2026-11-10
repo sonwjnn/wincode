@@ -8,14 +8,15 @@ import {
 	type ToolExecutorOptions,
 	type ToolJsonSchema,
 } from "@wincode/agent-core";
-import { isJsonValue, logger } from "@wincode/utils";
+import { isJsonValue, logger, omitUndefined } from "@wincode/utils";
 import { isPluginOutputWithinLimit } from "./output";
-import type { PluginToolDescriptor } from "./runtime";
+import type { PluginRuntime, PluginToolDescriptor } from "./runtime";
 import type { PluginTool } from "./types";
 
 export type PluginToolsContext = Readonly<{
 	agentId?: AgentId;
 	pluginTools?: readonly PluginToolDescriptor[];
+	pluginRuntime?: PluginRuntime;
 	existingToolNames?: readonly string[];
 	registerBackgroundWork?: (sessionId: string, work: Promise<unknown>) => void;
 	sessionId?: string;
@@ -104,9 +105,14 @@ const executePluginToolHandler = async (
 	signal?: AbortSignal
 ): Promise<ToolCallOutput> => {
 	try {
+		const sessionState = context.pluginRuntime?.getSessionStateForPlugin(
+			tool.pluginId,
+			context.sessionId ?? ""
+		);
 		const result = await tool.handler(input, {
 			agentId,
 			sessionId: context.sessionId ?? "",
+			...omitUndefined({ sessionState }),
 			signal: signal ?? context.signal ?? new AbortController().signal,
 			toolCallId,
 			registerBackgroundWork: (work) =>
@@ -126,6 +132,7 @@ const pluginTool = (
 ): ResolvedTool => ({
 	definition: {
 		description: `Plugin '${tool.pluginId}' capability. ${tool.description}`,
+		...omitUndefined({ executionMode: tool.executionMode }),
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 		inputSchema: tool.inputSchema,
 		name: tool.name,

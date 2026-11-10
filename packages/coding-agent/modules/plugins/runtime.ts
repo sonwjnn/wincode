@@ -1,4 +1,18 @@
-import { getErrorMessage, isNonEmptyString, logger } from "@wincode/utils";
+import {
+	getErrorMessage,
+	isNonEmptyString,
+	logger,
+	omitUndefined,
+} from "@wincode/utils";
+import { isValidSessionLogIdentifier } from "../sessions/session-log-identifiers";
+import {
+	type PluginSessionStateMutation,
+	type PluginSessionStatePersistence,
+	serializePluginSessionStateValue,
+	validatePluginSessionStateKey,
+	validatePluginSessionStateSchemaVersion,
+} from "../sessions/session-plugin-state";
+import type { SessionWriteOutcome } from "../sessions/session-write-outcome";
 import { attachPluginHostContext } from "./host-context";
 import {
 	createPluginPromptSelectionBridge,
@@ -20,6 +34,7 @@ import type {
 	PluginCompactionFailedContext,
 	PluginCompactionFailedHook,
 	PluginInputSchema,
+	PluginJsonValue,
 	PluginMcpServerRegistration,
 	PluginProcessContext,
 	PluginProcessStartHook,
@@ -28,11 +43,16 @@ import type {
 	PluginSessionContext,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
+	PluginSessionState,
 	PluginShutdownHook,
 	PluginStatusPanelActionContext,
 	PluginStatusPanelRegistration,
 	PluginToolRegistration,
 	PluginToolRegistrationAPI,
+} from "./public";
+import {
+	PluginSessionStateVersionError,
+	PluginSessionStateWriteError,
 } from "./public";
 import { validatePluginCommand, validatePluginTool } from "./registration";
 import type { PluginCommand, PluginTool } from "./types";
@@ -48,6 +68,7 @@ export type PluginProviderSourceScope = "explicit" | "global" | "project";
 export type PluginToolDescriptor = Readonly<{
 	description: string;
 	exclusiveInBatch?: true;
+	executionMode?: PluginTool["executionMode"];
 	handler: PluginTool["handler"];
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
@@ -102,6 +123,7 @@ export type LoadedPlugin = Readonly<{
 	sourcePath: string;
 	tools: readonly PluginToolDescriptor[];
 	workspace: string;
+	sessionStateVersion?: number;
 }>;
 
 export type LoadedPluginReference = Readonly<{
@@ -131,6 +153,10 @@ export type PluginRuntime = Readonly<{
 		pluginId: string,
 		name: string
 	) => Resource | undefined;
+	getSessionStateForPlugin: (
+		pluginId: string,
+		sessionId: string
+	) => PluginSessionState | undefined;
 	getStatusPanels: () => readonly PluginStatusPanelDescriptor[];
 	refreshStatusPanel: (pluginId: string, panelId: string) => Promise<void>;
 	runStatusPanelAction: (
@@ -164,7 +190,10 @@ export type PluginRuntime = Readonly<{
 	) => Promise<void>;
 	start: () => Promise<readonly PluginDiagnostic[]>;
 	shutdown: () => Promise<void>;
-	startSession: (context: PluginSessionContext) => Promise<void>;
+	startSession: (
+		context: PluginSessionContext,
+		persistence?: PluginSessionStatePersistence
+	) => Promise<void>;
 	stopSession: (context: PluginSessionContext) => Promise<void>;
 }>;
 
@@ -177,10 +206,13 @@ type MutablePluginScope = {
 type SessionPluginState = {
 	commands: Map<string, PluginCommandDescriptor>;
 	context: PluginSessionContext;
+	closed: boolean;
 	disabled: Set<string>;
 	maskedTools: Set<string>;
+	persistence?: PluginSessionStatePersistence;
 	started: Set<string>;
 	startPromise: Promise<void>;
+	storageError?: Error;
 	stopPromise?: Promise<void>;
 	tools: Map<string, PluginToolDescriptor>;
 };
@@ -206,6 +238,7 @@ const descriptorForTool = (
 ): PluginToolDescriptor =>
 	Object.freeze({
 		description: tool.description,
+		...omitUndefined({ executionMode: tool.executionMode }),
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,
@@ -495,6 +528,133 @@ export const createPluginRuntime = (
 			}
 		}
 	};
+	const pluginSessionStateFor = (
+		plugin: LoadedPlugin,
+		state: SessionPluginState | undefined
+	): PluginSessionState | undefined => {
+		if (state === undefined) {
+			return;
+		}
+		const schemaVersion = plugin.sessionStateVersion;
+		const persistence = state.persistence;
+		if (schemaVersion === undefined || persistence === undefined) {
+			return;
+		}
+		validatePluginSessionStateSchemaVersion(schemaVersion);
+		const assertActive = (): void => {
+			if (
+				state.closed ||
+				sessionStates.get(state.context.sessionId) !== state
+			) {
+				throw new Error("Plugin Session State capability is no longer active.");
+			}
+		};
+		const writeErrorFor = (
+			writeOutcome: SessionWriteOutcome
+		): PluginSessionStateWriteError => {
+			const error = new PluginSessionStateWriteError(writeOutcome);
+			if (
+				writeOutcome.kind === "indeterminate" ||
+				(writeOutcome.kind === "committed" &&
+					writeOutcome.projection === "blocked")
+			) {
+				state.storageError ??=
+					persistence.reportWriteOutcome?.(writeOutcome) ?? error;
+				return new PluginSessionStateWriteError(
+					writeOutcome,
+					state.storageError
+				);
+			}
+			return error;
+		};
+		return Object.freeze({
+			read: async (key) => {
+				validatePluginSessionStateKey(key);
+				assertActive();
+				const current = await persistence.read(plugin.id, key);
+				assertActive();
+				if (current === undefined) {
+					return { kind: "absent" as const };
+				}
+				if (current.schemaVersion !== schemaVersion) {
+					return {
+						kind: "incompatible" as const,
+						schemaVersion: current.schemaVersion,
+					};
+				}
+				return {
+					kind: "value" as const,
+					schemaVersion: current.schemaVersion,
+					value: structuredClone(current.value),
+				};
+			},
+			set: async (key, value, operationId) => {
+				validatePluginSessionStateKey(key);
+				if (!isValidSessionLogIdentifier(operationId)) {
+					throw new Error("Plugin Session State operation ID is invalid.");
+				}
+				const copiedValue = JSON.parse(
+					serializePluginSessionStateValue(value)
+				) as PluginJsonValue;
+				assertActive();
+				const mutation: PluginSessionStateMutation = {
+					key,
+					kind: "set",
+					operationId,
+					schemaVersion,
+					value: copiedValue,
+				};
+				const result = await persistence.mutate(plugin.id, mutation);
+				assertActive();
+				if (result.kind === "schema-version-mismatch") {
+					throw new PluginSessionStateVersionError(result.storedSchemaVersion);
+				}
+				if (
+					result.writeOutcome.kind !== "committed" ||
+					result.writeOutcome.projection !== "ready"
+				) {
+					throw writeErrorFor(result.writeOutcome);
+				}
+			},
+			delete: async (key, operationId) => {
+				validatePluginSessionStateKey(key);
+				if (!isValidSessionLogIdentifier(operationId)) {
+					throw new Error("Plugin Session State operation ID is invalid.");
+				}
+				assertActive();
+				const mutation: PluginSessionStateMutation = {
+					key,
+					kind: "delete",
+					operationId,
+					schemaVersion,
+				};
+				const result = await persistence.mutate(plugin.id, mutation);
+				assertActive();
+				if (result.kind === "schema-version-mismatch") {
+					throw new PluginSessionStateVersionError(result.storedSchemaVersion);
+				}
+				if (
+					result.writeOutcome.kind !== "committed" ||
+					result.writeOutcome.projection !== "ready"
+				) {
+					throw writeErrorFor(result.writeOutcome);
+				}
+			},
+		});
+	};
+	const contextForPlugin = <Context extends PluginSessionContext>(
+		plugin: LoadedPlugin,
+		state: SessionPluginState | undefined,
+		context: Context
+	): Context => {
+		const { sessionState: _ignored, ...base } = context;
+		const sessionState =
+			state === undefined ? undefined : pluginSessionStateFor(plugin, state);
+		return Object.freeze({
+			...base,
+			...omitUndefined({ sessionState }),
+		}) as Context;
+	};
 	const initializePluginSession = async (
 		plugin: LoadedPlugin,
 		state: SessionPluginState
@@ -520,7 +680,7 @@ export const createPluginRuntime = (
 		};
 		try {
 			await plugin.onSessionStart?.(
-				state.context,
+				contextForPlugin(plugin, state, state.context),
 				createScopeApi(plugin, scope, {
 					commandsAllowed: true,
 					sessionId: state.context.sessionId,
@@ -547,7 +707,10 @@ export const createPluginRuntime = (
 			);
 		}
 	};
-	const startSession = async (context: PluginSessionContext): Promise<void> => {
+	const startSession = async (
+		context: PluginSessionContext,
+		persistence?: PluginSessionStatePersistence
+	): Promise<void> => {
 		const existing = sessionStates.get(context.sessionId);
 		if (existing !== undefined) {
 			await existing.startPromise;
@@ -557,7 +720,9 @@ export const createPluginRuntime = (
 		const state: SessionPluginState = {
 			commands: new Map(),
 			context,
+			closed: false,
 			disabled: new Set(),
+			...omitUndefined({ persistence }),
 			maskedTools: new Set(),
 			started: new Set(),
 			startPromise: deferred.promise,
@@ -589,7 +754,9 @@ export const createPluginRuntime = (
 					continue;
 				}
 				try {
-					await plugin.onSessionShutdown(context);
+					await plugin.onSessionShutdown(
+						contextForPlugin(plugin, state, context)
+					);
 				} catch (error) {
 					await logPluginFailure(
 						"Plugin Session shutdown hook failed",
@@ -599,6 +766,7 @@ export const createPluginRuntime = (
 					);
 				}
 			}
+			state.closed = true;
 			if (sessionStates.get(context.sessionId) === state) {
 				sessionStates.delete(context.sessionId);
 			}
@@ -622,10 +790,15 @@ export const createPluginRuntime = (
 		};
 		if (plugin.onBeforeAgentTurn !== undefined) {
 			try {
+				const pluginContext = contextForPlugin(
+					plugin,
+					sessionStates.get(context.sessionId),
+					context
+				);
 				await plugin.onBeforeAgentTurn(
 					hostContext === undefined
-						? context
-						: attachPluginHostContext(context, hostContext),
+						? pluginContext
+						: attachPluginHostContext(pluginContext, hostContext),
 					createScopeApi(plugin, scope, {
 						commandsAllowed: false,
 						sessionId: context.sessionId,
@@ -639,6 +812,10 @@ export const createPluginRuntime = (
 				);
 				return null;
 			}
+		}
+		const storageError = sessionStates.get(context.sessionId)?.storageError;
+		if (storageError !== undefined) {
+			throw storageError;
 		}
 		const tools = new Map(
 			pluginToolsForSession(plugin, context.sessionId).map((tool) => [
@@ -696,9 +873,19 @@ export const createPluginRuntime = (
 		plugin: LoadedPlugin,
 		context: PluginCompactionContext
 	): Promise<PluginBeforeCompactionResult> => {
+		const state = sessionStates.get(context.sessionId);
 		try {
-			return await plugin.onBeforeCompaction?.(context);
+			const decision = await plugin.onBeforeCompaction?.(
+				state === undefined ? context : contextForPlugin(plugin, state, context)
+			);
+			if (state?.storageError !== undefined) {
+				throw state.storageError;
+			}
+			return decision;
 		} catch (error) {
+			if (state?.storageError !== undefined) {
+				throw state.storageError;
+			}
 			await logPluginFailure(
 				"Plugin pre-compaction hook failed; compaction continued",
 				plugin,
@@ -757,13 +944,18 @@ export const createPluginRuntime = (
 				continue;
 			}
 			try {
+				const state = sessionStates.get(context.sessionId);
+				const pluginContext =
+					state === undefined
+						? context
+						: contextForPlugin(plugin, state, context);
 				if (operation === "completed") {
 					await plugin.onCompactionCompleted?.(
-						context as PluginCompactionCompletedContext
+						pluginContext as PluginCompactionCompletedContext
 					);
 				} else {
 					await plugin.onCompactionFailed?.(
-						context as PluginCompactionFailedContext
+						pluginContext as PluginCompactionFailedContext
 					);
 				}
 			} catch (error) {
@@ -809,7 +1001,18 @@ export const createPluginRuntime = (
 				if (command.handler === undefined) {
 					throw new Error("Plugin command is a Status Panel command.");
 				}
-				const result = await command.handler(context);
+				const sessionState =
+					context.sessionId === undefined
+						? undefined
+						: pluginSessionStateFor(
+								plugin,
+								sessionStates.get(context.sessionId)
+							);
+				const pluginContext = Object.freeze({
+					...context,
+					...omitUndefined({ sessionState }),
+				});
+				const result = await command.handler(pluginContext);
 				if (typeof result !== "string") {
 					throw new Error("Plugin Command returned invalid text.");
 				}
@@ -860,6 +1063,18 @@ export const createPluginRuntime = (
 				.find((plugin) => plugin.id === pluginId)
 				?.resources?.find((candidate) => candidate.name === name)?.value;
 			return resource as Resource | undefined;
+		},
+		getSessionStateForPlugin(pluginId, sessionId) {
+			const plugin = plugins.find((candidate) => candidate.id === pluginId);
+			const state = sessionStates.get(sessionId);
+			if (
+				plugin === undefined ||
+				state === undefined ||
+				!isEnabledForSession(plugin, sessionId)
+			) {
+				return;
+			}
+			return pluginSessionStateFor(plugin, state);
 		},
 		getStatusPanels() {
 			return Object.freeze(

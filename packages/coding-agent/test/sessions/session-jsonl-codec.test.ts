@@ -8,6 +8,7 @@ import {
 	decodeSessionLog,
 	decodeSessionLogSuffix,
 	encodeSessionLogLine,
+	SESSION_LOG_FORMAT_VERSION,
 	type SessionLogEventType,
 } from "@/modules/sessions/storage/session-jsonl-codec";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
@@ -210,7 +211,10 @@ test("suffix replay resumes from the projection cursor and keeps absolute byte o
 test("complete malformed JSON and envelopes report the expected sequence and byte offset", () => {
 	const header = createSessionLogHeader(sessionId, "log-identity", timestamp);
 	const headerBytes = encodeSessionLogLine(header);
-	for (const invalidLine of ["{", '{"formatVersion":1}']) {
+	for (const invalidLine of [
+		"{",
+		JSON.stringify({ formatVersion: SESSION_LOG_FORMAT_VERSION }),
+	]) {
 		const invalidBytes = new TextEncoder().encode(`${invalidLine}\n`);
 		let failure: unknown;
 		try {
@@ -562,7 +566,7 @@ test("a complete checkpoint after deletion is rejected rather than resurrecting 
 	);
 });
 
-test("format-v1 usage events without cost snapshots remain readable", () => {
+test("usage events without cost snapshots remain readable", () => {
 	const { bytes } = createLog("legacy usage");
 	const state = decodeSessionLog(sessionId, bytes);
 	const previous = state.entries.at(-1)?.envelope;
@@ -657,7 +661,7 @@ test("unknown format versions fail closed before hash validation", () => {
 	const header = JSON.parse(
 		new TextDecoder().decode(bytes.subarray(0, headerBytes.byteLength - 1))
 	) as Record<string, unknown>;
-	header.formatVersion = 2;
+	header.formatVersion = 1;
 	const unsupportedHeader = new TextEncoder().encode(
 		`${JSON.stringify(header)}\n`
 	);

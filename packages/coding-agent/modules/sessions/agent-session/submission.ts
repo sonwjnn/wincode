@@ -1616,6 +1616,9 @@ const runTurn = async ({
 			execution,
 			getAssistantMessageId: () => deps.getAssistantMessageId(execution.turnId),
 			prepareNextStep: async ({ protectedMessageIds }) => {
+				if (deps.isProjectionBlocked()) {
+					throw deps.getError() ?? new Error(SESSION_PROJECTION_BLOCKED_ERROR);
+				}
 				assertSendNotCancelled(signal);
 				const pendingFailure = await deps.settleCompaction();
 				if (pendingFailure !== null) {
