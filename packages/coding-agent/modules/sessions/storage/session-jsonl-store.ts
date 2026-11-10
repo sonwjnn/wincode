@@ -49,6 +49,15 @@ import type { SessionBundleImportResult } from "../session-bundle-contract";
 import { assessSessionForkCheckpoint } from "../session-fork-checkpoint-validation";
 import { isValidSessionLogIdentifier } from "../session-log-identifiers";
 import {
+	type PluginSessionStateMutation,
+	type PluginSessionStateMutationResult,
+	type PluginSessionStateRecord,
+	serializePluginSessionStateValue,
+	validatePluginSessionStateKey,
+	validatePluginSessionStatePluginId,
+	validatePluginSessionStateSchemaVersion,
+} from "../session-plugin-state";
+import {
 	buildSessionStatistics,
 	type SessionUsageContribution,
 } from "../usage/session-statistics";
@@ -5553,6 +5562,104 @@ export const createSessionJsonlStore = (
 		}
 		return writeOutcome;
 	};
+	const pluginSessionStateFor = (
+		entries: readonly SessionLogEntry[],
+		pluginId: string,
+		key: string
+	): PluginSessionStateRecord | undefined => {
+		let current: PluginSessionStateRecord | undefined;
+		for (const { envelope } of entries) {
+			if (
+				envelope.type === "plugin.state-replaced" &&
+				envelope.payload.pluginId === pluginId &&
+				envelope.payload.key === key
+			) {
+				current = {
+					schemaVersion: Number(envelope.payload.schemaVersion),
+					value: envelope.payload.value as PluginSessionStateRecord["value"],
+				};
+				continue;
+			}
+			if (
+				envelope.type === "plugin.state-deleted" &&
+				envelope.payload.pluginId === pluginId &&
+				envelope.payload.key === key
+			) {
+				current = undefined;
+			}
+		}
+		return current;
+	};
+	const getPluginSessionState = async (
+		sessionId: SessionId,
+		pluginId: string,
+		key: string
+	): Promise<PluginSessionStateRecord | undefined> => {
+		validatePluginSessionStatePluginId(pluginId);
+		validatePluginSessionStateKey(key);
+		const state = await ensureProjected(sessionId);
+		return pluginSessionStateFor(state.entries, pluginId, key);
+	};
+	const mutatePluginSessionState = async (
+		sessionId: SessionId,
+		pluginId: string,
+		mutation: PluginSessionStateMutation
+	): Promise<PluginSessionStateMutationResult> => {
+		const { key, kind, operationId, schemaVersion } = mutation;
+		try {
+			validatePluginSessionStatePluginId(pluginId);
+			validatePluginSessionStateKey(key);
+			validatePluginSessionStateSchemaVersion(schemaVersion);
+			if (kind === "set") {
+				serializePluginSessionStateValue(mutation.value);
+			}
+			if (!isValidSessionLogIdentifier(operationId)) {
+				throw new Error("Plugin Session State operation ID is invalid.");
+			}
+			const write: SessionWrite = {
+				operationId,
+				payload:
+					kind === "set"
+						? { key, pluginId, schemaVersion, value: mutation.value }
+						: { key, pluginId, schemaVersion },
+				type: kind === "set" ? "plugin.state-replaced" : "plugin.state-deleted",
+			};
+			return await withTemporaryWriter(sessionId, async () => {
+				await assertSessionWritable(sessionId);
+				const state = await ensureProjected(sessionId);
+				const existingOperation = findOperation(state, write, sessionId);
+				if (existingOperation === undefined) {
+					const previous = pluginSessionStateFor(state.entries, pluginId, key);
+					if (
+						previous !== undefined &&
+						previous.schemaVersion !== schemaVersion
+					) {
+						return {
+							kind: "schema-version-mismatch",
+							storedSchemaVersion: previous.schemaVersion,
+						};
+					}
+				}
+				try {
+					const committed = await append(sessionId, write);
+					return {
+						kind: "written",
+						writeOutcome: toReceipt(committed.entry, "ready"),
+					};
+				} catch (error) {
+					return {
+						kind: "written",
+						writeOutcome: sessionWriteOutcomeFromError(operationId, error),
+					};
+				}
+			});
+		} catch (error) {
+			return {
+				kind: "written",
+				writeOutcome: sessionWriteOutcomeFromError(operationId, error),
+			};
+		}
+	};
 	const appendContextEdit = async (
 		sessionId: SessionId,
 		input: SessionContextEdit
@@ -7415,6 +7522,23 @@ export const createSessionJsonlStore = (
 						if (entry.envelope.sequence <= 1) {
 							continue;
 						}
+						if (
+							entry.envelope.type === "plugin.state-replaced" ||
+							entry.envelope.type === "plugin.state-deleted"
+						) {
+							appendLine(
+								createSessionLogEvent({
+									operationId: `fork-plugin-state-${entry.envelope.sequence}`,
+									payload: entry.envelope.payload,
+									previousHash,
+									sequence: nextSequence,
+									sessionId: targetSessionId,
+									timestamp: entry.envelope.timestamp,
+									type: entry.envelope.type,
+								})
+							);
+							continue;
+						}
 						const sourceRecord = recordFromSessionLogEntry(entry);
 						if (
 							sourceRecord !== undefined &&
@@ -8231,6 +8355,8 @@ export const createSessionJsonlStore = (
 		appendContextEdit,
 		appendCompaction,
 		commitSessionRecord,
+		getPluginSessionState,
+		mutatePluginSessionState,
 		createEmptySession,
 		createSession,
 		createSessionWithExternalizedMessage,

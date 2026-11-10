@@ -1,6 +1,8 @@
 import type { PluginSessionContext } from "@/modules/plugins/public";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProviderModelSelectionForHost } from "@/modules/providers/provider-model-selection";
+import type { PluginSessionStatePersistence } from "@/modules/sessions/session-plugin-state";
+import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionId } from "@/shared/identifiers";
 import { nextChatSelection, restoreSelection } from "../selection";
 import { projectSessionMessageRecords } from "../transcript-projection";
@@ -31,6 +33,8 @@ type ManagedHostEntry = {
 	views: number;
 	pluginRuntime?: PluginRuntime;
 	pluginSessionContext: PluginSessionContext;
+	pluginSessionStatePersistence: PluginSessionStatePersistence;
+	pendingPluginSessionStateError: Error | undefined;
 	unloadCheck: Promise<void> | undefined;
 };
 
@@ -193,6 +197,7 @@ export const createSessionHostManager = (
 	): ManagedHostEntry => {
 		const opened = Promise.withResolvers<SessionHost>();
 		const sessionSdk = capabilities.getSessionSdk?.();
+		const store = capabilities.getStore();
 		const entry: ManagedHostEntry = {
 			capabilities,
 			closing: undefined,
@@ -212,6 +217,28 @@ export const createSessionHostManager = (
 				...(sessionSdk === undefined ? {} : { sessionSdk }),
 				workspace: capabilities.getConfig().workspace,
 			},
+			pendingPluginSessionStateError: undefined,
+			pluginSessionStatePersistence: {
+				read: (pluginId, key) =>
+					store.getPluginSessionState(sessionId, pluginId, key),
+				mutate: (pluginId, mutation) =>
+					store.mutatePluginSessionState(sessionId, pluginId, mutation),
+				reportWriteOutcome: (outcome) => {
+					if (
+						outcome.kind !== "indeterminate" &&
+						!(outcome.kind === "committed" && outcome.projection === "blocked")
+					) {
+						return;
+					}
+					const error = new SessionWriteOutcomeError(outcome);
+					if (entry.host === undefined) {
+						entry.pendingPluginSessionStateError ??= error;
+					} else {
+						entry.host.reportStorageError(error);
+					}
+					return error;
+				},
+			},
 			unloadCheck: undefined,
 		};
 		entries.set(sessionId, entry);
@@ -221,12 +248,16 @@ export const createSessionHostManager = (
 			});
 		const sessionStart =
 			entry.pluginRuntime
-				?.startSession(entry.pluginSessionContext)
+				?.startSession(
+					entry.pluginSessionContext,
+					entry.pluginSessionStatePersistence
+				)
 				.catch(() => undefined) ?? Promise.resolve();
 		void sessionStart
 			.then(() =>
 				createSessionHost({
-					autoContinue,
+					autoContinue:
+						autoContinue && entry.pendingPluginSessionStateError === undefined,
 					capabilities,
 					...(executionMode === undefined ? {} : { executionMode }),
 					...(providerModel === undefined ? {} : { providerModel }),
@@ -237,6 +268,10 @@ export const createSessionHostManager = (
 			.then(
 				(host) => {
 					entry.host = host;
+					if (entry.pendingPluginSessionStateError !== undefined) {
+						host.reportStorageError(entry.pendingPluginSessionStateError);
+						entry.pendingPluginSessionStateError = undefined;
+					}
 					entry.unsubscribeEvents = host.onEvent((event) =>
 						emit({ event, sessionId, type: "session-event" })
 					);
@@ -708,7 +743,10 @@ export const createSessionHostManager = (
 		try {
 			for (const entry of openEntries) {
 				started.push(entry);
-				await runtime.startSession(entry.pluginSessionContext);
+				await runtime.startSession(
+					entry.pluginSessionContext,
+					entry.pluginSessionStatePersistence
+				);
 			}
 			return true;
 		} catch (error) {

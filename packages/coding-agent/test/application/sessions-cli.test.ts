@@ -19,7 +19,10 @@ import {
 	resolveLocalSessionProjectionPath,
 	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
-import { encodeCanonicalSessionJson } from "@/modules/sessions/storage/session-jsonl-codec";
+import {
+	encodeCanonicalSessionJson,
+	SESSION_LOG_FORMAT_VERSION,
+} from "@/modules/sessions/storage/session-jsonl-codec";
 import {
 	createSessionJsonlStore,
 	type SessionLogFileIo,
@@ -934,7 +937,7 @@ test("human verification diagnostics cannot emit terminal controls from corrupt 
 		const lines = new TextDecoder().decode(existingBytes).trimEnd().split("\n");
 		const created = JSON.parse(lines[1] ?? "{}") as { entryHash: string };
 		const unsigned = {
-			formatVersion: 1,
+			formatVersion: SESSION_LOG_FORMAT_VERSION,
 			operationId: "record-terminal-control",
 			payload: { record: { version: "\u001b]0;forged-title\u0007" } },
 			previousHash: created.entryHash,

@@ -163,7 +163,7 @@ const createSessionJsonlTestPersistence = (
 	};
 };
 
-test("public SDK returns an empty Session only after its v1 JSONL log is published", async () => {
+test("public SDK returns an empty Session only after its v2 JSONL log is published", async () => {
 	const databasePath = path.join(root, "sdk-empty-session.sqlite");
 	const sdk = await createSessionSdk({
 		cwd: workspace,
@@ -185,7 +185,7 @@ test("public SDK returns an empty Session only after its v1 JSONL log is publish
 
 		expect(text.endsWith("\n")).toBe(true);
 		expect(header).toMatchObject({
-			formatVersion: 1,
+			formatVersion: 2,
 			sessionId,
 			sequence: 0,
 			type: "session.header",
@@ -194,7 +194,7 @@ test("public SDK returns an empty Session only after its v1 JSONL log is publish
 		expect(typeof header.operationId).toBe("string");
 		expect(typeof header.entryHash).toBe("string");
 		expect(created).toMatchObject({
-			formatVersion: 1,
+			formatVersion: 2,
 			sessionId,
 			sequence: 1,
 			type: "session.created",
@@ -2793,7 +2793,7 @@ test("the Session catalog reports one corrupt log without hiding healthy Session
 		const logPath = resolveSessionLogFilePath(logRoot, corruptId);
 		const lines = (await fs.readFile(logPath, "utf8")).split("\n");
 		const header = JSON.parse(lines[0] ?? "null") as Record<string, unknown>;
-		header.formatVersion = 2;
+		header.formatVersion = 1;
 		lines[0] = JSON.stringify(header);
 		await fs.writeFile(logPath, lines.join("\n"));
 

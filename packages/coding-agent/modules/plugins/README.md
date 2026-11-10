@@ -120,6 +120,43 @@ The Wincode distribution includes MCP and Subagents factories by default for app
 
 Dispose child handles and child SDK runtimes when their work is complete. Coding and shell remain native Session tools; Skills remain native host capabilities.
 
+## Portable Plugin state
+
+A Plugin that stores small, declarative state about one conversation can opt in with `sessionStateVersion`. Wincode exposes a Session-bound `sessionState` capability in Session lifecycle hooks, pre-Agent-Turn and compaction contexts, Plugin Tool contexts, and Session-bound Plugin Command contexts. Factory/process contexts do not receive it; a command without a loaded Session continues to work without persistent state. The capability is bound to the current Plugin Identifier and Session, and exposes only `read(key)`, `set(key, value, operationId)`, and `delete(key, operationId)`.
+
+```ts
+const jira = api.definePlugin({ id: "jira", sessionStateVersion: 1 });
+
+jira.onSessionStart(async ({ sessionState }) => {
+  if (sessionState === undefined) return;
+  const plan = await sessionState.read("plan");
+  if (plan.kind === "value") {
+    // Use plan.value in Plugin logic; reads do not add it to model context.
+  }
+});
+
+jira.registerTool({
+  name: "record_plan",
+  description: "Record the current Jira investigation plan.",
+  inputSchema: z.object({ issue: z.string() }),
+  handler: async ({ issue }, { sessionState, toolCallId }) => {
+    if (sessionState === undefined) {
+      return { type: "failure", errorText: "No Session is active." };
+    }
+    await sessionState.set(
+      "plan",
+      { issue, status: "investigating" },
+      `plan:${toolCallId}`,
+    );
+    return { type: "success", output: { recorded: true } };
+  },
+});
+```
+
+Values must be strict JSON and no larger than 64 KiB; keys are non-empty and at most 256 UTF-8 bytes. `read` returns `absent` for missing or deleted keys and `value` even when the stored JSON is `null`; an incompatible stored version returns `incompatible` with its version. `set` and `delete` reject an incompatible stored version with `PluginSessionStateVersionError`; Wincode does not automatically migrate or discard unknown state. Use a stable operation ID and the same payload when retrying a write.
+
+Session Bundles retain these entries. A Session Fork inherits only the effective state in the JSONL prefix ending at its selected Session Record: a state event appended after that Record is excluded, even if it was written during the same Agent Turn. Replacement and deletion append entries; they do not erase old payloads from the log, so this capability is not for secrets and deletion is not secure erasure. Plugin state never enters Session Context automatically and does not imply replay, task ownership transfer, or availability of external resources.
+
 ## Compaction hooks
 
 Compaction runs under Session Host authority. Plugins observe it through three bounded hooks:

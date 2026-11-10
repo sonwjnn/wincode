@@ -11,6 +11,7 @@ import {
 	type ProviderModel,
 } from "@wincode/ai";
 import { resolveSessionLogFilePath } from "@/modules/sessions/storage/path";
+import { SESSION_LOG_FORMAT_VERSION } from "@/modules/sessions/storage/session-jsonl-codec";
 import { buildAgentRegistry } from "../modules/agents/registry";
 import { runRpc } from "../modules/application/rpc/runner";
 import {
@@ -1519,7 +1520,13 @@ test("RPC session/open preserves the structured JSONL corruption code", async ()
 		resolveLocalSessionLogRoot(corruptionDatabasePath),
 		sessionId
 	);
-	await fs.writeFile(logPath, '{"formatVersion":1,"not":"a valid envelope"}\n');
+	await fs.writeFile(
+		logPath,
+		`${JSON.stringify({
+			formatVersion: SESSION_LOG_FORMAT_VERSION,
+			not: "a valid envelope",
+		})}\n`
+	);
 	const stdoutFrames: string[] = [];
 	const stderrFrames: string[] = [];
 	const request = (

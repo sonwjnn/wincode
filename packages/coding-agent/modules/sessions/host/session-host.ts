@@ -832,6 +832,8 @@ export const createSessionHost = async ({
 
 		return {
 			agentSession: guardedAgentSession,
+			reportStorageError: (error) =>
+				openedAgentSession.internalPort.reportStorageError(error),
 			editContext: async (input) => {
 				const edit = sessionContextEditSchema.parse(input);
 				if (isFailedAttemptContextEdit(edit.operationId)) {

@@ -114,6 +114,8 @@ export type HostManagerSelectionCapabilities = Pick<
 export type SessionHost = Readonly<{
 	/** Called only while the manager holds the Session's idle mutation gate. */
 	editContext: (edit: SessionContextEdit) => Promise<void>;
+	/** Blocks new work after a committed write leaves Session storage unresolved. */
+	reportStorageError: (error: Error) => void;
 	agentSession: AgentSession;
 	/** Forks while reusing this Host's held source writer; call through the manager's fork gate. */
 	forkSession: (

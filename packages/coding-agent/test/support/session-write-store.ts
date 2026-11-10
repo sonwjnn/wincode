@@ -61,6 +61,11 @@ export const sessionStoreWithSuccessfulWrites = (
 		);
 	},
 	getSessionForkProvenance: async () => undefined,
+	getPluginSessionState: async () => undefined,
+	mutatePluginSessionState: async (_sessionId, _pluginId, mutation) => ({
+		kind: "written",
+		writeOutcome: successfulSessionWriteOutcome(mutation.operationId),
+	}),
 	getOrCreateSessionForkActionId: async () => {
 		throw new Error(
 			"Session fork action IDs are not used by this projection-only test store."
