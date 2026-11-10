@@ -2,6 +2,8 @@
 
 Status: accepted
 
+[ADR-0056](0056-session-history-tree-and-plugin-entries.md) thay phần không hỗ trợ cây nhánh trong cùng Session bằng cây lịch sử, durable Active Leaf và Plugin custom entries. Đây là quyết định chưa triển khai; mô tả log-prefix/Fork bên dưới là contract hiện tại cho tới cutover. Các bảo đảm JSONL authority, durability, recovery và ownership vẫn giữ nguyên.
+
 Implementation: đang được tích hợp theo issue #232; release còn phụ thuộc clean-cutover và supported-platform evidence.
 
 Wincode cần lịch sử đọc được bằng editor, di chuyển được cùng attachments, nhưng vẫn truy vấn nhanh, pagination nhất quán và thống kê turn. Chọn log JSONL append-only cho trạng thái bền vững của mỗi Session và một SQLite database riêng làm projection. Không chọn SQLite làm nguồn chuẩn duy nhất vì tính di chuyển/inspect; không chọn JSONL + chỉ mục RAM kiểu Pi vì nhu cầu truy vấn. Chấp nhận chi phí đồng bộ, kiểm tra integrity và rebuild của hướng hybrid tương tự Codex.
