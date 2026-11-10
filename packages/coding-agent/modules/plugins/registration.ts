@@ -9,6 +9,7 @@ import {
 	isNonEmptyString,
 	isObjectLike,
 	isPlainObject,
+	omitUndefined,
 } from "@wincode/utils";
 import { z } from "zod";
 import type {
@@ -103,7 +104,11 @@ const isPluginToolCandidate = (
 		return false;
 	}
 	return (
-		!("exclusiveInBatch" in candidate) || candidate.exclusiveInBatch === true
+		(!("exclusiveInBatch" in candidate) ||
+			candidate.exclusiveInBatch === true) &&
+		(candidate.executionMode === undefined ||
+			candidate.executionMode === "parallel" ||
+			candidate.executionMode === "sequential")
 	);
 };
 
@@ -173,6 +178,7 @@ export const validatePluginTool = (candidate: unknown): PluginTool => {
 	const modelName = getModelName(candidate, tool.name);
 	return Object.freeze({
 		description: tool.description,
+		...omitUndefined({ executionMode: tool.executionMode }),
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,

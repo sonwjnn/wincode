@@ -597,6 +597,7 @@ const loadedPluginFromDraft = (
 		Object.freeze({
 			action: `plugin:${draft.id}:${tool.name}`,
 			description: tool.description,
+			...omitUndefined({ executionMode: tool.executionMode }),
 			...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 			handler: tool.handler,
 			inputSchema: tool.inputSchema,

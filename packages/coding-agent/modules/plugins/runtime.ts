@@ -68,6 +68,7 @@ export type PluginProviderSourceScope = "explicit" | "global" | "project";
 export type PluginToolDescriptor = Readonly<{
 	description: string;
 	exclusiveInBatch?: true;
+	executionMode?: PluginTool["executionMode"];
 	handler: PluginTool["handler"];
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
@@ -237,6 +238,7 @@ const descriptorForTool = (
 ): PluginToolDescriptor =>
 	Object.freeze({
 		description: tool.description,
+		...omitUndefined({ executionMode: tool.executionMode }),
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 		handler: tool.handler,
 		inputSchema: tool.inputSchema,

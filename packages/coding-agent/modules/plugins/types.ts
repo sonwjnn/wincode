@@ -1,3 +1,4 @@
+import type { ToolExecutionMode } from "@wincode/agent-core";
 import type {
 	PluginCommandHandler,
 	PluginInputSchema,
@@ -7,6 +8,7 @@ import type {
 export type PluginTool = Readonly<{
 	description: string;
 	exclusiveInBatch?: true;
+	executionMode?: ToolExecutionMode;
 	handler: PluginToolRegistration<PluginInputSchema>["handler"];
 	inputSchema: PluginInputSchema;
 	modelName?: string;

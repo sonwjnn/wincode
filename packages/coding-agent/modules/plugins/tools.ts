@@ -132,6 +132,7 @@ const pluginTool = (
 ): ResolvedTool => ({
 	definition: {
 		description: `Plugin '${tool.pluginId}' capability. ${tool.description}`,
+		...omitUndefined({ executionMode: tool.executionMode }),
 		...(tool.exclusiveInBatch === true ? { exclusiveInBatch: true } : {}),
 		inputSchema: tool.inputSchema,
 		name: tool.name,

@@ -130,6 +130,186 @@ const readDefinition = {
 	name: "read",
 } satisfies ToolDefinition;
 
+test("a sequential sibling serializes the whole batch across awaited work", async () => {
+	const trace: string[] = [];
+	const releaseFirst = Promise.withResolvers<void>();
+	const tools: ResolvedTool[] = ["first", "second", "third"].map((name) => ({
+		definition: {
+			...readDefinition,
+			...(name === "second" ? { executionMode: "sequential" as const } : {}),
+			name,
+		},
+		execute: async () => {
+			trace.push(`${name}:start`);
+			if (name === "first") {
+				queueMicrotask(() => releaseFirst.resolve());
+				await releaseFirst.promise;
+			}
+			trace.push(`${name}:end`);
+			return { output: name, type: "success" };
+		},
+	}));
+	const { providerCollection } = scriptedProvider((_request, index) =>
+		index === 0
+			? scriptedEvents(
+					...tools.map(
+						({ definition }): ProviderChatEvent => ({
+							input: { path: "a.ts" },
+							toolCallId: `call-${definition.name}`,
+							toolName: definition.name,
+							type: "tool-call",
+						})
+					),
+					{ type: "finish" }
+				)
+			: scriptedEvents({ type: "finish" })
+	);
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn(tools))
+	);
+	expect(events.at(-1)?.type).toBe("agent-turn-completed");
+	expect(trace).toEqual([
+		"first:start",
+		"first:end",
+		"second:start",
+		"second:end",
+		"third:start",
+		"third:end",
+	]);
+});
+
+test("parallel Tool Calls overlap while their results retain model order", async () => {
+	const releaseFirst = Promise.withResolvers<void>();
+	const trace: string[] = [];
+	const tools: ResolvedTool[] = ["first", "second"].map((name) => ({
+		definition: { ...readDefinition, executionMode: "parallel", name },
+		execute: async () => {
+			trace.push(`${name}:start`);
+			if (name === "first") {
+				await releaseFirst.promise;
+			} else {
+				releaseFirst.resolve();
+			}
+			trace.push(`${name}:end`);
+			return { output: name, type: "success" };
+		},
+	}));
+	const { providerCollection } = scriptedProvider((_request, index) =>
+		index === 0
+			? scriptedEvents(
+					...tools.map(
+						({ definition }): ProviderChatEvent => ({
+							input: { path: "a.ts" },
+							toolCallId: `call-${definition.name}`,
+							toolName: definition.name,
+							type: "tool-call",
+						})
+					),
+					{ type: "finish" }
+				)
+			: scriptedEvents({ type: "finish" })
+	);
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn(tools))
+	);
+	expect(trace).toEqual([
+		"first:start",
+		"second:start",
+		"second:end",
+		"first:end",
+	]);
+	expect(
+		events
+			.filter((event) => event.type === "tool-call-finished")
+			.map((event) => String(event.toolCallId))
+	).toEqual(["call-first", "call-second"]);
+});
+
+test("cancelling a sequential batch never dispatches its remaining Tool Calls", async () => {
+	const controller = new AbortController();
+	const started = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const trace: string[] = [];
+	const tool: ResolvedTool = {
+		definition: { ...readDefinition, executionMode: "sequential" },
+		execute: async ({ toolCallId }) => {
+			trace.push(toolCallId);
+			started.resolve();
+			await release.promise;
+			return { output: "done", type: "success" };
+		},
+	};
+	const { providerCollection } = scriptedProvider(() =>
+		scriptedEvents(
+			{
+				input: { path: "a.ts" },
+				toolCallId: "first",
+				toolName: "read",
+				type: "tool-call",
+			},
+			{
+				input: { path: "b.ts" },
+				toolCallId: "second",
+				toolName: "read",
+				type: "tool-call",
+			},
+			{ type: "finish" }
+		)
+	);
+	const pending = consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn([tool]), {
+			signal: controller.signal,
+		})
+	);
+	try {
+		await started.promise;
+		controller.abort();
+		expect((await pending).at(-1)?.type).toBe("agent-turn-cancelled");
+	} finally {
+		release.resolve();
+		await pending;
+	}
+	expect(trace).toEqual(["first"]);
+});
+
+test("sequential scheduling keeps ordinary failures non-fatal and stopTurn does not skip sibling effects", async () => {
+	const executed: string[] = [];
+	const tool: ResolvedTool = {
+		definition: { ...readDefinition, executionMode: "sequential" },
+		execute: async ({ toolCallId }) => {
+			executed.push(toolCallId);
+			if (toolCallId === "failure") {
+				return { errorText: "Expected Tool failure.", type: "failure" };
+			}
+			return { output: toolCallId, stopTurn: true, type: "success" };
+		},
+	};
+	const { providerCollection, requests } = scriptedProvider(() =>
+		scriptedEvents(
+			...["failure", "stop", "last"].map(
+				(toolCallId): ProviderChatEvent => ({
+					input: { path: "a.ts" },
+					toolCallId,
+					toolName: "read",
+					type: "tool-call",
+				})
+			),
+			{ type: "finish" }
+		)
+	);
+	const events = await consume(
+		createAgentRuntime({ providerCollection }).run(buildTurn([tool]))
+	);
+	expect(executed).toEqual(["failure", "stop", "last"]);
+	expect(requests).toHaveLength(1);
+	expect(events.at(-1)?.type).toBe("agent-turn-completed");
+	expect(
+		events
+			.filter((event) => event.type === "tool-call-finished")
+			.map((event) => event.outcome.type)
+	).toEqual(["failure", "success", "success"]);
+});
+
 test("context preparation replaces history only after settled tools and keeps successful effects exactly once", async () => {
 	let executions = 0;
 	const { providerCollection, requests } = scriptedProvider(
@@ -1911,12 +2091,13 @@ test("runtime deadlines fail the turn with the deadline disposition", async () =
 	});
 });
 
-test("refuses every Tool Call in a batch that includes an exclusive submit_result", async () => {
+test("exclusive batch admission rejects all calls even when a Tool requests sequential execution", async () => {
 	const executions: string[] = [];
 	const submitResultTool: ResolvedTool = {
 		definition: {
 			...readDefinition,
 			exclusiveInBatch: true,
+			executionMode: "sequential",
 			name: "submit_result",
 		},
 		execute: async () => {

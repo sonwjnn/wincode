@@ -1390,6 +1390,40 @@ type ExecuteToolCallsOptions = Readonly<{
 	turnId: AgentTurn["id"];
 }>;
 
+const executeToolBatch = async (
+	calls: readonly PendingToolCall[],
+	signal: AbortSignal | undefined
+): Promise<readonly ToolCallOutput[]> => {
+	const exclusive =
+		calls.length > 1 &&
+		calls.find((call) => call.tool.definition.exclusiveInBatch === true);
+	if (exclusive) {
+		return calls.map(() => ({
+			errorText: `${exclusive.tool.definition.name} must be the only Tool Call in this Model Step; no Tool Calls in the batch ran.`,
+			type: "failure",
+		}));
+	}
+	const execute = (call: PendingToolCall): Promise<ToolCallOutput> =>
+		executeToolCall(
+			call.tool,
+			{ input: call.input, toolCallId: call.toolCallId },
+			signal
+		);
+	if (
+		!calls.some((call) => call.tool.definition.executionMode === "sequential")
+	) {
+		return Promise.all(calls.map(execute));
+	}
+	const outcomes: ToolCallOutput[] = [];
+	for (const call of calls) {
+		if (signal?.aborted) {
+			throw createAbortError(signal.reason);
+		}
+		outcomes.push(await execute(call));
+	}
+	return outcomes;
+};
+
 const executeToolCalls = async function* ({
 	calls,
 	emit,
@@ -1400,28 +1434,8 @@ const executeToolCalls = async function* ({
 	{ messages: readonly ChatMessage[]; stopTurn: boolean },
 	undefined
 > {
-	const exclusive =
-		calls.length > 1 &&
-		calls.find((call) => call.tool.definition.exclusiveInBatch === true);
 	const outcomes = await awaitWithAbort(
-		exclusive
-			? Promise.resolve(
-					calls.map(
-						(): ToolCallOutput => ({
-							errorText: `${exclusive.tool.definition.name} must be the only Tool Call in this Model Step; no Tool Calls in the batch ran.`,
-							type: "failure",
-						})
-					)
-				)
-			: Promise.all(
-					calls.map((call) =>
-						executeToolCall(
-							call.tool,
-							{ input: call.input, toolCallId: call.toolCallId },
-							signal
-						)
-					)
-				),
+		executeToolBatch(calls, signal),
 		signal
 	);
 	const messages: ChatMessage[] = [];

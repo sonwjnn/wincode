@@ -102,6 +102,63 @@ afterAll(async () => {
 	await fs.rm(root, { force: true, recursive: true });
 });
 
+test("file Plugin Tool scheduling declarations survive loading and invalid modes are rejected", async () => {
+	const schedulingPath = path.join(workspace, "plugins", "scheduling.ts");
+	await Bun.write(
+		schedulingPath,
+		`
+		export default (api) => {
+			const plugin = api.definePlugin({ id: "scheduling" });
+			for (const executionMode of ["sequential", "parallel"]) {
+				plugin.registerTool({ name: executionMode, description: "Scheduling fixture.", executionMode,
+					inputSchema: { jsonSchema: { type: "object" } },
+					handler: async () => ({ type: "success", output: "done" }) });
+			}
+		};
+	`
+	);
+	const runtime = await loadPlugins({
+		cliPaths: [schedulingPath],
+		config: configRuntime,
+	});
+	try {
+		expect(
+			runtime
+				.getToolDescriptors("scheduling-session")
+				.map(({ executionMode }) => executionMode)
+		).toEqual(["sequential", "parallel"]);
+	} finally {
+		await runtime.shutdown();
+	}
+	const invalidPath = path.join(workspace, "plugins", "invalid-scheduling.ts");
+	await Bun.write(
+		invalidPath,
+		`
+		export default (api) => {
+			api.definePlugin({ id: "scheduling" }).registerTool({ name: "invalid", description: "Invalid scheduling.", executionMode: "sometimes",
+				inputSchema: { jsonSchema: { type: "object" } }, handler: async () => ({ type: "success", output: "unexpected" }) });
+		};
+	`
+	);
+	const invalid = await loadPlugins({
+		cliPaths: [invalidPath],
+		config: configRuntime,
+	});
+	try {
+		expect(invalid.getToolDescriptors("scheduling-session")).toEqual([]);
+		expect(invalid.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					sourcePath: invalidPath,
+					message: expect.stringContaining("Plugin Tool registrations require"),
+				}),
+			])
+		);
+	} finally {
+		await invalid.shutdown();
+	}
+});
+
 test("rejects JavaScript paths before evaluating them as Plugins", async () => {
 	const javascriptPath = path.join(workspace, "plugins", "not-typescript.js");
 	await Bun.write(javascriptPath, 'throw new Error("JavaScript Plugin ran");');

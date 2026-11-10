@@ -19,6 +19,8 @@ import type {
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import { createConfigStore } from "@/shared/config/config-store";
+import checklistPlugin from "../../examples/checklist-plugin";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
@@ -116,6 +118,283 @@ const statefulPlugin: PluginFactory = (api) => {
 		observedDeletedKinds.push((await sessionState.read("deleted")).kind);
 	});
 };
+
+test("Session-registered sequential Tools preserve both awaited updates after reopening", async () => {
+	const databasePath = await databasePathFor("sequential-state-updates");
+	const model = providerModelSelectionFixture("openai/gpt-5.6-luna");
+	const recorder = createFakeProviderRecorder();
+	const restored: unknown[] = [];
+	const trace: string[] = [];
+	let providerSteps = 0;
+	recorder.stepScript = async function* () {
+		if (providerSteps++ === 0) {
+			for (const item of ["B", "C"]) {
+				yield {
+					input: { item },
+					toolCallId: toolCallId(`add-${item}`),
+					toolName: "plugin_checklist_add",
+					type: "tool-call",
+				};
+			}
+		}
+		yield { type: "finish" };
+	};
+	const factory: PluginFactory = (api) => {
+		const plugin = api.definePlugin({
+			id: "checklist",
+			sessionStateVersion: 1,
+		});
+		plugin.onSessionStart(async ({ sessionState }, registration) => {
+			if (sessionState === undefined) {
+				throw new Error("Missing Session State.");
+			}
+			restored.push(await sessionState.read("items"));
+			registration.registerTool({
+				name: "add",
+				description: "Add one checklist item.",
+				executionMode: "sequential",
+				inputSchema: z.object({ item: z.string() }),
+				handler: async ({ item }, context) => {
+					const current = await sessionState.read("items");
+					const previous =
+						current.kind === "value" && Array.isArray(current.value)
+							? current.value
+							: ["A"];
+					trace.push(`${item}:read`);
+					const gate = Promise.withResolvers<void>();
+					queueMicrotask(() => gate.resolve());
+					await gate.promise;
+					await sessionState.set(
+						"items",
+						[...previous, item],
+						context.toolCallId
+					);
+					trace.push(`${item}:committed`);
+					return { output: item, type: "success" };
+				},
+			});
+		});
+	};
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		model,
+		pluginFactories: [{ factory, id: "checklist" }],
+		pluginPaths: [],
+		workspace,
+	});
+	let handle: SessionSdkHandle | undefined;
+	let unsubscribe: (() => void) | undefined;
+	try {
+		const id = await sdk.createEmptySession({ model });
+		handle = await sdk.openSession(id, { autoContinue: false });
+		const terminal = Promise.withResolvers<SessionSdkEvent>();
+		unsubscribe = handle.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed" ||
+				event.type === "agent-turn-cancelled"
+			) {
+				terminal.resolve(event);
+			}
+		});
+		expect((await handle.prompt({ text: "Add B and C." })).rejected).toBe(
+			false
+		);
+		expect((await terminal.promise).type).toBe("agent-turn-completed");
+		expect(trace).toEqual(["B:read", "B:committed", "C:read", "C:committed"]);
+		unsubscribe();
+		unsubscribe = undefined;
+		await handle.dispose();
+		handle = undefined;
+		handle = await sdk.openSession(id, { autoContinue: false });
+		expect(restored.at(-1)).toEqual({
+			kind: "value",
+			schemaVersion: 1,
+			value: ["A", "B", "C"],
+		});
+		expect(providerSteps).toBe(2);
+	} finally {
+		unsubscribe?.();
+		await handle?.dispose();
+		await sdk.dispose();
+	}
+});
+
+test("the file-loaded checklist example restores saved items without replaying additions", async () => {
+	const databasePath = await databasePathFor("checklist-example");
+	const model = providerModelSelectionFixture("openai/gpt-5.6-luna");
+	const recorder = createFakeProviderRecorder();
+	const observedOutputs: unknown[] = [];
+	let restoring = false;
+	let step = 0;
+	recorder.stepScript = async function* (request) {
+		if (step++ === 0) {
+			if (restoring) {
+				yield {
+					input: {},
+					toolCallId: toolCallId("list-restored"),
+					toolName: "plugin_checklist_list_items",
+					type: "tool-call",
+				};
+			} else {
+				for (const item of ["B", "C"]) {
+					yield {
+						input: { item },
+						toolCallId: toolCallId(`example-${item}`),
+						toolName: "plugin_checklist_add_item",
+						type: "tool-call",
+					};
+				}
+			}
+		} else {
+			for (const part of request.messages.flatMap(({ content }) => content)) {
+				if (part.type === "tool-result") {
+					observedOutputs.push(part.output);
+				}
+			}
+		}
+		yield { type: "finish" };
+	};
+	const exampleWorkspace = path.resolve(import.meta.dir, "../..");
+	const options = {
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: exampleWorkspace,
+		databasePath,
+		model,
+		pluginPaths: [path.join(exampleWorkspace, "examples/checklist-plugin.ts")],
+		projectTrust: "trust" as const,
+		workspace: exampleWorkspace,
+	};
+	let sdk = await createSessionSdkWithRuntime(options);
+	let handle: SessionSdkHandle | undefined;
+	let unsubscribe: (() => void) | undefined;
+	try {
+		const id = await sdk.createEmptySession({ model });
+		for (const reopen of [false, true]) {
+			if (reopen) {
+				await sdk.dispose();
+				sdk = await createSessionSdkWithRuntime(options);
+			}
+			restoring = reopen;
+			step = 0;
+			handle = await sdk.openSession(id, { autoContinue: false });
+			const terminal = Promise.withResolvers<SessionSdkEvent>();
+			unsubscribe = handle.onEvent((event) => {
+				if (
+					event.type === "agent-turn-completed" ||
+					event.type === "agent-turn-failed" ||
+					event.type === "agent-turn-cancelled"
+				) {
+					terminal.resolve(event);
+				}
+			});
+			expect(
+				(
+					await handle.prompt({
+						text: reopen ? "List the saved checklist." : "Add B and C.",
+					})
+				).rejected
+			).toBe(false);
+			expect((await terminal.promise).type).toBe("agent-turn-completed");
+			unsubscribe();
+			unsubscribe = undefined;
+			await handle.dispose();
+			handle = undefined;
+		}
+		expect(observedOutputs.at(-1)).toEqual({ items: ["B", "C"] });
+	} finally {
+		unsubscribe?.();
+		await handle?.dispose();
+		await sdk.dispose();
+	}
+});
+
+test("the checklist example rejects invalid restored items without resetting saved state", async () => {
+	const databasePath = await databasePathFor("checklist-invalid-restore");
+	const model = providerModelSelectionFixture("openai/gpt-5.6-luna");
+	const recorder = createFakeProviderRecorder();
+	let tools: readonly string[] = [];
+	recorder.stepScript = async function* (request) {
+		tools = request.tools?.map(({ name }) => name) ?? [];
+		yield { type: "finish" };
+	};
+	let seed = true;
+	const saved: unknown[] = [];
+	const seedFactory: PluginFactory = (api) => {
+		api
+			.definePlugin({ id: "checklist", sessionStateVersion: 1 })
+			.onSessionStart(async ({ sessionState }) => {
+				if (!sessionState) {
+					throw new Error("Missing state capability.");
+				}
+				if (seed) {
+					seed = false;
+					await sessionState.set("items", [""], "invalid-checklist-items");
+				} else {
+					saved.push(await sessionState.read("items"));
+				}
+			});
+	};
+	const options = {
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		model,
+		pluginPaths: [],
+		workspace,
+	};
+	let sdk = await createSessionSdkWithRuntime({
+		...options,
+		pluginFactories: [{ factory: seedFactory, id: "checklist" }],
+	});
+	let handle: SessionSdkHandle | undefined;
+	let unsubscribe: (() => void) | undefined;
+	try {
+		const id = await sdk.createEmptySession({ model });
+		handle = await sdk.openSession(id, { autoContinue: false });
+		await handle.dispose();
+		handle = undefined;
+		await sdk.dispose();
+		sdk = await createSessionSdkWithRuntime({
+			...options,
+			pluginFactories: [{ factory: checklistPlugin, id: "checklist" }],
+		});
+		handle = await sdk.openSession(id, { autoContinue: false });
+		const terminal = Promise.withResolvers<SessionSdkEvent>();
+		unsubscribe = handle.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed" ||
+				event.type === "agent-turn-cancelled"
+			) {
+				terminal.resolve(event);
+			}
+		});
+		expect(
+			(await handle.prompt({ text: "Inspect available Tools." })).rejected
+		).toBe(false);
+		expect((await terminal.promise).type).toBe("agent-turn-completed");
+		expect(tools).not.toContain("plugin_checklist_list_items");
+		expect(tools).not.toContain("plugin_checklist_add_item");
+		unsubscribe();
+		unsubscribe = undefined;
+		await handle.dispose();
+		handle = undefined;
+		await sdk.dispose();
+		sdk = await createSessionSdkWithRuntime({
+			...options,
+			pluginFactories: [{ factory: seedFactory, id: "checklist" }],
+		});
+		handle = await sdk.openSession(id, { autoContinue: false });
+		expect(saved).toEqual([{ kind: "value", schemaVersion: 1, value: [""] }]);
+	} finally {
+		unsubscribe?.();
+		await handle?.dispose();
+		await sdk.dispose();
+	}
+});
 
 test("a reopened Session reads the committed Plugin state snapshot", async () => {
 	observedPlans.length = 0;
@@ -622,7 +901,15 @@ test("fork and bundle import restore Plugin state from their committed log prefi
 	const importedDatabasePath = await databasePathFor(
 		"session-state-fork-import"
 	);
+	const reexportDatabasePath = await databasePathFor("session-state-reexport");
+	const disabledDatabasePath = await databasePathFor("session-state-disabled");
+	const disabledHome = path.join(root, "disabled-plugin-home");
 	const bundlePath = path.join(root, "session-state-bundle");
+	const reexportPath = path.join(root, "session-state-bundle-without-plugin");
+	const disabledExportPath = path.join(
+		root,
+		"session-state-bundle-disabled-plugin"
+	);
 	const pluginId = "plugin_state_fork_test_253";
 	const observedStates: unknown[] = [];
 	const pluginFactory: PluginFactory = (api) => {
@@ -730,22 +1017,71 @@ test("fork and bundle import restore Plugin state from their committed log prefi
 		expect((await importedSdk.listSessionsPage()).sessions).toEqual([]);
 		const imported = await importedSdk.importSessionBundle(bundlePath);
 		expect(imported.status).toBe("imported");
+		expect((await importedSdk.importSessionBundle(bundlePath)).status).toBe(
+			"unchanged"
+		);
 		importedHandle = await importedSdk.openSession(imported.sessionId, {
 			autoContinue: false,
 		});
 		await importedHandle.dispose();
 		importedHandle = undefined;
+		await importedSdk.exportSessionBundle(imported.sessionId, reexportPath);
+		expect(observedStates).toHaveLength(2);
+		await importedSdk.dispose();
+		await Bun.write(
+			path.join(disabledHome, ".wincode", "settings.json"),
+			JSON.stringify({ disabledPlugins: [pluginId] })
+		);
+		let disabledFactoryCalls = 0;
+		importedSdk = await createSessionSdkWithRuntime({
+			createProviderCollection: () => createFakeProviderCollection(recorder),
+			configStore: createConfigStore({
+				homeRoot: disabledHome,
+				trustedProjectRoots: [],
+			}),
+			cwd: workspace,
+			databasePath: disabledDatabasePath,
+			model,
+			pluginFactories: [
+				{
+					id: pluginId,
+					factory: (api, context) => {
+						disabledFactoryCalls += 1;
+						return pluginFactory(api, context);
+					},
+				},
+			],
+			pluginPaths: [],
+			workspace,
+		});
+		expect((await importedSdk.importSessionBundle(reexportPath)).status).toBe(
+			"imported"
+		);
+		importedHandle = await importedSdk.openSession(imported.sessionId, {
+			autoContinue: false,
+		});
+		await importedHandle.dispose();
+		importedHandle = undefined;
+		await importedSdk.exportSessionBundle(
+			imported.sessionId,
+			disabledExportPath
+		);
+		expect(disabledFactoryCalls).toBe(0);
+		expect(observedStates).toHaveLength(2);
 		await importedSdk.dispose();
 		importedSdk = await createSessionSdkWithRuntime({
 			createProviderCollection: async () =>
 				createFakeProviderCollection(recorder),
 			cwd: workspace,
-			databasePath: importedDatabasePath,
+			databasePath: reexportDatabasePath,
 			model,
 			pluginFactories: [{ factory: pluginFactory, id: pluginId }],
 			pluginPaths: [],
 			workspace,
 		});
+		expect(
+			(await importedSdk.importSessionBundle(disabledExportPath)).status
+		).toBe("imported");
 		importedHandle = await importedSdk.openSession(imported.sessionId, {
 			autoContinue: false,
 		});

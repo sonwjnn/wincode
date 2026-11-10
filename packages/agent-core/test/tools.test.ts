@@ -35,6 +35,17 @@ const jsonSchemaDefinition = {
 } satisfies ToolDefinition;
 
 describe("Tool Definition contract", () => {
+	test("scheduling declarations accept only parallel or sequential execution", () => {
+		for (const executionMode of ["parallel", "sequential"]) {
+			expect(isToolDefinition({ ...readDefinition, executionMode })).toBe(true);
+		}
+		for (const executionMode of ["sometimes", null, true, 1]) {
+			expect(isToolDefinition({ ...readDefinition, executionMode })).toBe(
+				false
+			);
+		}
+	});
+
 	test("accepts a definition with input and output schemas", () => {
 		expect(isToolDefinition(readDefinition)).toBe(true);
 	});

@@ -4,6 +4,7 @@ import type {
 	AgentTurnId,
 	ToolCallId,
 	ToolCallOutput,
+	ToolExecutionMode,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
 import type {
@@ -277,6 +278,7 @@ export type PluginToolRegistration<Schema extends PluginInputSchema> =
 	Readonly<{
 		description: string;
 		exclusiveInBatch?: true;
+		executionMode?: ToolExecutionMode;
 		handler: (
 			input: Schema extends z.ZodType ? z.output<Schema> : unknown,
 			context: PluginToolContext

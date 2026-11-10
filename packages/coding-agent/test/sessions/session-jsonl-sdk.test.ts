@@ -12,7 +12,12 @@ import {
 	type SubmissionId,
 	toSubmissionId,
 } from "@wincode/agent-core";
-import { createSessionSdk, type SessionSdkEvent } from "@wincode/coding-agent";
+import {
+	createSessionSdk,
+	type PluginFactory,
+	type PluginSessionState,
+	type SessionSdkEvent,
+} from "@wincode/coding-agent";
 import { readUtf8File } from "@wincode/utils";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
@@ -162,6 +167,273 @@ const createSessionJsonlTestPersistence = (
 		store,
 	};
 };
+
+test("Plugin state survives a lost projection and rebuild without resurrecting deleted keys or replaying Tools", async () => {
+	const databasePath = path.join(
+		root,
+		"plugin-state-rebuild",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const recorder = createFakeProviderRecorder();
+	const observed: unknown[] = [];
+	let initialize = true;
+	const factory: PluginFactory = (api) => {
+		api
+			.definePlugin({ id: "rebuild_state", sessionStateVersion: 1 })
+			.onSessionStart(async ({ sessionState }) => {
+				if (!sessionState) {
+					throw new Error("Missing state capability.");
+				}
+				if (initialize) {
+					initialize = false;
+					await sessionState.set("kept", ["A", "B"], "keep-items");
+					await sessionState.set("removed", "old", "old-items");
+					await sessionState.delete("removed", "remove-items");
+				}
+				observed.push([
+					await sessionState.read("kept"),
+					await sessionState.read("removed"),
+				]);
+			});
+	};
+	const options = {
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		pluginFactories: [{ factory, id: "rebuild_state" }],
+		pluginPaths: [],
+		workspace,
+	};
+	let sdk = await createSessionSdkWithRuntime(options);
+	let handle: SessionSdkHandle | undefined;
+	try {
+		const id = await sdk.createEmptySession();
+		handle = await sdk.openSession(id, { autoContinue: false });
+		await handle.dispose();
+		handle = undefined;
+		await sdk.dispose();
+		const persistence = createSessionJsonlTestPersistence(
+			databasePath,
+			workspace
+		);
+		try {
+			persistence.projection.sqlite.exec("DELETE FROM session");
+			const rebuilt = await persistence.store.rebuildProjection(
+				{ kind: "all" },
+				(operation) => operation()
+			);
+			expect(rebuilt.issues).toEqual([]);
+		} finally {
+			persistence.close();
+		}
+		sdk = await createSessionSdkWithRuntime(options);
+		handle = await sdk.openSession(id, { autoContinue: false });
+		expect(observed).toEqual([
+			[
+				{ kind: "value", schemaVersion: 1, value: ["A", "B"] },
+				{ kind: "absent" },
+			],
+			[
+				{ kind: "value", schemaVersion: 1, value: ["A", "B"] },
+				{ kind: "absent" },
+			],
+		]);
+		expect(recorder.requests).toEqual([]);
+	} finally {
+		await handle?.dispose();
+		await sdk.dispose();
+	}
+});
+
+test("an indeterminate Plugin state write reconciles and retries as one authoritative mutation", async () => {
+	const databasePath = path.join(
+		root,
+		"plugin-state-indeterminate",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const operationId = "uncertain-plugin-state";
+	let injectFailure = true;
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace,
+		{
+			sync: async (filePath, handle) => {
+				await handle.sync();
+				if (
+					injectFailure &&
+					filePath.endsWith(".jsonl") &&
+					(await readUtf8File(filePath)).includes(operationId)
+				) {
+					throw new Error("Injected post-sync Plugin state failure.");
+				}
+			},
+		}
+	);
+	const failures: unknown[] = [];
+	const restored: unknown[] = [];
+	const recorder = createFakeProviderRecorder();
+	const factory: PluginFactory = (api) => {
+		api
+			.definePlugin({ id: "uncertain_state", sessionStateVersion: 1 })
+			.onSessionStart(async ({ sessionState }) => {
+				if (!sessionState) {
+					throw new Error("Missing state capability.");
+				}
+				try {
+					await sessionState.set("plan", "retained", operationId);
+					restored.push(await sessionState.read("plan"));
+				} catch (error) {
+					failures.push(error);
+				}
+			});
+	};
+	const options = {
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		store: persistence.store,
+		pluginFactories: [{ factory, id: "uncertain_state" }],
+		pluginPaths: [],
+		workspace,
+	};
+	let sdk = await createSessionSdkWithRuntime(options);
+	let handle: SessionSdkHandle | undefined;
+	try {
+		const id = await sdk.createEmptySession();
+		await expect(sdk.openSession(id, { autoContinue: false })).rejects.toThrow(
+			"Injected post-sync Plugin state failure."
+		);
+		expect(failures).toMatchObject([
+			{ writeOutcome: { kind: "indeterminate", operationId } },
+		]);
+		injectFailure = false;
+		await sdk.dispose();
+		sdk = await createSessionSdkWithRuntime(options);
+		handle = await sdk.openSession(id, { autoContinue: false });
+		expect(restored).toEqual([
+			{ kind: "value", schemaVersion: 1, value: "retained" },
+		]);
+		const entries = await readSessionLogLines(
+			resolveLocalSessionLogRoot(databasePath),
+			toSessionId(id)
+		);
+		expect(
+			entries.filter(({ type }) => type === "plugin.state-replaced")
+		).toHaveLength(1);
+		expect(recorder.requests).toEqual([]);
+	} finally {
+		injectFailure = false;
+		await handle?.dispose();
+		await sdk.dispose();
+		persistence.close();
+	}
+});
+
+test("Forked Plugin state remains independent and exportable after source deletion", async () => {
+	const databasePath = path.join(
+		root,
+		"plugin-state-fork-independent",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const states = new Map<string, PluginSessionState>();
+	const recorder = createFakeProviderRecorder();
+	const factory: PluginFactory = (api) => {
+		api
+			.definePlugin({ id: "independent_state", sessionStateVersion: 1 })
+			.onSessionStart(({ sessionId, sessionState }) => {
+				if (!sessionState) {
+					throw new Error("Missing state capability.");
+				}
+				states.set(sessionId, sessionState);
+			});
+	};
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		store: persistence.store,
+		pluginFactories: [{ factory, id: "independent_state" }],
+		pluginPaths: [],
+		workspace,
+	});
+	let source: SessionSdkHandle | undefined;
+	let child: SessionSdkHandle | undefined;
+	let unsubscribe: (() => void) | undefined;
+	try {
+		const sourceId = await sdk.createEmptySession({
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		});
+		source = await sdk.openSession(sourceId, { autoContinue: false });
+		await states.get(sourceId)?.set("plan", "source", "source-plan");
+		const terminal = Promise.withResolvers<void>();
+		unsubscribe = source.onEvent((event) => {
+			if (isTerminalAgentTurnEvent(event)) {
+				terminal.resolve();
+			}
+		});
+		expect(
+			(await source.prompt({ text: "Create a Fork checkpoint." })).rejected
+		).toBe(false);
+		await terminal.promise;
+		unsubscribe();
+		unsubscribe = undefined;
+		const history = await sdk.readSessionHistoryPage(sourceId);
+		const record = history.records.at(-1);
+		if (!record) {
+			throw new Error("Missing Fork checkpoint.");
+		}
+		const fork = await sdk.forkSession(
+			sourceId,
+			{ recordId: record.id },
+			"independent-state-fork"
+		);
+		child = fork.handle;
+		expect(await states.get(fork.id)?.read("plan")).toEqual({
+			kind: "value",
+			schemaVersion: 1,
+			value: "source",
+		});
+		await states.get(fork.id)?.set("plan", "child", "child-plan");
+		expect(await states.get(sourceId)?.read("plan")).toEqual({
+			kind: "value",
+			schemaVersion: 1,
+			value: "source",
+		});
+		await source.dispose();
+		source = undefined;
+		await persistence.store.deleteSession(toSessionId(sourceId));
+		await child.dispose();
+		child = undefined;
+		child = await sdk.openSession(fork.id, { autoContinue: false });
+		expect(await states.get(fork.id)?.read("plan")).toEqual({
+			kind: "value",
+			schemaVersion: 1,
+			value: "child",
+		});
+		await child.dispose();
+		child = undefined;
+		await sdk.exportSessionBundle(
+			fork.id,
+			path.join(root, "independent-state-bundle")
+		);
+		expect(
+			recorder.requests.filter(({ kind }) => kind === "chat")
+		).toHaveLength(1);
+	} finally {
+		unsubscribe?.();
+		await source?.dispose();
+		await child?.dispose();
+		await sdk.dispose();
+		persistence.close();
+	}
+});
 
 test("public SDK returns an empty Session only after its v2 JSONL log is published", async () => {
 	const databasePath = path.join(root, "sdk-empty-session.sqlite");
