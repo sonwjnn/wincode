@@ -74,3 +74,38 @@ export type SessionHistoryPage = Readonly<{
 	records: SessionRecord[];
 	session: Session;
 }>;
+
+export type SessionHistoryTreeRecordEntry = Readonly<{
+	createdAt: Date;
+	id: string;
+	kind: "record";
+	parentEntryId: string | null;
+	record: SessionRecord;
+	recordId: SessionRecord["id"];
+	selectedPath: boolean;
+	sequence: number;
+}>;
+
+export type SessionHistoryTreePluginStateEntry = Readonly<{
+	createdAt: Date;
+	id: string;
+	key: string;
+	kind: "plugin-state";
+	operation: "delete" | "set";
+	parentEntryId: string | null;
+	pluginId: string;
+	schemaVersion: number;
+	selectedPath: boolean;
+	sequence: number;
+}>;
+
+export type SessionHistoryTreeEntry =
+	| SessionHistoryTreePluginStateEntry
+	| SessionHistoryTreeRecordEntry;
+
+export type SessionHistoryTreePage = Readonly<{
+	activeLeafId: string | null;
+	entries: SessionHistoryTreeEntry[];
+	nextCursor?: string;
+	readPoint: string;
+}>;

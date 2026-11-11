@@ -460,15 +460,44 @@ test("source semantic corruption remains session_log_corrupt with its sequence a
 			resolveSessionLogFilePath(fixture.logRoot, sessionId)
 		).bytes();
 		const state = decodeSessionLog(sessionId, sourceBytes);
-		const firstRecord = state.entries.find(
+		const firstRecordEntry = state.entries.find(
 			({ envelope }) => envelope.type === "record.committed"
-		)?.envelope.payload.record;
-		if (firstRecord === undefined) {
+		);
+		const firstRecord = firstRecordEntry?.envelope.payload.record;
+		const historyEntryId = firstRecordEntry?.envelope.payload.historyEntryId;
+		if (
+			firstRecordEntry === undefined ||
+			firstRecord === null ||
+			typeof firstRecord !== "object" ||
+			typeof historyEntryId !== "string"
+		) {
 			throw new Error("The fixture has no committed Session Record.");
+		}
+		let parentEntryId: string | null = null;
+		for (const { envelope } of state.entries) {
+			if (
+				envelope.type === "session.created" ||
+				envelope.type === "record.committed" ||
+				envelope.type === "plugin.state-replaced" ||
+				envelope.type === "plugin.state-deleted"
+			) {
+				const activeLeafId = envelope.payload.activeLeafId;
+				if (typeof activeLeafId === "string" || activeLeafId === null) {
+					parentEntryId = activeLeafId;
+				}
+			}
+		}
+		if (parentEntryId === null) {
+			throw new Error("The fixture has no current history leaf.");
 		}
 		const duplicate = createSessionLogEvent({
 			operationId: "semantic-duplicate-record",
-			payload: { record: firstRecord },
+			payload: {
+				activeLeafId: historyEntryId,
+				historyEntryId,
+				parentEntryId,
+				record: firstRecord,
+			},
 			previousHash: state.lastHash,
 			sequence: state.nextSequence,
 			sessionId,

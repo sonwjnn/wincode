@@ -28,7 +28,7 @@ import type {
 } from "@/shared/identifiers";
 import { getSessionRecordValidationError } from "./session-record";
 
-export const SESSION_LOG_FORMAT_VERSION = 2;
+export const SESSION_LOG_FORMAT_VERSION = 3;
 export const SESSION_LOG_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 
 export const SESSION_LOG_EVENT_TYPES = [
@@ -196,8 +196,10 @@ const envelopeSchema = z
 
 const createdPayloadSchema = z
 	.object({
+		activeLeafId: safeIdentifierSchema.nullable(),
 		createdAt: z.string().datetime(),
 		editMode: editModeSchema,
+		initialHistoryEntryId: safeIdentifierSchema.optional(),
 		initialRecord: z.unknown().optional(),
 		lastMessageAt: z.string().datetime().nullable(),
 		model: providerModelSelectionSchema.optional(),
@@ -205,7 +207,14 @@ const createdPayloadSchema = z
 		thinkingLevel: thinkingLevelSchema.optional(),
 		title: z.string(),
 	})
-	.strict();
+	.strict()
+	.refine((payload) =>
+		payload.initialRecord === undefined
+			? payload.initialHistoryEntryId === undefined &&
+				payload.activeLeafId === null
+			: payload.initialHistoryEntryId !== undefined &&
+				payload.activeLeafId === payload.initialHistoryEntryId
+	);
 
 const metadataUpdatedPayloadSchema = z
 	.object({
@@ -218,13 +227,25 @@ const metadataUpdatedPayloadSchema = z
 	.strict()
 	.refine((payload) => Object.keys(payload).length > 0);
 
+const historyEntryFieldsSchema = {
+	activeLeafId: safeIdentifierSchema,
+	historyEntryId: safeIdentifierSchema,
+	parentEntryId: safeIdentifierSchema.nullable(),
+};
+
 const recordCommittedPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		record: z.unknown(),
 		sessionModel: providerModelSelectionSchema.optional(),
 		sessionThinkingLevel: thinkingLevelSchema.optional(),
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 const submissionStatusPayloadSchema = z
 	.object({
@@ -413,12 +434,18 @@ const pluginSessionStateVersionSchema = z
 
 const pluginSessionStateReplacedPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		key: pluginSessionStateKeySchema,
 		pluginId: pluginSessionStatePluginIdSchema,
 		schemaVersion: pluginSessionStateVersionSchema,
 		value: z.unknown(),
 	})
 	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	)
 	.superRefine((payload, context) => {
 		try {
 			serializePluginSessionStateValue(payload.value);
@@ -436,21 +463,33 @@ const pluginSessionStateReplacedPayloadSchema = z
 
 const pluginSessionStateDeletedPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		key: pluginSessionStateKeySchema,
 		pluginId: pluginSessionStatePluginIdSchema,
 		schemaVersion: pluginSessionStateVersionSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 export type PluginSessionStateReplacedPayload = Readonly<{
+	activeLeafId: string;
+	historyEntryId: string;
 	key: string;
+	parentEntryId: string | null;
 	pluginId: string;
 	schemaVersion: number;
 	value: PluginSessionStateJsonValue;
 }>;
 
 export type PluginSessionStateDeletedPayload = Readonly<{
+	activeLeafId: string;
+	historyEntryId: string;
 	key: string;
+	parentEntryId: string | null;
 	pluginId: string;
 	schemaVersion: number;
 }>;
@@ -535,6 +574,16 @@ export const encodeCanonicalSessionJson = (value: unknown): string => {
 
 const sha256 = (value: string | Uint8Array): string =>
 	new Bun.CryptoHasher("sha256").update(value).digest("hex");
+
+export const sessionHistoryEntryIdForRecord = (
+	sessionId: SessionId,
+	recordId: string
+): string => `entry-${sha256(`${sessionId}\0${recordId}`)}`;
+
+export const sessionHistoryEntryIdForOperation = (
+	sessionId: SessionId,
+	operationId: string
+): string => `entry-${sha256(`${sessionId}\0operation\0${operationId}`)}`;
 
 const semanticOperationDigest = (
 	type: SessionLogEventType,
@@ -894,7 +943,9 @@ export type SessionLogDecodeOptions = Readonly<{
 }>;
 
 type SessionLogReferenceState = {
+	activeLeafId: string | null | undefined;
 	compactionIds: Set<string>;
+	historyEntryParents: Map<string, string | null>;
 	compactionSequence: number;
 	messageIds: Set<SessionMessageId>;
 	messages: Map<SessionMessageId, SessionRecord["messages"][number]>;
@@ -919,6 +970,62 @@ const rejectInvalidSessionLogReference = (
 		offset: entry.startOffset,
 		sequence: entry.envelope.sequence,
 	});
+};
+
+const appendHistoryEntryReference = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState,
+	{
+		activeLeafId,
+		historyEntryId,
+		parentEntryId,
+	}: {
+		activeLeafId: unknown;
+		historyEntryId: unknown;
+		parentEntryId: unknown;
+	},
+	expectedEntryId: string
+): void => {
+	const historyId =
+		typeof historyEntryId === "string"
+			? historyEntryId
+			: rejectInvalidSessionLogReference(
+					entry,
+					sessionId,
+					"Session history entry identity is invalid."
+				);
+	const activeLeaf =
+		typeof activeLeafId === "string"
+			? activeLeafId
+			: rejectInvalidSessionLogReference(
+					entry,
+					sessionId,
+					"Session Active Leaf identity is invalid."
+				);
+	const parentId =
+		parentEntryId === null || typeof parentEntryId === "string"
+			? parentEntryId
+			: rejectInvalidSessionLogReference(
+					entry,
+					sessionId,
+					"Session history parent identity is invalid."
+				);
+	if (
+		historyId !== expectedEntryId ||
+		activeLeaf !== historyId ||
+		state.historyEntryParents.has(historyId) ||
+		parentId !== state.activeLeafId ||
+		(parentId !== null && !state.historyEntryParents.has(parentId))
+	) {
+		rejectInvalidSessionLogReference(
+			entry,
+			sessionId,
+			"Session history entry has a duplicate identity, missing parent or cross-Session parent, cycle, or invalid selected leaf."
+		);
+	}
+	state.historyEntryParents.set(historyId, parentId);
+	state.activeLeafId = activeLeaf;
 };
 
 const validateRecordContextReferences = (
@@ -1097,14 +1204,130 @@ const validateUsageReferences = (
 	state.usageIds.add(payload.id);
 };
 
+const validateInitialHistoryEntryReference = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState
+): void => {
+	const { activeLeafId, initialHistoryEntryId, initialRecord } =
+		entry.envelope.payload;
+	if (typeof initialHistoryEntryId === "string") {
+		if (
+			!isSessionRecord(initialRecord) ||
+			initialHistoryEntryId !==
+				sessionHistoryEntryIdForRecord(sessionId, initialRecord.id)
+		) {
+			rejectInvalidSessionLogReference(
+				entry,
+				sessionId,
+				"Session initial history entry has an invalid identity."
+			);
+		}
+		state.historyEntryParents.set(initialHistoryEntryId, null);
+	}
+	if (
+		activeLeafId !== null &&
+		(typeof activeLeafId !== "string" ||
+			!state.historyEntryParents.has(activeLeafId))
+	) {
+		rejectInvalidSessionLogReference(
+			entry,
+			sessionId,
+			"Session Active Leaf references a missing history entry."
+		);
+	}
+	state.activeLeafId = activeLeafId as string | null;
+};
+
+const validateAppendedHistoryEntryReference = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState
+): void => {
+	const { envelope } = entry;
+	const payload = envelope.payload;
+	const expectedEntryId =
+		envelope.type === "record.committed"
+			? sessionHistoryEntryIdForRecord(
+					sessionId,
+					String((payload.record as SessionRecord).id)
+				)
+			: sessionHistoryEntryIdForOperation(sessionId, envelope.operationId);
+	appendHistoryEntryReference(
+		entry,
+		sessionId,
+		state,
+		{
+			activeLeafId: payload.activeLeafId,
+			historyEntryId: payload.historyEntryId,
+			parentEntryId: payload.parentEntryId,
+		},
+		expectedEntryId
+	);
+};
+
+const validateSessionHistoryEntryReference = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState
+): void => {
+	if (entry.envelope.type === "session.created") {
+		validateInitialHistoryEntryReference(entry, sessionId, state);
+		return;
+	}
+	if (
+		entry.envelope.type === "record.committed" ||
+		entry.envelope.type === "plugin.state-replaced" ||
+		entry.envelope.type === "plugin.state-deleted"
+	) {
+		validateAppendedHistoryEntryReference(entry, sessionId, state);
+	}
+};
+
+const validateOperationalReferences = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState
+): void => {
+	switch (entry.envelope.type) {
+		case "context.edited": {
+			const edit = sessionContextEditSchema.parse(entry.envelope.payload);
+			if (
+				edit.operationId !== entry.envelope.operationId ||
+				!state.messageIds.has(edit.targetId)
+			) {
+				rejectInvalidSessionLogReference(
+					entry,
+					sessionId,
+					"Context edit references a missing message or inconsistent operation identity."
+				);
+			}
+			break;
+		}
+		case "submission.status-updated":
+			validateSubmissionReferences(entry, sessionId, state);
+			break;
+		case "compaction.committed":
+			validateCompactionReferences(entry, sessionId, state);
+			break;
+		case "usage.committed":
+			validateUsageReferences(entry, sessionId, state);
+			break;
+		default:
+			break;
+	}
+};
+
 const validateSessionLogReferences = (
 	entries: readonly SessionLogEntry[],
 	sessionId: SessionId,
 	options: SessionLogDecodeOptions
 ): void => {
 	const state: SessionLogReferenceState = {
+		activeLeafId: undefined,
 		compactionIds: new Set(),
 		compactionSequence: 0,
+		historyEntryParents: new Map(),
 		messageIds: new Set(),
 		messages: new Map(),
 		pendingJoinedTurnReferences: [],
@@ -1124,33 +1347,8 @@ const validateSessionLogReferences = (
 		if (record !== undefined) {
 			addSessionRecordReferences(entry, sessionId, record, state);
 		}
-		switch (entry.envelope.type) {
-			case "context.edited": {
-				const edit = sessionContextEditSchema.parse(entry.envelope.payload);
-				if (
-					edit.operationId !== entry.envelope.operationId ||
-					!state.messageIds.has(edit.targetId)
-				) {
-					rejectInvalidSessionLogReference(
-						entry,
-						sessionId,
-						"Context edit references a missing message or inconsistent operation identity."
-					);
-				}
-				break;
-			}
-			case "submission.status-updated":
-				validateSubmissionReferences(entry, sessionId, state);
-				break;
-			case "compaction.committed":
-				validateCompactionReferences(entry, sessionId, state);
-				break;
-			case "usage.committed":
-				validateUsageReferences(entry, sessionId, state);
-				break;
-			default:
-				break;
-		}
+		validateSessionHistoryEntryReference(entry, sessionId, state);
+		validateOperationalReferences(entry, sessionId, state);
 	}
 	for (const reference of state.pendingJoinedTurnReferences) {
 		if (!state.turnIds.has(reference.turnId)) {

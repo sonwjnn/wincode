@@ -70,6 +70,7 @@ type ChatTextAreaProps = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onProviderModelChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	onOpenSessionHistory?: () => Promise<void> | void;
 	onEmptySubmit?: () => void | Promise<void>;
 	providerController?: InteractiveProviderController;
 	isSelectionReady?: boolean;
@@ -144,6 +145,7 @@ export function ChatTextArea({
 	onCompact,
 	onProviderModelChanged,
 	onOpenSettings,
+	onOpenSessionHistory,
 	onSubmit,
 	onEmptySubmit,
 	providerController,
@@ -171,6 +173,13 @@ export function ChatTextArea({
 		statusBarThinkingSelection,
 		unavailableCommandCapabilities: viewUnavailableCapabilities,
 	});
+	const commandUnavailableCapabilities = useMemo(
+		() =>
+			sessionId === undefined || onOpenSessionHistory === undefined
+				? [...unavailableCommandCapabilities, "session-history" as const]
+				: unavailableCommandCapabilities,
+		[onOpenSessionHistory, sessionId, unavailableCommandCapabilities]
+	);
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const composerDocument = useMemo(createComposerDocument, []);
 	const ctrlCRef = useRef<() => boolean>(() => false);
@@ -237,11 +246,12 @@ export function ChatTextArea({
 	const commandController = useMemo(
 		() =>
 			commandControllerFactory.create({
-				unavailableCapabilities: unavailableCommandCapabilities,
+				unavailableCapabilities: commandUnavailableCapabilities,
 				sessionId,
 				onCompact,
 				onError: handleSubmitError,
 				onOpenSettings,
+				onOpenSessionHistory,
 				onSelectProviderModel: setFutureProviderModelSelection,
 				providerController,
 				providerModel: selectedProviderModel,
@@ -251,11 +261,12 @@ export function ChatTextArea({
 			handleSubmitError,
 			onCompact,
 			onOpenSettings,
+			onOpenSessionHistory,
 			sessionId,
 			setFutureProviderModelSelection,
 			providerController,
 			selectedProviderModel,
-			unavailableCommandCapabilities,
+			commandUnavailableCapabilities,
 		]
 	);
 	const { actions, state } = useChatInputController({

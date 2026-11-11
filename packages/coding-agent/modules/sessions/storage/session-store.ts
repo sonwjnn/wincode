@@ -28,6 +28,7 @@ import type {
 	Session,
 	SessionCatalogPage,
 	SessionHistoryPage,
+	SessionHistoryTreePage,
 	SessionPageOptions,
 } from "../session-pagination-types";
 import type {
@@ -51,6 +52,8 @@ export type {
 	Session,
 	SessionCatalogPage,
 	SessionHistoryPage,
+	SessionHistoryTreeEntry,
+	SessionHistoryTreePage,
 	SessionPageOptions,
 } from "../session-pagination-types";
 export type {
@@ -384,6 +387,10 @@ export type SessionStore = Omit<
 		sessionId: SessionId,
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryPage>;
+	readSessionHistoryTreePage: (
+		sessionId: SessionId,
+		options?: SessionPageOptions
+	) => Promise<SessionHistoryTreePage>;
 	getSessionStatistics: (
 		sessionId: SessionId,
 		options?: SessionStatisticsOptions

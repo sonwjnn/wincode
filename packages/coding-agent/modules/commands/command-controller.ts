@@ -108,6 +108,7 @@ export type CommandControllerOptions = {
 	providerModel?: ProviderModel;
 	onError: (message: string) => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	onOpenSessionHistory?: () => Promise<void> | void;
 	sessionId?: string;
 };
 

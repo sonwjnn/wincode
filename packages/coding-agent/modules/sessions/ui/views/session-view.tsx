@@ -100,6 +100,7 @@ export type SessionInitialSubmission = {
 type SessionViewProps = {
 	/** The already-open session this view renders and sends through. */
 	host: SessionHost;
+	onOpenSessionHistory?: () => Promise<void> | void;
 	onRewindCheckpoint?: (
 		recordId: SessionRecordId
 	) => Promise<SessionRewindAction>;
@@ -276,6 +277,7 @@ const resolveInitialSessionSelection = ({
 
 export function SessionView({
 	host,
+	onOpenSessionHistory,
 	onRewindCheckpoint,
 	initialSubmission,
 	initialTranscript,
@@ -1221,6 +1223,7 @@ export function SessionView({
 					messages={messages}
 					onCompact={executeCompactionCommand}
 					onEmptySubmit={steerQueuedHead}
+					onOpenSessionHistory={onOpenSessionHistory}
 					onOpenSettings={openSettings}
 					onProviderModelChanged={host.cancelCacheWarming}
 					onRetry={retryMessage}

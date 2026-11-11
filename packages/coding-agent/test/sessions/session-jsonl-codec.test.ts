@@ -10,9 +10,12 @@ import {
 	encodeSessionLogLine,
 	SESSION_LOG_FORMAT_VERSION,
 	type SessionLogEventType,
+	type SessionLogState,
+	sessionHistoryEntryIdForOperation,
+	sessionHistoryEntryIdForRecord,
 } from "@/modules/sessions/storage/session-jsonl-codec";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
-import { toSessionId } from "@/shared/identifiers";
+import { type SessionId, toSessionId } from "@/shared/identifiers";
 import { agentId, agentTurnId, sessionMessageId } from "../support/identifiers";
 
 const sessionId = toSessionId("codec-contract");
@@ -27,6 +30,7 @@ const createLog = (title: string) => {
 	const created = createSessionLogEvent({
 		operationId: "create-codec-contract",
 		payload: {
+			activeLeafId: null,
 			createdAt: timestamp,
 			editMode: "hashline",
 			lastMessageAt: null,
@@ -81,10 +85,19 @@ test("equivalent Session records with reordered JSON keys keep identical durable
 		"codec-canonical-order-message",
 		"codec-canonical-order-turn"
 	);
+	const historyEntryId = sessionHistoryEntryIdForRecord(
+		sessionId,
+		String(record.id)
+	);
 	const createEvent = (record: unknown) =>
 		createSessionLogEvent({
 			operationId: "canonical-order-record-operation",
-			payload: { record },
+			payload: {
+				activeLeafId: historyEntryId,
+				historyEntryId,
+				parentEntryId: null,
+				record,
+			},
 			previousHash: "a".repeat(64),
 			sequence: 2,
 			sessionId,
@@ -100,6 +113,53 @@ test("equivalent Session records with reordered JSON keys keep identical durable
 	);
 });
 
+const selectedLeafBefore = (state: SessionLogState): string | null => {
+	let activeLeafId: string | null = null;
+	for (const { envelope } of state.entries) {
+		if (
+			envelope.type === "session.created" ||
+			envelope.type === "record.committed" ||
+			envelope.type === "plugin.state-replaced" ||
+			envelope.type === "plugin.state-deleted"
+		) {
+			activeLeafId = envelope.payload.activeLeafId as string | null;
+		}
+	}
+	return activeLeafId;
+};
+
+const historyEntryPayload = (
+	state: SessionLogState,
+	sessionId: SessionId,
+	operationId: string,
+	type: SessionLogEventType,
+	payload: Readonly<Record<string, unknown>>
+): Readonly<Record<string, unknown>> => {
+	if (type === "record.committed") {
+		const record = payload.record as { id: string };
+		const historyEntryId = sessionHistoryEntryIdForRecord(sessionId, record.id);
+		return {
+			activeLeafId: historyEntryId,
+			historyEntryId,
+			parentEntryId: selectedLeafBefore(state),
+			...payload,
+		};
+	}
+	if (type === "plugin.state-replaced" || type === "plugin.state-deleted") {
+		const historyEntryId = sessionHistoryEntryIdForOperation(
+			sessionId,
+			operationId
+		);
+		return {
+			activeLeafId: historyEntryId,
+			historyEntryId,
+			parentEntryId: selectedLeafBefore(state),
+			...payload,
+		};
+	}
+	return payload;
+};
+
 const appendValidLogEvent = (
 	bytes: Uint8Array,
 	operationId: string,
@@ -111,9 +171,16 @@ const appendValidLogEvent = (
 	if (previous === undefined) {
 		throw new Error("Expected a previous Session log entry.");
 	}
+	const eventPayload = historyEntryPayload(
+		state,
+		sessionId,
+		operationId,
+		type,
+		payload
+	);
 	const event = createSessionLogEvent({
 		operationId,
-		payload,
+		payload: eventPayload,
 		previousHash: previous.entryHash,
 		sequence: previous.sequence + 1,
 		sessionId,
@@ -331,6 +398,76 @@ test("replay rejects a processed Submission status returning to pending", () => 
 	).toThrow("invalid Submission status transition: processed -> pending");
 });
 
+test("replay rejects a history record with missing, cross-Session, or cyclic parents", () => {
+	const initialLog = createLog("invalid history parent").bytes;
+	const missingParentRecord = createUserRecord(
+		"codec-missing-parent-message",
+		"codec-missing-parent-turn"
+	);
+	const missingParentLog = appendValidLogEvent(
+		initialLog,
+		"history-missing-parent",
+		"record.committed",
+		{ parentEntryId: "missing-history-entry", record: missingParentRecord }
+	);
+	const crossSessionParentRecord = createUserRecord(
+		"codec-cross-session-parent-message",
+		"codec-cross-session-parent-turn"
+	);
+	const crossSessionParentLog = appendValidLogEvent(
+		initialLog,
+		"history-cross-session-parent",
+		"record.committed",
+		{
+			parentEntryId: sessionHistoryEntryIdForRecord(
+				toSessionId("codec-other-session"),
+				crossSessionParentRecord.id
+			),
+			record: crossSessionParentRecord,
+		}
+	);
+	const selfParentRecord = createUserRecord(
+		"codec-self-parent-message",
+		"codec-self-parent-turn"
+	);
+	const selfParentEntryId = sessionHistoryEntryIdForRecord(
+		sessionId,
+		selfParentRecord.id
+	);
+	expect(() => decodeSessionLog(sessionId, missingParentLog)).toThrow(
+		"missing parent"
+	);
+	expect(() => decodeSessionLog(sessionId, crossSessionParentLog)).toThrow(
+		"missing parent"
+	);
+	expect(() =>
+		appendValidLogEvent(initialLog, "history-self-parent", "record.committed", {
+			activeLeafId: selfParentEntryId,
+			historyEntryId: selfParentEntryId,
+			parentEntryId: selfParentEntryId,
+			record: selfParentRecord,
+		})
+	).toThrow();
+});
+
+test("encoding rejects a history entry that does not select itself as the active leaf", () => {
+	const record = createUserRecord(
+		"codec-invalid-active-leaf-message",
+		"codec-invalid-active-leaf-turn"
+	);
+	expect(() =>
+		appendValidLogEvent(
+			createLog("invalid active leaf").bytes,
+			"invalid-active-leaf",
+			"record.committed",
+			{
+				activeLeafId: "different-history-entry",
+				record,
+			}
+		)
+	).toThrow();
+});
+
 test("replay rejects duplicate retained record and message identities", () => {
 	const initialLog = createLog("duplicate identity").bytes;
 	const firstRecord = createUserRecord(
@@ -347,7 +484,12 @@ test("replay rejects duplicate retained record and message identities", () => {
 		logWithRecord,
 		"duplicate-retained-record-operation",
 		"record.committed",
-		{ record: firstRecord }
+		{
+			activeLeafId: "duplicate-record-entry",
+			historyEntryId: "duplicate-record-entry",
+			parentEntryId: sessionHistoryEntryIdForRecord(sessionId, firstRecord.id),
+			record: firstRecord,
+		}
 	);
 	const differentRecordWithDuplicateMessage = createUserRecord(
 		"codec-duplicate-message",
@@ -418,18 +560,36 @@ test("replay accepts a joined-turn reference when its Agent Turn is committed la
 	if (previous === undefined) {
 		throw new Error("Expected a creation entry before context records.");
 	}
+	const joinedEntryId = sessionHistoryEntryIdForRecord(
+		sessionId,
+		joinedRecord.id
+	);
 	const joinedEntry = createSessionLogEvent({
 		operationId: "forward-joined-turn-context",
-		payload: { record: joinedRecord },
+		payload: {
+			activeLeafId: joinedEntryId,
+			historyEntryId: joinedEntryId,
+			parentEntryId: null,
+			record: joinedRecord,
+		},
 		previousHash: previous.entryHash,
 		sequence: previous.sequence + 1,
 		sessionId,
 		timestamp,
 		type: "record.committed",
 	});
+	const futureEntryId = sessionHistoryEntryIdForRecord(
+		sessionId,
+		futureRecord.id
+	);
 	const futureEntry = createSessionLogEvent({
 		operationId: "forward-joined-turn-target",
-		payload: { record: futureRecord },
+		payload: {
+			activeLeafId: futureEntryId,
+			historyEntryId: futureEntryId,
+			parentEntryId: joinedEntryId,
+			record: futureRecord,
+		},
 		previousHash: joinedEntry.entryHash,
 		sequence: joinedEntry.sequence + 1,
 		sessionId,

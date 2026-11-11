@@ -14,6 +14,7 @@ test("keeps host built-in slash names routed to their action IDs", () => {
 		{ action: "provider.connect", value: "/provider-connect" },
 		{ action: "thinking.select", value: "/thinking" },
 		{ action: "dialog.sessions", value: "/sessions" },
+		{ action: "dialog.session-history", value: "/history" },
 		{ action: "dialog.theme", value: "/themes" },
 		{ action: "connection.open", value: "/connect" },
 		{ action: "app.exit", value: "/exit" },

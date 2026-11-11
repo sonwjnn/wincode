@@ -6,7 +6,14 @@ import type {
 } from "@wincode/ai";
 import { getErrorMessage } from "@wincode/utils";
 import type { Dispatch, SetStateAction } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	createElement,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	type AgentSelectionOverride,
 	resolveActiveAgentId,
@@ -68,6 +75,7 @@ import {
 	SessionWriterAction,
 	SessionWriterOwnerLabel,
 } from "../components/session-writer-controls";
+import { SessionHistoryTreeDialogContent } from "../dialogs/session-history-tree-dialog";
 import type { SessionInitialSubmission } from "./session-view";
 import { SessionView } from "./session-view";
 import { StoredSessionHistoryView } from "./stored-session-history-view";
@@ -442,6 +450,17 @@ export function SessionSurface({
 	const handleViewHistory = useCallback(() => {
 		viewHistoryRef.current?.();
 	}, []);
+	const handleOpenSessionHistory = useCallback(async () => {
+		const services = await sessionServicesHandle.open();
+		dialogRef.current.open({
+			children: createElement(SessionHistoryTreeDialogContent, {
+				sessionId,
+				sessionSdk: services.sessionSdk,
+			}),
+			title: "Session history",
+			width: 80,
+		});
+	}, [sessionId, sessionServicesHandle]);
 	const handleReselectModel = useCallback(() => {
 		reselectModelRef.current?.();
 	}, []);
@@ -1011,6 +1030,7 @@ export function SessionSurface({
 				host={surface.session.host}
 				initialSubmission={surface.session.initialSubmission}
 				initialTranscript={surface.session.transcript}
+				onOpenSessionHistory={handleOpenSessionHistory}
 				onRewindCheckpoint={handleRewindCheckpoint}
 				sessionId={sessionId}
 				sessionTitle={surface.session.sessionTitle}

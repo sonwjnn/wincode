@@ -50,6 +50,11 @@ export const sessionStoreWithSuccessfulWrites = (
 	readSessionHistoryPage: async () => {
 		throw new Error("Session history pages are not used by this test store.");
 	},
+	readSessionHistoryTreePage: async () => {
+		throw new Error(
+			"Session history tree pages are not used by this test store."
+		);
+	},
 	forkSession: async () => {
 		throw new Error(
 			"Session forking is not used by this projection-only test store."

@@ -939,7 +939,12 @@ test("human verification diagnostics cannot emit terminal controls from corrupt 
 		const unsigned = {
 			formatVersion: SESSION_LOG_FORMAT_VERSION,
 			operationId: "record-terminal-control",
-			payload: { record: { version: "\u001b]0;forged-title\u0007" } },
+			payload: {
+				activeLeafId: "terminal-control-history-entry",
+				historyEntryId: "terminal-control-history-entry",
+				parentEntryId: null,
+				record: { version: "\u001b]0;forged-title\u0007" },
+			},
 			previousHash: created.entryHash,
 			sequence: 2,
 			sessionId,

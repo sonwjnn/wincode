@@ -19,6 +19,7 @@ import type { SessionSdkEvent } from "./session-events";
 import type {
 	SessionCatalogPage,
 	SessionHistoryPage,
+	SessionHistoryTreePage,
 	SessionPageOptions,
 } from "./session-pagination-types";
 import type {
@@ -49,6 +50,8 @@ export type {
 	Session,
 	SessionCatalogPage,
 	SessionHistoryPage,
+	SessionHistoryTreeEntry,
+	SessionHistoryTreePage,
 	SessionPageCompaction,
 	SessionPageOptions,
 } from "./session-pagination-types";
@@ -226,6 +229,10 @@ export type SessionSdk = Readonly<{
 		sessionId: SessionId | string,
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryPage>;
+	readSessionHistoryTreePage: (
+		sessionId: SessionId | string,
+		options?: SessionPageOptions
+	) => Promise<SessionHistoryTreePage>;
 	getSessionStatistics: (
 		sessionId: SessionId | string,
 		options?: SessionStatisticsOptions
@@ -270,6 +277,7 @@ export type SessionSdkOperations = Pick<
 	SessionSdk,
 	| "listSessionsPage"
 	| "readSessionHistoryPage"
+	| "readSessionHistoryTreePage"
 	| "getSessionStatistics"
 	| "forkSession"
 	| "exportSessionBundle"

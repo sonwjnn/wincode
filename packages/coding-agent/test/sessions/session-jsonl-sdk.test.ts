@@ -54,6 +54,7 @@ import {
 	decodeSessionLog,
 	encodeCanonicalSessionJson,
 	encodeSessionLogLine,
+	sessionHistoryEntryIdForRecord,
 	sessionLogOperationDigest,
 } from "@/modules/sessions/storage/session-jsonl-codec";
 import {
@@ -168,6 +169,488 @@ const createSessionJsonlTestPersistence = (
 	};
 };
 
+test("public Session SDK includes Plugin State in the paginated history tree without exposing its value", async () => {
+	const databasePath = path.join(
+		root,
+		"history-tree-reader",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const recorder = createFakeProviderRecorder();
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		pluginPaths: [],
+		store: persistence.store,
+		workspace,
+	});
+	try {
+		const { id: sessionId, writeOutcome: creation } =
+			await persistence.store.createEmptySession({});
+		expect(creation.kind).toBe("committed");
+		const rootRecord = buildUserSessionRecord({
+			agentId: agentId("history-tree"),
+			message: {
+				id: sessionMessageId("history-tree-root-message"),
+				parts: [{ text: "root", type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-tree-root-turn"),
+		});
+		const childRecord = buildUserSessionRecord({
+			agentId: agentId("history-tree"),
+			message: {
+				id: sessionMessageId("history-tree-child-message"),
+				parts: [{ text: "child", type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-tree-child-turn"),
+		});
+		const rootOutcome = await persistence.store.commitSessionRecord({
+			record: rootRecord,
+			sessionId,
+		});
+		expect(rootOutcome.kind).toBe("committed");
+		const stateMutation = await persistence.store.mutatePluginSessionState(
+			sessionId,
+			"history_tree",
+			{
+				key: "status",
+				kind: "set",
+				operationId: "history-tree-plugin-state",
+				schemaVersion: 1,
+				value: { secret: "must-not-appear-in-the-tree" },
+			}
+		);
+		expect(stateMutation.kind).toBe("written");
+		if (stateMutation.kind !== "written") {
+			throw new Error("Expected Plugin State to be written.");
+		}
+		expect(stateMutation.writeOutcome.kind).toBe("committed");
+		const childOutcome = await persistence.store.commitSessionRecord({
+			record: childRecord,
+			sessionId,
+		});
+		expect(childOutcome.kind).toBe("committed");
+
+		const firstPage = await sdk.readSessionHistoryTreePage(sessionId, {
+			limit: 1,
+		});
+		expect(firstPage.entries).toHaveLength(1);
+		expect(firstPage.entries[0]).toMatchObject({
+			parentEntryId: null,
+			recordId: rootRecord.id,
+			selectedPath: true,
+		});
+		expect(firstPage.nextCursor).toBeDefined();
+		const treeCursor = firstPage.nextCursor;
+		if (treeCursor === undefined) {
+			throw new Error("Expected a second history tree page.");
+		}
+
+		const secondPage = await sdk.readSessionHistoryTreePage(sessionId, {
+			cursor: treeCursor,
+			limit: 1,
+		});
+		expect(secondPage.entries).toHaveLength(1);
+		const stateEntry = secondPage.entries[0];
+		if (stateEntry === undefined) {
+			throw new Error("Expected the Plugin State history entry.");
+		}
+		expect(stateEntry).toMatchObject({
+			kind: "plugin-state",
+			operation: "set",
+			parentEntryId: firstPage.entries[0]?.id,
+			pluginId: "history_tree",
+			selectedPath: true,
+		});
+		expect(stateEntry).not.toHaveProperty("value");
+		expect(JSON.stringify(stateEntry)).not.toContain(
+			"must-not-appear-in-the-tree"
+		);
+		expect(secondPage.readPoint).toBe(firstPage.readPoint);
+		expect(secondPage.nextCursor).toBeDefined();
+		const stateCursor = secondPage.nextCursor;
+		if (stateCursor === undefined) {
+			throw new Error("Expected a third history tree page.");
+		}
+
+		const thirdPage = await sdk.readSessionHistoryTreePage(sessionId, {
+			cursor: stateCursor,
+			limit: 1,
+		});
+		const childEntry = thirdPage.entries[0];
+		if (childEntry === undefined) {
+			throw new Error("Expected the child history tree entry.");
+		}
+		expect(childEntry).toMatchObject({
+			kind: "record",
+			parentEntryId: stateEntry.id,
+			recordId: childRecord.id,
+			selectedPath: true,
+		});
+		expect(thirdPage.activeLeafId).toBe(childEntry.id);
+		expect(secondPage.activeLeafId).toBe(thirdPage.activeLeafId);
+		expect(thirdPage.readPoint).toBe(firstPage.readPoint);
+
+		const metadataOutcome = await persistence.store.updateSession(sessionId, {
+			title: "Updated outside history",
+		});
+		expect(metadataOutcome.kind).toBe("committed");
+		const afterControlEvent = await sdk.readSessionHistoryTreePage(sessionId);
+		expect(afterControlEvent.entries).toHaveLength(3);
+		expect(afterControlEvent.activeLeafId).toBe(childEntry.id);
+		expect(afterControlEvent.entries.map(({ kind }) => kind)).toEqual([
+			"record",
+			"plugin-state",
+			"record",
+		]);
+		const originalSnapshotContinuation = await sdk.readSessionHistoryTreePage(
+			sessionId,
+			{
+				cursor: stateCursor,
+				limit: 1,
+			}
+		);
+		expect(originalSnapshotContinuation.readPoint).toBe(firstPage.readPoint);
+		expect(originalSnapshotContinuation.entries[0]).toMatchObject({
+			kind: "record",
+			recordId: childRecord.id,
+		});
+
+		const rebuilt = await persistence.store.rebuildProjection(
+			{ kind: "all" },
+			(operation) => operation()
+		);
+		expect(rebuilt.issues).toEqual([]);
+		const reopenedPage = await sdk.readSessionHistoryTreePage(sessionId);
+		expect(reopenedPage.activeLeafId).toBe(thirdPage.activeLeafId);
+		expect(reopenedPage.entries).toHaveLength(3);
+		expect(recorder.requests).toEqual([]);
+	} finally {
+		await sdk.dispose();
+		persistence.close();
+	}
+});
+
+test("history-tree cache misses wait for a partial append before reading the prior snapshot", async () => {
+	const testRoot = path.join(root, "history-tree-append-read-race");
+	const testWorkspace = path.join(testRoot, "workspace");
+	await fs.mkdir(testWorkspace, { recursive: true });
+	const databasePath = path.join(testRoot, "sessions.sqlite");
+	const pendingAppendWritten = Promise.withResolvers<void>();
+	const allowPendingAppendToFinish = Promise.withResolvers<void>();
+	const pendingText = "pending-history-tree-append";
+	let pausedAppend = false;
+	const fileIo: SessionLogFileIo = {
+		write: async (filePath, handle, bytes, offset, length, position) => {
+			const text = new TextDecoder().decode(
+				bytes.subarray(offset, offset + length)
+			);
+			if (
+				!pausedAppend &&
+				filePath.endsWith(".jsonl") &&
+				text.includes(pendingText)
+			) {
+				pausedAppend = true;
+				const partialLength = Math.max(1, Math.floor(length / 2));
+				const partialWrite = await handle.write(
+					bytes,
+					offset,
+					partialLength,
+					position
+				);
+				pendingAppendWritten.resolve();
+				await allowPendingAppendToFinish.promise;
+				return partialWrite.bytesWritten;
+			}
+			const write = await handle.write(bytes, offset, length, position);
+			return write.bytesWritten;
+		},
+	};
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		testWorkspace,
+		fileIo
+	);
+	const readerPersistence = createSessionJsonlTestPersistence(
+		databasePath,
+		testWorkspace
+	);
+	const recorder = createFakeProviderRecorder();
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: testWorkspace,
+		databasePath,
+		pluginPaths: [],
+		store: persistence.store,
+		workspace: testWorkspace,
+	});
+	let pendingAppend: Promise<unknown> | undefined;
+	try {
+		const { id: sessionId } = await persistence.store.createEmptySession({});
+		const firstRecord = buildUserSessionRecord({
+			agentId: agentId("history-tree-race"),
+			message: {
+				id: sessionMessageId("history-tree-race-first"),
+				parts: [{ text: "first durable record", type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-tree-race-first"),
+		});
+		const secondRecord = buildUserSessionRecord({
+			agentId: agentId("history-tree-race"),
+			message: {
+				id: sessionMessageId("history-tree-race-second"),
+				parts: [{ text: "second durable record", type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-tree-race-second"),
+		});
+		await persistence.store.commitSessionRecord({
+			record: firstRecord,
+			sessionId,
+		});
+		await persistence.store.commitSessionRecord({
+			record: secondRecord,
+			sessionId,
+		});
+		const firstPage = await sdk.readSessionHistoryTreePage(sessionId, {
+			limit: 1,
+		});
+		const cursor = firstPage.nextCursor;
+		if (cursor === undefined) {
+			throw new Error("Expected a second history tree page.");
+		}
+
+		const pendingRecord = buildUserSessionRecord({
+			agentId: agentId("history-tree-race"),
+			message: {
+				id: sessionMessageId("history-tree-race-pending"),
+				parts: [{ text: pendingText, type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-tree-race-pending"),
+		});
+		pendingAppend = persistence.store.commitSessionRecord({
+			record: pendingRecord,
+			sessionId,
+		});
+		await pendingAppendWritten.promise;
+
+		const continuation = readerPersistence.store.readSessionHistoryTreePage(
+			sessionId,
+			{ cursor, limit: 1 }
+		);
+		// This store has no cached snapshot and must not decode the partial tail.
+		const readState = await Promise.race([
+			continuation.then(
+				() => "settled" as const,
+				() => "settled" as const
+			),
+			Bun.sleep(50).then(() => "pending" as const),
+		]);
+		expect(readState).toBe("pending");
+		allowPendingAppendToFinish.resolve();
+		const continuationPage = await continuation;
+		await pendingAppend;
+		expect(continuationPage.readPoint).toBe(firstPage.readPoint);
+		expect(continuationPage.activeLeafId).toBe(firstPage.activeLeafId);
+		expect(continuationPage.entries).toHaveLength(1);
+		expect(continuationPage.entries[0]).toMatchObject({
+			recordId: secondRecord.id,
+			selectedPath: true,
+		});
+	} finally {
+		allowPendingAppendToFinish.resolve();
+		await pendingAppend?.catch(() => undefined);
+		await sdk.dispose();
+		readerPersistence.close();
+		persistence.close();
+	}
+});
+
+test("history-tree cursor pages reuse validated snapshots instead of rereading JSONL", async () => {
+	const testRoot = path.join(root, "history-tree-cached-pages");
+	const testWorkspace = path.join(testRoot, "workspace");
+	await fs.mkdir(testWorkspace, { recursive: true });
+	const databasePath = path.join(testRoot, "sessions.sqlite");
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		testWorkspace
+	);
+	const recorder = createFakeProviderRecorder();
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: testWorkspace,
+		databasePath,
+		pluginPaths: [],
+		store: persistence.store,
+		workspace: testWorkspace,
+	});
+	try {
+		const { id: sessionId } = await persistence.store.createEmptySession({});
+		const records = ["first", "second", "third"].map((label) =>
+			buildUserSessionRecord({
+				agentId: agentId(`cached-history-${label}`),
+				message: {
+					id: sessionMessageId(`cached-history-${label}`),
+					parts: [{ text: label, type: "text" }],
+					role: "user",
+				},
+				model: DEFAULT_PROVIDER_MODEL_SELECTION,
+				turnId: agentTurnId(`cached-history-${label}`),
+			})
+		);
+		for (const record of records) {
+			await persistence.store.commitSessionRecord({ record, sessionId });
+		}
+		const firstPage = await sdk.readSessionHistoryTreePage(sessionId, {
+			limit: 1,
+		});
+		const cursor = firstPage.nextCursor;
+		if (cursor === undefined) {
+			throw new Error("Expected another history tree page.");
+		}
+		const logPath = resolveSessionLogFilePath(
+			resolveLocalSessionLogRoot(databasePath),
+			sessionId
+		);
+		const originalBunFile = Bun.file;
+		let logFileReads = 0;
+		const observedBunFile = new Proxy(originalBunFile, {
+			apply(target, thisArgument, argumentsList) {
+				if (argumentsList[0] === logPath) {
+					logFileReads += 1;
+				}
+				return Reflect.apply(target, thisArgument, argumentsList);
+			},
+		});
+		if (!Reflect.set(Bun, "file", observedBunFile)) {
+			throw new Error("Could not instrument Bun.file for the cache contract.");
+		}
+		try {
+			const secondPage = await sdk.readSessionHistoryTreePage(sessionId, {
+				cursor,
+				limit: 1,
+			});
+			expect(logFileReads).toBe(0);
+			expect(secondPage.entries[0]).toMatchObject({
+				recordId: records[1]?.id,
+				selectedPath: true,
+			});
+			if (secondPage.entries[0] === undefined) {
+				throw new Error("Expected a cached history tree entry.");
+			}
+			Reflect.set(secondPage.entries[0], "selectedPath", false);
+			const repeatedPage = await sdk.readSessionHistoryTreePage(sessionId, {
+				cursor,
+				limit: 1,
+			});
+			expect(repeatedPage.entries[0]?.selectedPath).toBe(true);
+			expect(logFileReads).toBe(0);
+		} finally {
+			Reflect.set(Bun, "file", originalBunFile);
+		}
+	} finally {
+		await sdk.dispose();
+		persistence.close();
+	}
+});
+
+test("projection-backed Session history rejects a record with a missing history parent", async () => {
+	const testRoot = path.join(root, "projection-invalid-history-parent");
+	const testWorkspace = path.join(testRoot, "workspace");
+	await fs.mkdir(testWorkspace, { recursive: true });
+	const databasePath = path.join(testRoot, "sessions.sqlite");
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		testWorkspace
+	);
+	const recorder = createFakeProviderRecorder();
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: testWorkspace,
+		databasePath,
+		pluginPaths: [],
+		store: persistence.store,
+		workspace: testWorkspace,
+	});
+	try {
+		const { id: sessionId } = await persistence.store.createEmptySession({});
+		const rootRecord = buildUserSessionRecord({
+			agentId: agentId("projection-history-validation"),
+			message: {
+				id: sessionMessageId("projection-history-root"),
+				parts: [{ text: "valid parent entry", type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("projection-history-root"),
+		});
+		await persistence.store.commitSessionRecord({
+			record: rootRecord,
+			sessionId,
+		});
+
+		const invalidRecord = buildUserSessionRecord({
+			agentId: agentId("projection-history-validation"),
+			message: {
+				id: sessionMessageId("projection-history-invalid"),
+				parts: [{ text: "invalid child entry", type: "text" }],
+				role: "user",
+			},
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("projection-history-invalid"),
+		});
+		const logPath = resolveSessionLogFilePath(
+			resolveLocalSessionLogRoot(databasePath),
+			sessionId
+		);
+		const state = decodeSessionLog(sessionId, await Bun.file(logPath).bytes());
+		const invalidHistoryEntryId = sessionHistoryEntryIdForRecord(
+			sessionId,
+			invalidRecord.id
+		);
+		const invalidEntry = createSessionLogEvent({
+			operationId: "projection-missing-history-parent",
+			payload: {
+				activeLeafId: invalidHistoryEntryId,
+				historyEntryId: invalidHistoryEntryId,
+				parentEntryId: "missing-history-parent",
+				record: invalidRecord,
+			},
+			previousHash: state.lastHash,
+			sequence: state.nextSequence,
+			sessionId,
+			timestamp: "2026-01-02T03:04:05.000Z",
+			type: "record.committed",
+		});
+		await fs.appendFile(logPath, encodeSessionLogLine(invalidEntry));
+
+		await expect(
+			sdk.readSessionHistoryPage(sessionId, { limit: 10 })
+		).rejects.toMatchObject({
+			code: "session_log_corrupt",
+			message:
+				"Session history entry has a duplicate identity, missing parent or cross-Session parent, cycle, or invalid selected leaf.",
+		});
+	} finally {
+		await sdk.dispose();
+		persistence.close();
+	}
+});
+
 test("Plugin state survives a lost projection and rebuild without resurrecting deleted keys or replaying Tools", async () => {
 	const databasePath = path.join(
 		root,
@@ -272,7 +755,6 @@ test("an indeterminate Plugin state write reconciles and retries as one authorit
 		}
 	);
 	const failures: unknown[] = [];
-	const restored: unknown[] = [];
 	const recorder = createFakeProviderRecorder();
 	const factory: PluginFactory = (api) => {
 		api
@@ -283,7 +765,6 @@ test("an indeterminate Plugin state write reconciles and retries as one authorit
 				}
 				try {
 					await sessionState.set("plan", "retained", operationId);
-					restored.push(await sessionState.read("plan"));
 				} catch (error) {
 					failures.push(error);
 				}
@@ -302,6 +783,9 @@ test("an indeterminate Plugin state write reconciles and retries as one authorit
 	let handle: SessionSdkHandle | undefined;
 	try {
 		const id = await sdk.createEmptySession();
+		if (id === undefined) {
+			throw new Error("Could not create the indeterminate-write Session.");
+		}
 		await expect(sdk.openSession(id, { autoContinue: false })).rejects.toThrow(
 			"Injected post-sync Plugin state failure."
 		);
@@ -312,9 +796,13 @@ test("an indeterminate Plugin state write reconciles and retries as one authorit
 		await sdk.dispose();
 		sdk = await createSessionSdkWithRuntime(options);
 		handle = await sdk.openSession(id, { autoContinue: false });
-		expect(restored).toEqual([
-			{ kind: "value", schemaVersion: 1, value: "retained" },
-		]);
+		expect(
+			await persistence.store.getPluginSessionState(
+				toSessionId(id),
+				"uncertain_state",
+				"plan"
+			)
+		).toMatchObject({ schemaVersion: 1, value: "retained" });
 		const entries = await readSessionLogLines(
 			resolveLocalSessionLogRoot(databasePath),
 			toSessionId(id)
@@ -322,6 +810,16 @@ test("an indeterminate Plugin state write reconciles and retries as one authorit
 		expect(
 			entries.filter(({ type }) => type === "plugin.state-replaced")
 		).toHaveLength(1);
+		const tree = await sdk.readSessionHistoryTreePage(toSessionId(id));
+		const pluginEntries = tree.entries.filter(
+			(entry) => entry.kind === "plugin-state"
+		);
+		expect(pluginEntries).toHaveLength(1);
+		const pluginEntry = pluginEntries[0];
+		if (pluginEntry === undefined) {
+			throw new Error("Expected one Plugin State history entry.");
+		}
+		expect(tree.activeLeafId).toBe(pluginEntry.id);
 		expect(recorder.requests).toEqual([]);
 	} finally {
 		injectFailure = false;
@@ -435,7 +933,7 @@ test("Forked Plugin state remains independent and exportable after source deleti
 	}
 });
 
-test("public SDK returns an empty Session only after its v2 JSONL log is published", async () => {
+test("public SDK returns an empty Session only after its v3 JSONL log is published", async () => {
 	const databasePath = path.join(root, "sdk-empty-session.sqlite");
 	const sdk = await createSessionSdk({
 		cwd: workspace,
@@ -457,7 +955,7 @@ test("public SDK returns an empty Session only after its v2 JSONL log is publish
 
 		expect(text.endsWith("\n")).toBe(true);
 		expect(header).toMatchObject({
-			formatVersion: 2,
+			formatVersion: 3,
 			sessionId,
 			sequence: 0,
 			type: "session.header",
@@ -466,7 +964,8 @@ test("public SDK returns an empty Session only after its v2 JSONL log is publish
 		expect(typeof header.operationId).toBe("string");
 		expect(typeof header.entryHash).toBe("string");
 		expect(created).toMatchObject({
-			formatVersion: 2,
+			formatVersion: 3,
+			payload: { activeLeafId: null },
 			sessionId,
 			sequence: 1,
 			type: "session.created",
@@ -5242,9 +5741,27 @@ test("history-page catch-up rejects an appended record that reuses a retained Me
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("history-page-duplicate-turn"),
 		});
+		let parentEntryId: string | null = null;
+		for (const { envelope } of state.entries) {
+			if (
+				envelope.type === "session.created" ||
+				envelope.type === "record.committed"
+			) {
+				parentEntryId = envelope.payload.activeLeafId as string | null;
+			}
+		}
+		const historyEntryId = sessionHistoryEntryIdForRecord(
+			sessionId,
+			duplicateRecord.id
+		);
 		const duplicateEvent = createSessionLogEvent({
 			operationId: "history-page-duplicate-message-event",
-			payload: { record: duplicateRecord },
+			payload: {
+				activeLeafId: historyEntryId,
+				historyEntryId,
+				parentEntryId,
+				record: duplicateRecord,
+			},
 			previousHash: state.lastHash,
 			sequence: state.nextSequence,
 			sessionId,

@@ -1542,6 +1542,11 @@ const createSessionSdkInternal = async (
 				toSessionId(sessionId),
 				pageOptions
 			),
+		readSessionHistoryTreePage: (sessionId, pageOptions) =>
+			assembly.store.readSessionHistoryTreePage(
+				toSessionId(sessionId),
+				pageOptions
+			),
 		getSessionStatistics: (sessionId, statisticsOptions) =>
 			assembly.store.getSessionStatistics(
 				toSessionId(sessionId),
@@ -1786,6 +1791,8 @@ export const createSessionSdkOperations = (
 		listSessionsPage: (pageOptions) => store.listSessionsPage(pageOptions),
 		readSessionHistoryPage: (sessionId, pageOptions) =>
 			store.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
+		readSessionHistoryTreePage: (sessionId, pageOptions) =>
+			store.readSessionHistoryTreePage(toSessionId(sessionId), pageOptions),
 		getSessionStatistics: (sessionId, statisticsOptions) =>
 			store.getSessionStatistics(toSessionId(sessionId), statisticsOptions),
 		forkSession: async (sourceSessionId, checkpoint, operationId) => {
