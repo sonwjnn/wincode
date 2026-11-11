@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
+import { randomUUIDv7 } from "bun";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionSdk } from "@/modules/sessions/sdk-contract";
 import type {
@@ -20,7 +21,10 @@ const HISTORY_PAGE_SIZE = 40;
 const MAX_TREE_INDENT = 12;
 const MAX_PREVIEW_LENGTH = 4000;
 
-type SessionHistoryReader = Pick<SessionSdk, "readSessionHistoryTreePage">;
+type SessionHistoryReader = Pick<
+	SessionSdk,
+	"navigateSessionHistory" | "readSessionHistoryTreePage"
+>;
 
 type SessionHistoryTreeDialogContentProps = {
 	readonly sessionId: SessionId;
@@ -53,12 +57,24 @@ const getPluginStateEntryTitle = (
 };
 
 const getEntrySummary = (entry: SessionHistoryTreeEntry): string => {
-	if (entry.kind === "plugin-state") {
-		return `${getPluginStateEntryTitle(entry)} · ${entry.operation} · v${entry.schemaVersion}`;
+	switch (entry.kind) {
+		case "plugin-state":
+			return `${getPluginStateEntryTitle(entry)} · ${entry.operation} · v${entry.schemaVersion}`;
+		case "record": {
+			const role =
+				entry.record.messages.at(-1)?.role ?? entry.record.outcome.kind;
+			const text = getRecordText(entry);
+			return `Record · ${role}${text.length === 0 ? "" : ` · ${text.slice(0, 180)}`}`;
+		}
+		case "context-edit":
+			return `Context Edit · ${entry.operation} · message ${entry.targetId}`;
+		case "compaction":
+			return `Compaction · ${entry.trigger} · ${entry.compactionId}`;
+		case "submission-status":
+			return `Submission · ${entry.status} · message ${entry.messageId}`;
+		default:
+			throw new Error("Unsupported Session history entry kind.");
 	}
-	const role = entry.record.messages.at(-1)?.role ?? entry.record.outcome.kind;
-	const text = getRecordText(entry);
-	return `Record · ${role}${text.length === 0 ? "" : ` · ${text.slice(0, 180)}`}`;
 };
 
 const getEntryDepths = (
@@ -82,6 +98,28 @@ const getEntryDepths = (
 	return depths;
 };
 
+const getEntryPreviewContent = (entry: SessionHistoryTreeEntry): string => {
+	switch (entry.kind) {
+		case "record":
+			return getRecordText(entry).slice(0, MAX_PREVIEW_LENGTH);
+		case "plugin-state":
+			return "Plugin State payload is intentionally hidden from the history preview.";
+		default:
+			return getEntrySummary(entry);
+	}
+};
+
+const getEntryPreviewTitle = (entry: SessionHistoryTreeEntry): string => {
+	switch (entry.kind) {
+		case "record":
+			return `Record ${entry.recordId}`;
+		case "plugin-state":
+			return getPluginStateEntryTitle(entry);
+		default:
+			return getEntrySummary(entry);
+	}
+};
+
 function SessionHistoryEntryPreview({
 	entry,
 }: {
@@ -89,13 +127,8 @@ function SessionHistoryEntryPreview({
 }) {
 	useDialogEscape();
 	const { colors } = useTheme();
-	const isRecord = entry.kind === "record";
-	const content = isRecord
-		? getRecordText(entry).slice(0, MAX_PREVIEW_LENGTH)
-		: "Plugin State payload is intentionally hidden from the history preview.";
-	const title = isRecord
-		? `Record ${entry.recordId}`
-		: getPluginStateEntryTitle(entry);
+	const content = getEntryPreviewContent(entry);
+	const title = getEntryPreviewTitle(entry);
 	return (
 		<box flexDirection="column" gap={1} paddingX={1}>
 			<text attributes={TextAttributes.BOLD} fg={colors.text}>
@@ -216,6 +249,36 @@ export function SessionHistoryTreeDialogContent({
 		},
 		[dialog]
 	);
+	const navigateTo = useCallback(
+		async (targetEntryId: string | null) => {
+			setError(undefined);
+			try {
+				const outcome = await sessionSdk.navigateSessionHistory(
+					sessionId,
+					targetEntryId,
+					randomUUIDv7()
+				);
+				if (outcome.kind === "navigated" || outcome.kind === "unchanged") {
+					dialog.close();
+					return;
+				}
+				setError(outcome.reason);
+			} catch (navigationError) {
+				setError(
+					navigationError instanceof Error
+						? navigationError.message
+						: "Could not navigate Session history."
+				);
+			}
+		},
+		[dialog, sessionId, sessionSdk]
+	);
+	const navigateToEntry = useCallback(
+		(entry: SessionHistoryTreeEntry) => {
+			void navigateTo(entry.id);
+		},
+		[navigateTo]
+	);
 	const currentLeaf = entries.find((entry) => entry.id === activeLeafId);
 	let leafLabel = "Current leaf: empty Session";
 	if (activeLeafId !== null) {
@@ -228,7 +291,8 @@ export function SessionHistoryTreeDialogContent({
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={colors.textMuted}>
-				Read only · L marks the current leaf · | marks its Selected Path
+				Enter selects a history entry · p previews · Ctrl+Home selects root · L
+				marks the current leaf
 			</text>
 			<text fg={colors.primary}>{leafLabel}</text>
 			<SearchListDialogWrapper
@@ -238,7 +302,9 @@ export function SessionHistoryTreeDialogContent({
 				error={error}
 				footerHints={
 					<>
-						<DialogFooterHint label="preview" shortcut="enter" />
+						<DialogFooterHint label="select" shortcut="enter" />
+						<DialogFooterHint label="preview" shortcut="p" />
+						<DialogFooterHint label="root" shortcut="ctrl+home" />
 						{nextCursor === undefined ? null : (
 							<DialogFooterHint
 								label={loadingMore ? "loading" : "load more"}
@@ -257,7 +323,7 @@ export function SessionHistoryTreeDialogContent({
 				isItemActive={(entry) => entry.id === activeLeafId}
 				items={entries}
 				maxVisibleItems={maxVisibleItems}
-				onKey={(key) => {
+				onKey={(key, highlightedEntry, isSearching) => {
 					if (
 						key.ctrl &&
 						key.name === "down" &&
@@ -266,9 +332,20 @@ export function SessionHistoryTreeDialogContent({
 						void loadMore();
 						return true;
 					}
+					if (isSearching) {
+						return false;
+					}
+					if (key.ctrl && key.name === "home") {
+						void navigateTo(null);
+						return true;
+					}
+					if (key.name === "p" && highlightedEntry !== undefined) {
+						openPreview(highlightedEntry);
+						return true;
+					}
 					return false;
 				}}
-				onSelect={openPreview}
+				onSelect={navigateToEntry}
 				placeholder="Search Session history"
 				renderItem={(entry, _isSelected, isActive) => {
 					let marker = entry.selectedPath ? "|" : " ";

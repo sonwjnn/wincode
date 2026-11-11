@@ -34,6 +34,7 @@ import type {
 	PluginAPI,
 	PluginBeforeAgentTurnHook,
 	PluginBeforeCompactionHook,
+	PluginBeforeSessionHistoryNavigationHook,
 	PluginCompactionCompletedHook,
 	PluginCompactionFailedHook,
 	PluginDefinitionAPI,
@@ -42,6 +43,7 @@ import type {
 	PluginLoadContext,
 	PluginProcessStartHook,
 	PluginProviderRegistration,
+	PluginSessionHistoryNavigatedHook,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginShutdownHook,
@@ -99,6 +101,8 @@ type MutablePluginDraft = {
 	id: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onBeforeCompaction?: PluginBeforeCompactionHook;
+	onBeforeSessionHistoryNavigation?: PluginBeforeSessionHistoryNavigationHook;
+	onSessionHistoryNavigated?: PluginSessionHistoryNavigatedHook;
 	onCompactionCompleted?: PluginCompactionCompletedHook;
 	onCompactionFailed?: PluginCompactionFailedHook;
 	onStart?: PluginProcessStartHook;
@@ -248,6 +252,34 @@ const createRegistrationAPI = (
 		}
 		plugin.onSessionShutdown = hook;
 	};
+	const registerBeforeSessionHistoryNavigationHook = (
+		hook: PluginBeforeSessionHistoryNavigationHook
+	): void => {
+		assertOpen();
+		if (
+			typeof hook !== "function" ||
+			plugin.onBeforeSessionHistoryNavigation !== undefined
+		) {
+			throw new Error(
+				"Plugin hook 'onBeforeSessionHistoryNavigation' must be registered once."
+			);
+		}
+		plugin.onBeforeSessionHistoryNavigation = hook;
+	};
+	const registerSessionHistoryNavigatedHook = (
+		hook: PluginSessionHistoryNavigatedHook
+	): void => {
+		assertOpen();
+		if (
+			typeof hook !== "function" ||
+			plugin.onSessionHistoryNavigated !== undefined
+		) {
+			throw new Error(
+				"Plugin hook 'onSessionHistoryNavigated' must be registered once."
+			);
+		}
+		plugin.onSessionHistoryNavigated = hook;
+	};
 	const registerResource = (name: string, value: unknown): void => {
 		assertOpen();
 		if (!pluginResourceNamePattern.test(name) || value === undefined) {
@@ -342,6 +374,12 @@ const createRegistrationAPI = (
 		},
 		onSessionShutdown(handler) {
 			registerSessionShutdownHook(handler);
+		},
+		onBeforeSessionHistoryNavigation(handler) {
+			registerBeforeSessionHistoryNavigationHook(handler);
+		},
+		onSessionHistoryNavigated(handler) {
+			registerSessionHistoryNavigatedHook(handler);
 		},
 		onBeforeAgentTurn(handler) {
 			assertOpen();
@@ -648,6 +686,8 @@ const loadedPluginFromDraft = (
 		sourceIdentity,
 		onBeforeAgentTurn: draft.onBeforeAgentTurn,
 		onBeforeCompaction: draft.onBeforeCompaction,
+		onBeforeSessionHistoryNavigation: draft.onBeforeSessionHistoryNavigation,
+		onSessionHistoryNavigated: draft.onSessionHistoryNavigated,
 		onCompactionCompleted: draft.onCompactionCompleted,
 		onCompactionFailed: draft.onCompactionFailed,
 		onStart: draft.onStart,

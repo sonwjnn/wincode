@@ -34,7 +34,12 @@ const statistics: SessionStatistics = {
 		interrupted: 0,
 	},
 	usage: {
-		contributions: { actual: [], auxiliary: [], inherited: [] },
+		contributions: {
+			actual: [],
+			auxiliary: [],
+			inherited: [],
+			selectedPath: [],
+		},
 		actual: {
 			...emptyUsage,
 			contributionCount: 1,
@@ -43,6 +48,13 @@ const statistics: SessionStatistics = {
 			unknownCostCount: 1,
 		},
 		auxiliary: emptyUsage,
+		selectedPath: {
+			...emptyUsage,
+			contributionCount: 1,
+			inputTokens: 12,
+			outputTokens: 3,
+			unknownCostCount: 1,
+		},
 		inherited: {
 			...emptyUsage,
 			contributionCount: 1,
@@ -112,10 +124,15 @@ test("stored history exposes load-older and refresh actions without editing cont
 		expect(frame).toContain(
 			"Inherited usage is historical, not new Session spend"
 		);
-		expect(frame).toContain("Inherited usage is historical source spend");
+		expect(frame).toContain(
+			"Selected-path usage follows the current history branch"
+		);
 		expect(frame).toContain("fixture-provider/fixture-model: 0.12 USD");
 		expect(frame).toContain(
-			"Actual: 12 input / 3 output tokens; 1 cost unknown"
+			"Selected path: 12 input / 3 output tokens; 1 cost unknown"
+		);
+		expect(frame).toContain(
+			"Whole Session actual: 12 input / 3 output tokens; 1 cost unknown"
 		);
 		expect(frame).not.toContain("Ask anything...");
 

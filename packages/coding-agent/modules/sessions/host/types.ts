@@ -14,6 +14,7 @@ import type { SessionContextEdit } from "../context-edits";
 import type { TurnToolResolver } from "../hooks/runtime-turn";
 import type { SessionSdkPluginProviderSource } from "../plugin-provider-source";
 import type {
+	SessionHistoryNavigationOutcome,
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
 } from "../sdk-contract";
@@ -114,8 +115,15 @@ export type HostManagerSelectionCapabilities = Pick<
 export type SessionHost = Readonly<{
 	/** Called only while the manager holds the Session's idle mutation gate. */
 	editContext: (edit: SessionContextEdit) => Promise<void>;
+	/** Selects a history entry while the manager holds the idle gate. */
+	navigateHistory: (
+		targetEntryId: string | null,
+		operationId: string
+	) => Promise<SessionHistoryNavigationOutcome>;
 	/** Blocks new work after a committed write leaves Session storage unresolved. */
 	reportStorageError: (error: Error) => void;
+	/** Blocks new work when a committed path cannot be restored safely. */
+	blockExecution: (error: Error) => void;
 	agentSession: AgentSession;
 	/** Forks while reusing this Host's held source writer; call through the manager's fork gate. */
 	forkSession: (
@@ -199,6 +207,14 @@ export type SessionHostManager = Readonly<{
 		sessionId: SessionId,
 		action: (host: SessionHost | undefined) => Promise<Result>
 	) => Promise<Result>;
+	withIdleForSessionNavigation: (
+		sessionId: SessionId,
+		targetEntryId: string | null,
+		operationId: string,
+		action: (
+			host: SessionHost | undefined
+		) => Promise<SessionHistoryNavigationOutcome>
+	) => Promise<SessionHistoryNavigationOutcome>;
 	withIdleForSessionDataReset: <Result>(
 		action: () => Promise<Result>
 	) => Promise<Result>;

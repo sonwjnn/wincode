@@ -9,6 +9,11 @@ import {
 	withLoggerHome,
 } from "../../utils/test/logger-home";
 import { SerializedWriter } from "../modules/application/rpc/output";
+import type { RpcRequest } from "../modules/application/rpc/protocol";
+import {
+	createRpcRequestHandler,
+	type RpcRequestHandlerContext,
+} from "../modules/application/rpc/request-handler";
 import {
 	reportDeferredFlushFailure,
 	runRpc,
@@ -16,7 +21,9 @@ import {
 import {
 	MAX_OUTPUT_BYTES,
 	type OutputWriter,
+	type RpcAssembly,
 	RpcOutputOverflowError,
+	type RpcSessionState,
 } from "../modules/application/rpc/types";
 import {
 	createSessionHostManager,
@@ -27,6 +34,7 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "../modules/sessions/host/types";
+import type { SessionHistoryNavigationOutcome } from "../modules/sessions/sdk-contract";
 import { SessionBundleImportError } from "../modules/sessions/session-bundle-import";
 import { SessionLogError } from "../modules/sessions/storage/session-jsonl-codec";
 import { SessionPaginationError } from "../modules/sessions/storage/session-pagination";
@@ -71,6 +79,123 @@ const writer = (): FrameWriter => {
 
 const emptyCapabilities = (): SessionCapabilities =>
 	({}) as SessionCapabilities;
+
+test("RPC preserves committed-blocked and indeterminate history navigation outcomes", async () => {
+	const sourceSessionId = sessionId("rpc-history-navigation-session");
+	const receipt = {
+		entryHash: "a".repeat(64),
+		kind: "committed",
+		operationId: "navigation-blocked-operation",
+		projection: "ready",
+		sequence: 3,
+	} as const;
+	const outcomes = new Map<string, SessionHistoryNavigationOutcome>([
+		[
+			"entry-blocked",
+			{
+				kind: "committed-blocked",
+				activeLeafId: "entry-selected",
+				reason: "Plugin State restore failed.",
+				writeOutcome: receipt,
+			},
+		],
+		[
+			"entry-indeterminate",
+			{
+				kind: "indeterminate",
+				reason: "The navigation append must be reconciled.",
+				writeOutcome: {
+					kind: "indeterminate",
+					operationId: "navigation-indeterminate-operation",
+					error: {
+						code: "session_log_write_indeterminate",
+						message: "The navigation append may have committed.",
+					},
+					requiresReconciliation: true,
+				},
+			},
+		],
+	]);
+	const host = fromPartial<SessionHost>({
+		navigateHistory: async (
+			targetEntryId: string | null
+		): Promise<SessionHistoryNavigationOutcome> => {
+			const outcome = outcomes.get(targetEntryId ?? "root");
+			if (outcome === undefined) {
+				throw new Error("Unexpected RPC history navigation target.");
+			}
+			return outcome;
+		},
+	});
+	const withIdleForSessionNavigation: SessionHostManager["withIdleForSessionNavigation"] =
+		async (requestedSessionId, _targetEntryId, _operationId, action) => {
+			expect(requestedSessionId).toBe(sourceSessionId);
+			return action(host);
+		};
+	const manager = fromPartial<SessionHostManager>({
+		withIdleForSessionNavigation,
+	});
+	const store = fromPartial<SessionStore>({});
+	const capabilities = fromPartial<SessionCapabilities>({
+		getSessionHostManager: () => manager,
+	});
+	const assembly: RpcAssembly = {
+		capabilities,
+		shutdown: async () => undefined,
+		store,
+		workspace: process.cwd(),
+		workspaceId: "rpc-history-navigation-workspace",
+	};
+	const state: RpcSessionState = {
+		assembly,
+		boundSessionId: sourceSessionId,
+		host,
+		lifecycle: "bound",
+		shutdownRequested: false,
+		signalRequested: false,
+	};
+	const handleRequest = createRpcRequestHandler(
+		fromPartial<RpcRequestHandlerContext>({
+			requireBound: () => host,
+			requireInitialized: () => undefined,
+			state,
+		})
+	);
+	const requests: Readonly<{
+		id: string;
+		operationId: string;
+		targetEntryId: string;
+		outcome: SessionHistoryNavigationOutcome;
+	}>[] = [
+		{
+			id: "blocked-navigation",
+			operationId: "navigation-blocked-operation",
+			targetEntryId: "entry-blocked",
+			outcome: outcomes.get("entry-blocked") as SessionHistoryNavigationOutcome,
+		},
+		{
+			id: "indeterminate-navigation",
+			operationId: "navigation-indeterminate-operation",
+			targetEntryId: "entry-indeterminate",
+			outcome: outcomes.get(
+				"entry-indeterminate"
+			) as SessionHistoryNavigationOutcome,
+		},
+	];
+	for (const { id, operationId, outcome, targetEntryId } of requests) {
+		const response = await handleRequest({
+			id,
+			jsonrpc: "2.0",
+			method: "session/navigateHistory",
+			params: {
+				operationId,
+				sessionId: sourceSessionId,
+				targetEntryId,
+			},
+		} satisfies RpcRequest);
+		expect(response).toMatchObject({ id, result: outcome });
+	}
+});
 
 test("JSONL RPC initialize is the first readiness frame and shutdown is clean", async () => {
 	const stdout = writer();
@@ -129,6 +254,7 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 					sessionBundleExport: true,
 					sessionBundleImport: true,
 					sessionFork: true,
+					sessionHistoryNavigation: true,
 					sessionRewind: true,
 					transcriptPagination: true,
 				},
@@ -315,7 +441,11 @@ test("RPC fork dispatch validates identifiers and runs against an idle source Se
 	]);
 	expect(responses[0]).toMatchObject({
 		result: {
-			capabilities: { sessionFork: true, sessionRewind: true },
+			capabilities: {
+				sessionFork: true,
+				sessionHistoryNavigation: true,
+				sessionRewind: true,
+			},
 		},
 	});
 	expect(responses[1]).toMatchObject({

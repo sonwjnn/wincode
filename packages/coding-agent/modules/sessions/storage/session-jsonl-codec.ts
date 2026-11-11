@@ -28,13 +28,14 @@ import type {
 } from "@/shared/identifiers";
 import { getSessionRecordValidationError } from "./session-record";
 
-export const SESSION_LOG_FORMAT_VERSION = 3;
+export const SESSION_LOG_FORMAT_VERSION = 4;
 export const SESSION_LOG_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 
 export const SESSION_LOG_EVENT_TYPES = [
 	"session.header",
 	"session.created",
 	"session.metadata-updated",
+	"session.history-navigated",
 	"record.committed",
 	"context.edited",
 	"submission.status-updated",
@@ -227,6 +228,13 @@ const metadataUpdatedPayloadSchema = z
 	.strict()
 	.refine((payload) => Object.keys(payload).length > 0);
 
+const historyNavigatedPayloadSchema = z
+	.object({
+		activeLeafId: safeIdentifierSchema.nullable(),
+		previousActiveLeafId: safeIdentifierSchema.nullable(),
+	})
+	.strict();
+
 const historyEntryFieldsSchema = {
 	activeLeafId: safeIdentifierSchema,
 	historyEntryId: safeIdentifierSchema,
@@ -247,19 +255,43 @@ const recordCommittedPayloadSchema = z
 			payload.parentEntryId !== payload.historyEntryId
 	);
 
+const contextEditedPayloadSchema = sessionContextEditSchema
+	.extend(historyEntryFieldsSchema)
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
+
 const submissionStatusPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		failure: z.string().optional(),
 		messageId: safeIdentifierSchema,
 		recordId: safeIdentifierSchema,
 		status: z.enum(["failed", "pending", "processed", "processing"]),
 		submissionId: safeIdentifierSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 export type SessionSubmissionStatusPayload = z.infer<
 	typeof submissionStatusPayloadSchema
 >;
+
+export const parseSessionContextEditPayload = (value: unknown) => {
+	const payload = contextEditedPayloadSchema.parse(value);
+	return {
+		operationId: payload.operationId,
+		replacement: payload.replacement,
+		targetId: payload.targetId,
+	};
+};
 
 export const parseSessionSubmissionStatusPayload = (
 	value: unknown
@@ -289,6 +321,7 @@ const compactionSummarySchema = z
 
 const compactionPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		completedAt: z.string().datetime(),
 		createdAt: z.string().datetime(),
 		estimatedTokensAfter: z.number().int().nonnegative(),
@@ -306,7 +339,12 @@ const compactionPayloadSchema = z
 		trigger: z.enum(["manual", "threshold", "overflow"]),
 		throughMessageUiId: safeIdentifierSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 export type SessionCompactionPayload = z.infer<typeof compactionPayloadSchema>;
 
@@ -340,6 +378,7 @@ const inheritedUsageIdentitySchema = z.discriminatedUnion("kind", [
 
 const inheritedUsageContributionSchema = z
 	.object({
+		compactionId: safeIdentifierSchema.optional(),
 		cost: z
 			.object({ amount: z.number().finite().nonnegative(), unit: z.string() })
 			.strict()
@@ -517,8 +556,9 @@ const eventPayloadSchemas: Readonly<
 > = {
 	"session.created": createdPayloadSchema,
 	"session.metadata-updated": metadataUpdatedPayloadSchema,
+	"session.history-navigated": historyNavigatedPayloadSchema,
 	"record.committed": recordCommittedPayloadSchema,
-	"context.edited": sessionContextEditSchema,
+	"context.edited": contextEditedPayloadSchema,
 	"submission.status-updated": submissionStatusPayloadSchema,
 	"compaction.committed": compactionPayloadSchema,
 	"usage.committed": usageCommittedPayloadSchema,
@@ -1275,10 +1315,28 @@ const validateSessionHistoryEntryReference = (
 		validateInitialHistoryEntryReference(entry, sessionId, state);
 		return;
 	}
+	if (entry.envelope.type === "session.history-navigated") {
+		const payload = historyNavigatedPayloadSchema.parse(entry.envelope.payload);
+		const targetExists =
+			payload.activeLeafId === null ||
+			state.historyEntryParents.has(payload.activeLeafId);
+		if (payload.previousActiveLeafId !== state.activeLeafId || !targetExists) {
+			rejectInvalidSessionLogReference(
+				entry,
+				sessionId,
+				"Session history navigation must select an existing entry or the root."
+			);
+		}
+		state.activeLeafId = payload.activeLeafId;
+		return;
+	}
 	if (
 		entry.envelope.type === "record.committed" ||
 		entry.envelope.type === "plugin.state-replaced" ||
-		entry.envelope.type === "plugin.state-deleted"
+		entry.envelope.type === "plugin.state-deleted" ||
+		entry.envelope.type === "context.edited" ||
+		entry.envelope.type === "submission.status-updated" ||
+		entry.envelope.type === "compaction.committed"
 	) {
 		validateAppendedHistoryEntryReference(entry, sessionId, state);
 	}
@@ -1291,7 +1349,7 @@ const validateOperationalReferences = (
 ): void => {
 	switch (entry.envelope.type) {
 		case "context.edited": {
-			const edit = sessionContextEditSchema.parse(entry.envelope.payload);
+			const edit = parseSessionContextEditPayload(entry.envelope.payload);
 			if (
 				edit.operationId !== entry.envelope.operationId ||
 				!state.messageIds.has(edit.targetId)

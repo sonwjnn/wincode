@@ -92,18 +92,29 @@ if (laterEntry === undefined) {
 }
 const page: SessionHistoryTreePage = {
 	activeLeafId: laterEntry.id,
+	historyGeneration: 0,
 	entries,
 	nextCursor: "history-tree-ui-next-page",
 	readPoint: "history-tree-ui-read-point",
 };
 const nextPage: SessionHistoryTreePage = {
 	activeLeafId: laterEntry.id,
+	historyGeneration: 0,
 	entries: laterEntries,
 	readPoint: page.readPoint,
 };
 
 test("history previews neutralize terminal controls, hide Plugin State payloads, and cancel without changing the leaf", async () => {
 	const reads: Array<{ cursor?: string; limit?: number }> = [];
+	const navigationTargets: Array<string | null> = [];
+	const navigateSessionHistory = mock(
+		async (_sessionId: string, targetEntryId: string | null) => {
+			navigationTargets.push(targetEntryId);
+			return targetEntryId === null
+				? { kind: "unchanged" as const, activeLeafId: null }
+				: { kind: "rejected" as const, reason: "history entry unavailable" };
+		}
+	);
 	const readSessionHistoryTreePage = mock(
 		async (
 			_sessionId: string,
@@ -113,7 +124,11 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 			return options?.cursor === undefined ? page : nextPage;
 		}
 	);
-	const sessionSdk: Pick<SessionSdk, "readSessionHistoryTreePage"> = {
+	const sessionSdk: Pick<
+		SessionSdk,
+		"navigateSessionHistory" | "readSessionHistoryTreePage"
+	> = {
+		navigateSessionHistory,
 		readSessionHistoryTreePage,
 	};
 
@@ -148,14 +163,14 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 	try {
 		await flushTestRenderer(setup, 2);
 		let frame = setup.captureCharFrame();
-		expect(frame).toContain("Read only");
+		expect(frame).toContain("Enter selects a history entry");
 		expect(frame).toContain("Current leaf is on a later page");
 		expect(frame).toContain("queue_plugin / queue [31m · set · v1");
 		expect(frame).toContain("A safe text preview [31m");
 		expect(frame).not.toContain("\u001b");
 
 		await act(() => setup.mockInput.pressArrow("down"));
-		await act(() => setup.mockInput.pressEnter());
+		await act(() => setup.mockInput.pressKey("p"));
 		await flushTestRenderer(setup, 2);
 		frame = setup.captureCharFrame();
 		expect(frame).toContain("Plugin State payload is intentionally hidden");
@@ -168,7 +183,7 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 		expect(setup.captureCharFrame()).toContain("Search Session history");
 
 		await act(() => setup.mockInput.pressArrow("up"));
-		await act(() => setup.mockInput.pressEnter());
+		await act(() => setup.mockInput.pressKey("p"));
 		await flushTestRenderer(setup, 2);
 		frame = setup.captureCharFrame();
 		expect(frame).toContain("A safe text preview [31m");
@@ -194,9 +209,18 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 			frame = setup.captureCharFrame();
 		}
 		expect(frame).toContain("L Record · user · later entry 11");
-		await act(() => setup.mockInput.pressEscape());
+		for (let attempt = 0; attempt < 13; attempt += 1) {
+			await act(() => setup.mockInput.pressArrow("up"));
+		}
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup, 2);
+		frame = setup.captureCharFrame();
+		expect(frame).toContain("history entry unavailable");
+		expect(navigationTargets).toEqual([recordEntry.id]);
+		await act(() => setup.mockInput.pressKey("HOME", { ctrl: true }));
 		await flushTestRenderer(setup, 2);
 		expect(setup.captureCharFrame()).not.toContain("Search Session history");
+		expect(navigationTargets).toEqual([recordEntry.id, null]);
 		expect(readSessionHistoryTreePage).toHaveBeenCalledTimes(2);
 		expect(reads).toEqual([
 			{ limit: 40 },

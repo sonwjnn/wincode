@@ -575,8 +575,24 @@ export type AgentSessionInternalPort = Readonly<{
 	shutdown: () => Promise<void>;
 	/** Publishes a durable content-only context edit while the Host holds its idle gate. */
 	replaceContext: (messages: readonly SessionMessage[]) => void;
+	/** Replaces every path-derived projection while the Host holds its navigation gate. */
+	replaceHistory: (
+		history: Readonly<{
+			context: readonly SessionMessage[];
+			compactions: readonly SessionCompaction[];
+			selection: Readonly<{
+				agent: AgentId | undefined;
+				model: ProviderModelSelection | undefined;
+				thinkingLevel: ThinkingLevel | undefined;
+			}>;
+			steeringMessages: readonly SessionSteeringMessage[];
+			transcript: readonly SessionMessage[];
+		}>
+	) => void;
 	/** Surfaces a failed context edit so a blocked projection stops new scheduling. */
 	reportStorageError: (error: Error) => void;
+	/** Blocks new work until a committed history projection is restored. */
+	blockExecution: (error: Error) => void;
 	/** Replaces one execution's Session View State, never another's. */
 	setExecutionViewState: (
 		turnId: AgentTurnId,

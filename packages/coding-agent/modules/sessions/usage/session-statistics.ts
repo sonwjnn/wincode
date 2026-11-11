@@ -5,6 +5,7 @@ import {
 	type SessionRecordId,
 } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai";
+import { omitUndefined } from "@wincode/utils";
 import type {
 	CompactionId,
 	SessionId,
@@ -39,6 +40,7 @@ export type SessionUsageContributionIdentity =
 	  }>;
 
 export type SessionUsageContribution = Readonly<{
+	compactionId?: CompactionId;
 	cost: SessionStatisticsCost | null;
 	identity: SessionUsageContributionIdentity;
 	model: ProviderModelSelection;
@@ -50,6 +52,12 @@ export type SessionStatisticsAccountingInput = Readonly<{
 	actual: readonly SessionUsageContribution[];
 	auxiliary: readonly SessionUsageContribution[];
 	inherited: readonly SessionUsageContribution[];
+	selectedPath?: readonly SessionUsageContribution[];
+}>;
+
+export type SessionStatisticsHistoryPath = Readonly<{
+	compactionIds: ReadonlySet<string>;
+	recordIds: ReadonlySet<string>;
 }>;
 
 type SessionStatisticsUsageEntry = Readonly<{
@@ -105,10 +113,12 @@ export type SessionStatisticsUsageCategory = Readonly<{
 export type SessionStatisticsUsage = Readonly<{
 	actual: SessionStatisticsUsageTotals;
 	auxiliary: SessionStatisticsUsageTotals;
+	selectedPath: SessionStatisticsUsageTotals;
 	contributions: Readonly<{
 		actual: readonly SessionUsageContribution[];
 		auxiliary: readonly SessionUsageContribution[];
 		inherited: readonly SessionUsageContribution[];
+		selectedPath: readonly SessionUsageContribution[];
 	}>;
 	inherited: SessionStatisticsUsageTotals;
 }>;
@@ -330,6 +340,15 @@ export const reduceSessionUsageContributions = (
 			unique[category].push(contribution);
 		}
 	}
+	const selectedPath: SessionUsageContribution[] = [];
+	const selectedPathIdentities = new Set<string>();
+	for (const contribution of input.selectedPath ?? []) {
+		const key = identityKey(contribution.identity);
+		if (!selectedPathIdentities.has(key)) {
+			selectedPathIdentities.add(key);
+			selectedPath.push(contribution);
+		}
+	}
 	return {
 		actual: categoryTotals(unique.actual),
 		auxiliary: categoryTotals(unique.auxiliary),
@@ -337,8 +356,10 @@ export const reduceSessionUsageContributions = (
 			actual: unique.actual,
 			auxiliary: unique.auxiliary,
 			inherited: unique.inherited,
+			selectedPath,
 		},
 		inherited: categoryTotals(unique.inherited),
+		selectedPath: categoryTotals(selectedPath),
 	};
 };
 
@@ -414,6 +435,9 @@ export const aggregateSessionStatisticsUsage = (
 	const auxiliary = statistics.flatMap(
 		({ usage }) => usage.contributions.auxiliary
 	);
+	const selectedPath = statistics.flatMap(
+		({ usage }) => usage.contributions.selectedPath
+	);
 	const actualIdentities = new Set(
 		actual.map(({ identity }) => identityKey(identity))
 	);
@@ -434,6 +458,7 @@ export const aggregateSessionStatisticsUsage = (
 		actual,
 		auxiliary: auxiliaryWithoutActual,
 		inherited: inheritedWithoutAccounted,
+		selectedPath,
 	});
 };
 
@@ -471,6 +496,7 @@ const auxiliaryUsageContributions = (
 	sessionId: SessionId
 ): SessionUsageContribution[] =>
 	usageEntries.map((entry) => ({
+		...omitUndefined({ compactionId: entry.compactionId }),
 		cost:
 			entry.costUsd === null ? null : { amount: entry.costUsd, unit: "USD" },
 		identity: {
@@ -498,6 +524,7 @@ const compactionUsageContributions = (
 		}
 		return [
 			{
+				compactionId: compaction.id,
 				cost: null,
 				identity: {
 					compactionId: compaction.id,
@@ -534,6 +561,7 @@ export const buildSessionStatistics = ({
 	usageEntries,
 	inheritedRecordIds = new Set<string>(),
 	inheritedCompactionIds = new Set<string>(),
+	selectedPath,
 }: {
 	compactions: readonly SessionStatisticsCompaction[];
 	inheritedUsage?: readonly SessionUsageContribution[];
@@ -541,6 +569,7 @@ export const buildSessionStatistics = ({
 	inheritedCompactionIds?: ReadonlySet<string>;
 	readPoint: string;
 	records: readonly SessionStatisticsRecord[];
+	selectedPath?: SessionStatisticsHistoryPath;
 	sessionId: SessionId;
 	summary?: SessionStatisticsRecordSummary;
 	turnId?: AgentTurnId;
@@ -573,14 +602,72 @@ export const buildSessionStatistics = ({
 			sessionId
 		),
 	];
+	const pathRecordIds =
+		selectedPath?.recordIds ?? new Set(records.map(({ id }) => id));
+	const pathCompactionIds =
+		selectedPath?.compactionIds ??
+		new Set(compactions.map(({ id }) => String(id)));
+	const selectedPathRecords = selectedRecords.filter(({ id }) =>
+		pathRecordIds.has(id)
+	);
+	const selectedPathCompactions = selectedCompactions.filter(({ id }) =>
+		pathCompactionIds.has(String(id))
+	);
+	const selectedPathTurnIds = new Set(
+		selectedPathRecords.map(({ turnId: selectedTurnId }) => selectedTurnId)
+	);
+	const selectedPathUsageEntries = selectedUsageEntries.filter(
+		({ compactionId, kind }) =>
+			kind === "compaction-summary" &&
+			compactionId !== undefined &&
+			pathCompactionIds.has(String(compactionId))
+	);
+	const selectedPathLinkedCompactionIds = new Set(
+		selectedPathUsageEntries.flatMap(({ compactionId }) =>
+			compactionId === undefined ? [] : [compactionId]
+		)
+	);
+	const selectedPathActual = actualUsageContributions(
+		selectedPathRecords,
+		sessionId,
+		inheritedRecordIds
+	);
+	const selectedPathAuxiliary = [
+		...auxiliaryUsageContributions(selectedPathUsageEntries, sessionId),
+		...compactionUsageContributions(
+			selectedPathCompactions,
+			selectedPathLinkedCompactionIds,
+			inheritedCompactionIds,
+			sessionId
+		),
+	];
 	const selectedInherited =
 		turnId === undefined
 			? inheritedUsage
 			: inheritedUsage.filter((contribution) => contribution.turnId === turnId);
+	const selectedPathInherited = selectedInherited.filter((contribution) => {
+		if (contribution.turnId !== undefined) {
+			return selectedPathTurnIds.has(contribution.turnId);
+		}
+		return (
+			contribution.compactionId !== undefined &&
+			pathCompactionIds.has(String(contribution.compactionId))
+		);
+	});
+	const selectedPathUsage = reduceSessionUsageContributions({
+		actual: selectedPathActual,
+		auxiliary: selectedPathAuxiliary,
+		inherited: selectedPathInherited,
+	}).contributions;
 	const usage = reduceSessionUsageContributions({
 		actual,
 		auxiliary,
 		inherited: selectedInherited,
+		selectedPath: [
+			...selectedPathUsage.actual,
+			...selectedPathUsage.auxiliary,
+			...selectedPathUsage.inherited,
+		],
 	});
 	let turn: SessionTurnStatistics | undefined;
 	if (turnId !== undefined) {

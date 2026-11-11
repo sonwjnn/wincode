@@ -28,6 +28,7 @@ import type {
 	Session,
 	SessionCatalogPage,
 	SessionHistoryPage,
+	SessionHistoryPath,
 	SessionHistoryTreePage,
 	SessionPageOptions,
 } from "../session-pagination-types";
@@ -52,6 +53,7 @@ export type {
 	Session,
 	SessionCatalogPage,
 	SessionHistoryPage,
+	SessionHistoryPath,
 	SessionHistoryTreeEntry,
 	SessionHistoryTreePage,
 	SessionPageOptions,
@@ -391,6 +393,12 @@ export type SessionStore = Omit<
 		sessionId: SessionId,
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryTreePage>;
+	readSessionHistoryPath: (sessionId: SessionId) => Promise<SessionHistoryPath>;
+	navigateSessionHistory: (
+		sessionId: SessionId,
+		targetEntryId: string | null,
+		operationId: string
+	) => Promise<SessionWriteOutcome>;
 	getSessionStatistics: (
 		sessionId: SessionId,
 		options?: SessionStatisticsOptions

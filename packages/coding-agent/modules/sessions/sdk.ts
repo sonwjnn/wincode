@@ -40,6 +40,7 @@ import {
 } from "@/modules/providers/provider-model-selection";
 import type { SessionSdkPluginProviderSource } from "./plugin-provider-source";
 import {
+	type SessionHistoryNavigationOutcome,
 	type SessionRuntimeOptions,
 	type SessionSdk,
 	type SessionSdkCapabilityCeiling,
@@ -1017,6 +1018,56 @@ const handleFor = (
 					await host.editContext(edit);
 				});
 		},
+		navigateHistory: async (targetEntryId, operationId) => {
+			if (disposed) {
+				return {
+					kind: "rejected",
+					reason: "Session handle is disposed.",
+				};
+			}
+			try {
+				const outcome = await capabilities
+					.getSessionHostManager()
+					.withIdleForSessionNavigation(
+						sessionId,
+						targetEntryId,
+						operationId,
+						async (idleHost) => {
+							if (idleHost !== host) {
+								return {
+									kind: "rejected",
+									reason: "Session Host is no longer open.",
+								} satisfies SessionHistoryNavigationOutcome;
+							}
+							return await host.navigateHistory(targetEntryId, operationId);
+						}
+					);
+				if (outcome.kind === "navigated" || outcome.kind === "unchanged") {
+					const selection = host.getSelection();
+					if (selection !== null) {
+						currentDefaults = {
+							agent: selection.agent ?? defaults.agent,
+							model: selection.model,
+							...omitUndefined({
+								thinkingLevel:
+									selection.thinkingLevel ?? defaults.thinkingLevel,
+							}),
+						};
+					}
+				}
+				return outcome;
+			} catch (error) {
+				const code =
+					typeof error === "object" && error !== null
+						? Reflect.get(error, "code")
+						: undefined;
+				return {
+					kind: "rejected",
+					reason: getErrorMessage(error, "Session history navigation failed."),
+					...(typeof code === "string" ? { code } : {}),
+				};
+			}
+		},
 		fork: async (checkpoint, operationId) => {
 			if (disposed) {
 				throw new Error("Session handle is disposed.");
@@ -1547,6 +1598,20 @@ const createSessionSdkInternal = async (
 				toSessionId(sessionId),
 				pageOptions
 			),
+		navigateSessionHistory: async (sessionId, targetEntryId, operationId) => {
+			if (disposed) {
+				throw new Error("Session SDK is disposed.");
+			}
+			const handle = await openSession(sessionId, {
+				autoContinue: false,
+				view: true,
+			});
+			try {
+				return await handle.navigateHistory(targetEntryId, operationId);
+			} finally {
+				await handle.dispose();
+			}
+		},
 		getSessionStatistics: (sessionId, statisticsOptions) =>
 			assembly.store.getSessionStatistics(
 				toSessionId(sessionId),
@@ -1748,6 +1813,10 @@ export const createSessionSdkOperations = (
 			return Object.freeze({
 				continue: () => withOperation(handle.continue),
 				editContext: (edit) => withOperation(() => handle.editContext(edit)),
+				navigateHistory: (targetEntryId, operationId) =>
+					withOperation(() =>
+						handle.navigateHistory(targetEntryId, operationId)
+					),
 				fork: (checkpoint, operationId) =>
 					withOperation(async () => {
 						const result = await handle.fork(checkpoint, operationId);
@@ -1793,6 +1862,12 @@ export const createSessionSdkOperations = (
 			store.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
 		readSessionHistoryTreePage: (sessionId, pageOptions) =>
 			store.readSessionHistoryTreePage(toSessionId(sessionId), pageOptions),
+		navigateSessionHistory: (sessionId, targetEntryId, operationId) =>
+			withSessionRuntime(
+				(sdk) =>
+					sdk.navigateSessionHistory(sessionId, targetEntryId, operationId),
+				{ sessionId }
+			),
 		getSessionStatistics: (sessionId, statisticsOptions) =>
 			store.getSessionStatistics(toSessionId(sessionId), statisticsOptions),
 		forkSession: async (sourceSessionId, checkpoint, operationId) => {

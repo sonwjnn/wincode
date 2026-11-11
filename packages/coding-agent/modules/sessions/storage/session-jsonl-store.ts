@@ -13,6 +13,7 @@ import {
 	toSessionRecordId,
 	toSubmissionId,
 } from "@wincode/agent-core";
+import type { ThinkingLevel } from "@wincode/ai";
 import { logger, omitUndefined, readUtf8File } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import { z } from "zod";
@@ -45,6 +46,7 @@ import {
 	type SessionContextEdit,
 	sessionContextEditSchema,
 } from "../context-edits";
+import { withSubmissionStatus } from "../message";
 import type { SessionBundleImportResult } from "../session-bundle-contract";
 import { assessSessionForkCheckpoint } from "../session-fork-checkpoint-validation";
 import { isValidSessionLogIdentifier } from "../session-log-identifiers";
@@ -59,6 +61,7 @@ import {
 } from "../session-plugin-state";
 import {
 	buildSessionStatistics,
+	type SessionStatisticsHistoryPath,
 	type SessionUsageContribution,
 } from "../usage/session-statistics";
 import {
@@ -86,6 +89,7 @@ import {
 	encodeCanonicalSessionJson,
 	encodeSessionLogLine,
 	parseSessionCompactionPayload,
+	parseSessionContextEditPayload,
 	parseSessionForkedPayload,
 	parseSessionSubmissionStatusPayload,
 	SESSION_LOG_EVENT_TYPES,
@@ -138,6 +142,7 @@ import type {
 	SessionForkResult,
 	SessionForkSubmissionProvenance,
 	SessionHistoryPage,
+	SessionHistoryPath,
 	SessionHistoryTreeEntry,
 	SessionHistoryTreePage,
 	SessionPageOptions,
@@ -199,6 +204,7 @@ export class SessionForkError extends Error {
 	readonly code:
 		| "session_busy"
 		| "session_checkpoint_invalid"
+		| "session_history_branches_unsupported"
 		| "session_operation_conflict";
 	readonly operationId: string;
 	readonly sourceSessionId: SessionId;
@@ -235,6 +241,19 @@ export class SessionWriteOutcomeError extends Error {
 				? "session_projection_unavailable"
 				: outcome.error.code;
 		this.outcome = outcome;
+	}
+}
+
+export class SessionHistoryBranchesUnsupportedError extends Error {
+	readonly code = "session_history_branches_unsupported" as const;
+	readonly sessionId: SessionId;
+
+	constructor(sessionId: SessionId) {
+		super(
+			"Session bundle export is not supported for a Session with multiple history branches."
+		);
+		this.name = "SessionHistoryBranchesUnsupportedError";
+		this.sessionId = sessionId;
 	}
 }
 
@@ -375,6 +394,11 @@ export const requireSessionWriteReady = (
 
 type SessionWriteIntent = Readonly<{
 	expectedOffset: number;
+	historyReferences?: Readonly<{
+		activeLeafId: string;
+		historyEntryId: string;
+		parentEntryId: string | null;
+	}>;
 	operationDigest: string;
 	operationId: string;
 	sequence: number;
@@ -406,7 +430,10 @@ type SessionWrite = Readonly<{
 type SessionHistoryEntryType =
 	| "record.committed"
 	| "plugin.state-replaced"
-	| "plugin.state-deleted";
+	| "plugin.state-deleted"
+	| "context.edited"
+	| "submission.status-updated"
+	| "compaction.committed";
 
 type SessionHistoryWrite = SessionWrite &
 	Readonly<{ type: SessionHistoryEntryType }>;
@@ -416,11 +443,27 @@ const isSessionHistoryEntryType = (
 ): type is SessionHistoryEntryType =>
 	type === "record.committed" ||
 	type === "plugin.state-replaced" ||
-	type === "plugin.state-deleted";
+	type === "plugin.state-deleted" ||
+	type === "context.edited" ||
+	type === "submission.status-updated" ||
+	type === "compaction.committed";
 
 const isSessionHistoryWrite = (
 	write: SessionWrite
 ): write is SessionHistoryWrite => isSessionHistoryEntryType(write.type);
+
+const sessionHistoryReferencesForWrite = (
+	write: SessionWrite
+): SessionWriteIntent["historyReferences"] => {
+	if (!isSessionHistoryWrite(write)) {
+		return;
+	}
+	return {
+		activeLeafId: write.payload.activeLeafId as string,
+		historyEntryId: write.payload.historyEntryId as string,
+		parentEntryId: write.payload.parentEntryId as string | null,
+	};
+};
 
 type CommittedLogEntry = Readonly<{
 	createdNew: boolean;
@@ -659,11 +702,37 @@ const isCanonicalTimestamp = (value: unknown): value is string => {
 	return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
 };
 
+const sessionHistoryReferencesFrom = (
+	value: unknown
+): SessionWriteIntent["historyReferences"] => {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return;
+	}
+	const activeLeafId = Reflect.get(value, "activeLeafId");
+	const historyEntryId = Reflect.get(value, "historyEntryId");
+	const parentEntryId = Reflect.get(value, "parentEntryId");
+	if (
+		typeof activeLeafId !== "string" ||
+		!isValidSessionLogIdentifier(activeLeafId) ||
+		typeof historyEntryId !== "string" ||
+		!isValidSessionLogIdentifier(historyEntryId) ||
+		(parentEntryId !== null &&
+			(typeof parentEntryId !== "string" ||
+				!isValidSessionLogIdentifier(parentEntryId)))
+	) {
+		return;
+	}
+	return { activeLeafId, historyEntryId, parentEntryId };
+};
+
 const sessionWriteIntentMetadataFrom = (
 	value: object,
 	type: unknown,
 	sessionId: SessionId
-): Pick<SessionWriteIntent, "timestamp" | "workspaceId"> => {
+): Pick<
+	SessionWriteIntent,
+	"historyReferences" | "timestamp" | "workspaceId"
+> => {
 	const timestamp = Reflect.get(value, "timestamp");
 	const storedWorkspaceId = Reflect.get(value, "workspaceId");
 	const version = Reflect.get(value, "version");
@@ -676,16 +745,41 @@ const sessionWriteIntentMetadataFrom = (
 		storedWorkspaceId.length <= 256
 			? toWorkspaceId(storedWorkspaceId)
 			: undefined;
-	const validVersion = version === 1 || version === 2 || version === 3;
+	const historyReferencesRaw = Reflect.get(value, "historyReferences");
+	const historyReferences = sessionHistoryReferencesFrom(historyReferencesRaw);
+	const historyWrite =
+		type === "record.committed" ||
+		type === "plugin.state-replaced" ||
+		type === "plugin.state-deleted" ||
+		type === "context.edited" ||
+		type === "submission.status-updated" ||
+		type === "compaction.committed";
+	const validVersion =
+		version === 1 || version === 2 || version === 3 || version === 4;
 	const validTimestamp =
 		version === 1
 			? timestamp === undefined || parsedTimestamp !== undefined
-			: (version === 2 || version === 3) && parsedTimestamp !== undefined;
-	const validWorkspaceId =
-		version === 3
-			? type === "session.created" && parsedWorkspaceId !== undefined
-			: storedWorkspaceId === undefined;
-	if (!(validVersion && validTimestamp && validWorkspaceId)) {
+			: parsedTimestamp !== undefined;
+	let validWorkspaceId = storedWorkspaceId === undefined;
+	if (version === 3) {
+		validWorkspaceId =
+			type === "session.created" && parsedWorkspaceId !== undefined;
+	} else if (version === 4 && type === "session.created") {
+		validWorkspaceId =
+			storedWorkspaceId === undefined || parsedWorkspaceId !== undefined;
+	}
+	let validHistoryReferences = historyReferencesRaw === undefined;
+	if (version === 4 && historyWrite) {
+		validHistoryReferences = historyReferences !== undefined;
+	}
+	if (
+		!(
+			validVersion &&
+			validTimestamp &&
+			validWorkspaceId &&
+			validHistoryReferences
+		)
+	) {
 		throw new SessionLogError(
 			"session_log_corrupt",
 			sessionId,
@@ -693,6 +787,7 @@ const sessionWriteIntentMetadataFrom = (
 		);
 	}
 	return omitUndefined({
+		historyReferences,
 		timestamp: parsedTimestamp,
 		workspaceId: parsedWorkspaceId,
 	});
@@ -906,7 +1001,7 @@ const writeSessionWriteIntent = async (
 		const bytes = new TextEncoder().encode(
 			`${encodeCanonicalSessionJson({
 				...intent,
-				version: intent.workspaceId === undefined ? 2 : 3,
+				version: 4,
 			})}\n`
 		);
 		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
@@ -2476,6 +2571,7 @@ type SessionHistoryTreeSnapshot = Readonly<{
 
 type CachedSessionHistoryTreeSnapshot = Readonly<{
 	activeLeafId: string | null;
+	historyGeneration: number;
 	device: number;
 	entries: readonly SessionHistoryTreeEntry[];
 	inode: number;
@@ -2551,6 +2647,150 @@ const resolveSessionHistoryTreeSnapshot = (
 	};
 };
 
+type SessionHistoryTreeEnvelopeProjection = Readonly<{
+	activeLeafId?: string | null;
+	entry?: SessionHistoryTreeEntry;
+	historyGeneration?: number;
+}>;
+
+const projectSessionHistoryTreeEnvelope = (
+	envelope: SessionLogEnvelope
+): SessionHistoryTreeEnvelopeProjection => {
+	switch (envelope.type) {
+		case "session.created": {
+			const record = envelope.payload.initialRecord as
+				| SessionRecord
+				| undefined;
+			return {
+				activeLeafId: envelope.payload.activeLeafId as string | null,
+				...(record === undefined
+					? {}
+					: {
+							entry: {
+								createdAt: new Date(envelope.timestamp),
+								id: envelope.payload.initialHistoryEntryId as string,
+								kind: "record",
+								parentEntryId: null,
+								record,
+								recordId: record.id,
+								selectedPath: false,
+								sequence: envelope.sequence,
+								...omitUndefined({
+									sessionModel: envelope.payload.model as
+										| ProviderModelSelection
+										| undefined,
+									sessionThinkingLevel: envelope.payload.thinkingLevel as
+										| ThinkingLevel
+										| undefined,
+								}),
+							},
+						}),
+			};
+		}
+		case "session.history-navigated":
+			return {
+				activeLeafId: envelope.payload.activeLeafId as string | null,
+				historyGeneration: envelope.sequence,
+			};
+		case "context.edited": {
+			const edit = parseSessionContextEditPayload(envelope.payload);
+			return {
+				activeLeafId: envelope.payload.activeLeafId as string,
+				entry: {
+					createdAt: new Date(envelope.timestamp),
+					id: envelope.payload.historyEntryId as string,
+					kind: "context-edit",
+					operation: edit.replacement === null ? "omit" : "replace",
+					operationId: edit.operationId,
+					parentEntryId: envelope.payload.parentEntryId as string | null,
+					selectedPath: false,
+					sequence: envelope.sequence,
+					targetId: edit.targetId,
+				},
+			};
+		}
+		case "submission.status-updated": {
+			const status = parseSessionSubmissionStatusPayload(envelope.payload);
+			return {
+				activeLeafId: envelope.payload.activeLeafId as string,
+				entry: {
+					createdAt: new Date(envelope.timestamp),
+					id: envelope.payload.historyEntryId as string,
+					kind: "submission-status",
+					...omitUndefined({ failure: status.failure }),
+					messageId: toSessionMessageId(status.messageId),
+					parentEntryId: envelope.payload.parentEntryId as string | null,
+					recordId: toSessionRecordId(status.recordId),
+					selectedPath: false,
+					sequence: envelope.sequence,
+					status: status.status as SessionSubmissionStatus,
+					submissionId: status.submissionId,
+				},
+			};
+		}
+		case "compaction.committed": {
+			const compaction = parseSessionCompactionPayload(envelope.payload);
+			return {
+				activeLeafId: envelope.payload.activeLeafId as string,
+				entry: {
+					compactionId: toCompactionId(compaction.id),
+					createdAt: new Date(envelope.timestamp),
+					id: envelope.payload.historyEntryId as string,
+					kind: "compaction",
+					parentEntryId: envelope.payload.parentEntryId as string | null,
+					selectedPath: false,
+					sequence: envelope.sequence,
+					trigger: compaction.trigger,
+				},
+			};
+		}
+		case "record.committed": {
+			const record = envelope.payload.record as SessionRecord;
+			return {
+				activeLeafId: envelope.payload.activeLeafId as string,
+				entry: {
+					createdAt: new Date(envelope.timestamp),
+					id: envelope.payload.historyEntryId as string,
+					kind: "record",
+					parentEntryId: envelope.payload.parentEntryId as string | null,
+					record,
+					recordId: record.id,
+					selectedPath: false,
+					sequence: envelope.sequence,
+					...omitUndefined({
+						sessionModel: envelope.payload.sessionModel as
+							| ProviderModelSelection
+							| undefined,
+						sessionThinkingLevel: envelope.payload.sessionThinkingLevel as
+							| ThinkingLevel
+							| undefined,
+					}),
+				},
+			};
+		}
+		case "plugin.state-replaced":
+		case "plugin.state-deleted":
+			return {
+				activeLeafId: envelope.payload.activeLeafId as string,
+				entry: {
+					createdAt: new Date(envelope.timestamp),
+					id: envelope.payload.historyEntryId as string,
+					key: envelope.payload.key as string,
+					kind: "plugin-state",
+					operation:
+						envelope.type === "plugin.state-replaced" ? "set" : "delete",
+					parentEntryId: envelope.payload.parentEntryId as string | null,
+					pluginId: envelope.payload.pluginId as string,
+					schemaVersion: envelope.payload.schemaVersion as number,
+					selectedPath: false,
+					sequence: envelope.sequence,
+				},
+			};
+		default:
+			return {};
+	}
+};
+
 const buildSessionHistoryTreeEntries = (
 	state: SessionLogState,
 	sessionId: SessionId,
@@ -2558,64 +2798,25 @@ const buildSessionHistoryTreeEntries = (
 ): Readonly<{
 	activeLeafId: string | null;
 	entries: readonly SessionHistoryTreeEntry[];
+	historyGeneration: number;
 }> => {
 	const nodes: SessionHistoryTreeEntry[] = [];
 	let activeLeafId: string | null = null;
+	let historyGeneration = 0;
 	for (const { envelope } of state.entries) {
 		if (envelope.sequence > snapshotSequence) {
 			break;
 		}
-		if (envelope.type === "session.created") {
-			activeLeafId = envelope.payload.activeLeafId as string | null;
-			if (envelope.payload.initialRecord !== undefined) {
-				const record = envelope.payload.initialRecord as SessionRecord;
-				nodes.push({
-					createdAt: new Date(envelope.timestamp),
-					id: envelope.payload.initialHistoryEntryId as string,
-					kind: "record",
-					parentEntryId: null,
-					record,
-					recordId: record.id,
-					selectedPath: false,
-					sequence: envelope.sequence,
-				});
-			}
-			continue;
+		const projection = projectSessionHistoryTreeEnvelope(envelope);
+		if (projection.entry !== undefined) {
+			nodes.push(projection.entry);
 		}
-		if (envelope.type === "record.committed") {
-			const record = envelope.payload.record as SessionRecord;
-			nodes.push({
-				createdAt: new Date(envelope.timestamp),
-				id: envelope.payload.historyEntryId as string,
-				kind: "record",
-				parentEntryId: envelope.payload.parentEntryId as string | null,
-				record,
-				recordId: record.id,
-				selectedPath: false,
-				sequence: envelope.sequence,
-			});
-			activeLeafId = envelope.payload.activeLeafId as string;
-			continue;
+		if (projection.activeLeafId !== undefined) {
+			activeLeafId = projection.activeLeafId;
 		}
-		if (
-			envelope.type !== "plugin.state-replaced" &&
-			envelope.type !== "plugin.state-deleted"
-		) {
-			continue;
+		if (projection.historyGeneration !== undefined) {
+			historyGeneration = projection.historyGeneration;
 		}
-		nodes.push({
-			createdAt: new Date(envelope.timestamp),
-			id: envelope.payload.historyEntryId as string,
-			key: envelope.payload.key as string,
-			kind: "plugin-state",
-			operation: envelope.type === "plugin.state-replaced" ? "set" : "delete",
-			parentEntryId: envelope.payload.parentEntryId as string | null,
-			pluginId: envelope.payload.pluginId as string,
-			schemaVersion: envelope.payload.schemaVersion as number,
-			selectedPath: false,
-			sequence: envelope.sequence,
-		});
-		activeLeafId = envelope.payload.activeLeafId as string;
 	}
 
 	const nodesById = new Map(nodes.map((entry) => [entry.id, entry]));
@@ -2648,16 +2849,30 @@ const buildSessionHistoryTreeEntries = (
 			...entry,
 			selectedPath: selectedPath.has(entry.id),
 		})),
+		historyGeneration,
 	};
 };
+
+const hasInactiveHistoryEntries = (
+	state: SessionLogState,
+	sessionId: SessionId,
+	snapshotSequence = state.nextSequence - 1
+): boolean =>
+	buildSessionHistoryTreeEntries(
+		state,
+		sessionId,
+		snapshotSequence
+	).entries.some(({ selectedPath }) => !selectedPath);
 
 const pageSessionHistoryTree = (
 	{
 		activeLeafId,
 		entries,
+		historyGeneration,
 	}: Readonly<{
 		activeLeafId: string | null;
 		entries: readonly SessionHistoryTreeEntry[];
+		historyGeneration: number;
 	}>,
 	readPoint: SessionHistoryTreeReadPoint,
 	afterSequence: number,
@@ -2687,6 +2902,7 @@ const pageSessionHistoryTree = (
 			: undefined;
 	return {
 		activeLeafId,
+		historyGeneration,
 		// Caller mutations must not corrupt the cached snapshot used by later pages.
 		entries: structuredClone(pageEntries),
 		...omitUndefined({ nextCursor }),
@@ -2869,6 +3085,12 @@ const toSessionUsageContribution = (
 		};
 	}
 	return {
+		...omitUndefined({
+			compactionId:
+				contribution.compactionId === undefined
+					? undefined
+					: toCompactionId(contribution.compactionId),
+		}),
 		cost: contribution.cost,
 		identity: mappedIdentity,
 		model: contribution.model,
@@ -2965,6 +3187,12 @@ const inheritedUsageAtFork = (
 		}
 		return [
 			{
+				...omitUndefined({
+					compactionId:
+						payload.compactionId === null || payload.compactionId === undefined
+							? undefined
+							: toCompactionId(String(payload.compactionId)),
+				}),
 				cost:
 					payload.costUsd === null || payload.costUsd === undefined
 						? null
@@ -3014,6 +3242,7 @@ const inheritedUsageAtFork = (
 			);
 		}
 		contributions.push({
+			compactionId: toCompactionId(compaction.id),
 			cost: null,
 			identity: {
 				compactionId: toCompactionId(compaction.id),
@@ -3087,6 +3316,11 @@ const remapForkUsageTurnIds = (
 	contributions.map((contribution) => ({
 		...contribution,
 		...omitUndefined({
+			compactionId:
+				contribution.compactionId === undefined
+					? undefined
+					: (identityMap.compactions.get(String(contribution.compactionId)) ??
+						contribution.compactionId),
 			turnId:
 				contribution.turnId === undefined
 					? undefined
@@ -4685,8 +4919,19 @@ export const createSessionJsonlStore = (
 						sessionId,
 						timestamp,
 						type: write.type,
+						...omitUndefined({
+							historyReferences: sessionHistoryReferencesForWrite(write),
+						}),
 					}
-				: { ...pendingIntent, timestamp };
+				: {
+						...pendingIntent,
+						timestamp,
+						...omitUndefined({
+							historyReferences:
+								sessionHistoryReferencesForWrite(write) ??
+								pendingIntent.historyReferences,
+						}),
+					};
 		if (
 			intent.expectedOffset !== bytes.byteLength ||
 			intent.sequence !== state.nextSequence
@@ -4809,6 +5054,55 @@ export const createSessionJsonlStore = (
 		});
 	};
 
+	const activeHistoryLeafFromState = (state: SessionLogState): string | null =>
+		state.entries.reduce<string | null>(
+			(activeLeafId, { envelope }) =>
+				[
+					"session.created",
+					"record.committed",
+					"plugin.state-replaced",
+					"plugin.state-deleted",
+					"context.edited",
+					"submission.status-updated",
+					"compaction.committed",
+					"session.history-navigated",
+				].includes(envelope.type)
+					? (envelope.payload.activeLeafId as string | null)
+					: activeLeafId,
+			null
+		);
+
+	const historyEntryExists = (
+		state: SessionLogState,
+		targetEntryId: string | null
+	): boolean => {
+		if (targetEntryId === null) {
+			return true;
+		}
+		const parents = new Map<string, string | null>();
+		for (const { envelope } of state.entries) {
+			if (
+				envelope.type === "session.created" &&
+				typeof envelope.payload.initialHistoryEntryId === "string"
+			) {
+				parents.set(envelope.payload.initialHistoryEntryId, null);
+			} else if (
+				envelope.type === "record.committed" ||
+				envelope.type === "plugin.state-replaced" ||
+				envelope.type === "plugin.state-deleted" ||
+				envelope.type === "context.edited" ||
+				envelope.type === "submission.status-updated" ||
+				envelope.type === "compaction.committed"
+			) {
+				parents.set(
+					envelope.payload.historyEntryId as string,
+					envelope.payload.parentEntryId as string | null
+				);
+			}
+		}
+		return parents.has(targetEntryId);
+	};
+
 	const withSessionHistoryReferences = (
 		sessionId: SessionId,
 		state: SessionLogState,
@@ -4831,17 +5125,7 @@ export const createSessionJsonlStore = (
 				},
 			};
 		}
-		let activeLeafId: string | null = null;
-		for (const { envelope } of state.entries) {
-			if (
-				envelope.type === "session.created" ||
-				envelope.type === "record.committed" ||
-				envelope.type === "plugin.state-replaced" ||
-				envelope.type === "plugin.state-deleted"
-			) {
-				activeLeafId = envelope.payload.activeLeafId as string | null;
-			}
-		}
+		const activeLeafId = activeHistoryLeafFromState(state);
 		const historyEntryId =
 			write.type === "record.committed"
 				? sessionHistoryEntryIdForRecord(
@@ -4860,28 +5144,88 @@ export const createSessionJsonlStore = (
 		};
 	};
 
+	const readLogForHistoryWrite = async (
+		sessionId: SessionId,
+		logPath: string
+	): Promise<SessionLogState> => (await readLog(logPath, sessionId)).state;
+
+	const prepareSessionHistoryNavigationWrite = (
+		sessionId: SessionId,
+		state: SessionLogState,
+		write: SessionWrite
+	): SessionWrite => {
+		if (write.type !== "session.history-navigated") {
+			return write;
+		}
+		const previous = state.entries.find(
+			({ envelope }) => envelope.operationId === write.operationId
+		);
+		if (
+			previous?.envelope.type === write.type &&
+			previous.envelope.payload.activeLeafId === write.payload.activeLeafId
+		) {
+			return {
+				...write,
+				payload: {
+					...write.payload,
+					previousActiveLeafId: previous.envelope.payload.previousActiveLeafId,
+				},
+			};
+		}
+		const activeLeafId = activeHistoryLeafFromState(state);
+		const targetEntryId = write.payload.activeLeafId;
+		const invalidTarget =
+			targetEntryId !== null &&
+			(typeof targetEntryId !== "string" ||
+				!isValidSessionLogIdentifier(targetEntryId));
+		if (
+			write.payload.previousActiveLeafId !== activeLeafId ||
+			invalidTarget ||
+			!historyEntryExists(state, targetEntryId)
+		) {
+			throw new SessionLogError(
+				"session_operation_conflict",
+				sessionId,
+				"Navigation target must be an existing history entry or the root.",
+				{ operationId: write.operationId }
+			);
+		}
+		return write;
+	};
+
 	const recordWriteWithHistory = async (
 		sessionId: SessionId,
 		logPath: string,
 		write: SessionWrite,
 		pendingIntent: SessionWriteIntent | undefined
 	): Promise<SessionWrite> => {
-		if (!isSessionHistoryWrite(write)) {
+		if (
+			!isSessionHistoryWrite(write) &&
+			write.type !== "session.history-navigated"
+		) {
 			return write;
 		}
-		let state: SessionLogState;
-		try {
-			({ state } = await readLog(logPath, sessionId));
-		} catch (error) {
+		if (pendingIntent !== undefined) {
 			if (
-				pendingIntent === undefined ||
-				!(error instanceof SessionLogError) ||
-				error.code !== "session_log_truncated"
+				pendingIntent.operationId !== write.operationId ||
+				pendingIntent.type !== write.type ||
+				write.type === "session.history-navigated"
 			) {
-				throw error;
+				return write;
 			}
-			await repairPendingAppendTail(sessionId, logPath, pendingIntent);
-			({ state } = await readLog(logPath, sessionId));
+			if (pendingIntent.historyReferences !== undefined) {
+				return {
+					...write,
+					payload: { ...write.payload, ...pendingIntent.historyReferences },
+				};
+			}
+			const state = (await stateForPendingAppend(sessionId, pendingIntent))
+				.state;
+			return withSessionHistoryReferences(sessionId, state, write);
+		}
+		const state = await readLogForHistoryWrite(sessionId, logPath);
+		if (write.type === "session.history-navigated") {
+			return prepareSessionHistoryNavigationWrite(sessionId, state, write);
 		}
 		return withSessionHistoryReferences(sessionId, state, write);
 	};
@@ -5056,6 +5400,9 @@ export const createSessionJsonlStore = (
 			throw error;
 		}
 		const checked = validateSessionBundleLog(sessionId, bytes, "source");
+		if (hasInactiveHistoryEntries(state, sessionId)) {
+			throw new SessionHistoryBranchesUnsupportedError(sessionId);
+		}
 		const generation = assertProjectionReady(sessionId);
 		const cursor = projection.getCursor(sessionId);
 		assertCursorDoesNotExceedLog(sessionId, cursor, state);
@@ -6013,10 +6360,19 @@ export const createSessionJsonlStore = (
 	const pluginSessionStateFor = (
 		entries: readonly SessionLogEntry[],
 		pluginId: string,
-		key: string
+		key: string,
+		selectedHistoryEntryIds?: ReadonlySet<string>
 	): PluginSessionStateRecord | undefined => {
 		let current: PluginSessionStateRecord | undefined;
 		for (const { envelope } of entries) {
+			if (
+				selectedHistoryEntryIds !== undefined &&
+				(envelope.type === "plugin.state-replaced" ||
+					envelope.type === "plugin.state-deleted") &&
+				!selectedHistoryEntryIds.has(String(envelope.payload.historyEntryId))
+			) {
+				continue;
+			}
 			if (
 				envelope.type === "plugin.state-replaced" &&
 				envelope.payload.pluginId === pluginId &&
@@ -6045,8 +6401,19 @@ export const createSessionJsonlStore = (
 	): Promise<PluginSessionStateRecord | undefined> => {
 		validatePluginSessionStatePluginId(pluginId);
 		validatePluginSessionStateKey(key);
-		const state = await ensureProjected(sessionId);
-		return pluginSessionStateFor(state.entries, pluginId, key);
+		const [state, historyPath] = await Promise.all([
+			ensureProjected(sessionId),
+			readSessionHistoryPath(sessionId),
+		]);
+		const selectedHistoryEntryIds = new Set(
+			historyPath.entries.map(({ id }) => id)
+		);
+		return pluginSessionStateFor(
+			state.entries,
+			pluginId,
+			key,
+			selectedHistoryEntryIds
+		);
 	};
 	const mutatePluginSessionState = async (
 		sessionId: SessionId,
@@ -6058,6 +6425,12 @@ export const createSessionJsonlStore = (
 			validatePluginSessionStatePluginId(pluginId);
 			validatePluginSessionStateKey(key);
 			validatePluginSessionStateSchemaVersion(schemaVersion);
+			if (
+				!Number.isSafeInteger(mutation.expectedHistoryGeneration) ||
+				mutation.expectedHistoryGeneration < 0
+			) {
+				throw new Error("Plugin Session State history generation is invalid.");
+			}
 			if (kind === "set") {
 				serializePluginSessionStateValue(mutation.value);
 			}
@@ -6075,6 +6448,32 @@ export const createSessionJsonlStore = (
 			return await withTemporaryWriter(sessionId, async () => {
 				await assertSessionWritable(sessionId);
 				const state = await ensureProjected(sessionId);
+				const historyTree = buildSessionHistoryTreeEntries(
+					state,
+					sessionId,
+					state.nextSequence - 1
+				);
+				if (
+					historyTree.historyGeneration !== mutation.expectedHistoryGeneration
+				) {
+					return {
+						kind: "written",
+						writeOutcome: sessionWriteOutcomeFromError(
+							operationId,
+							new SessionLogError(
+								"session_operation_conflict",
+								sessionId,
+								"Plugin Session State belongs to a different history path.",
+								{ operationId }
+							)
+						),
+					};
+				}
+				const selectedHistoryEntryIds = new Set(
+					historyTree.entries
+						.filter(({ selectedPath }) => selectedPath)
+						.map(({ id }) => id)
+				);
 				const historyAwareWrite = withSessionHistoryReferences(
 					sessionId,
 					state,
@@ -6086,7 +6485,12 @@ export const createSessionJsonlStore = (
 					sessionId
 				);
 				if (existingOperation === undefined) {
-					const previous = pluginSessionStateFor(state.entries, pluginId, key);
+					const previous = pluginSessionStateFor(
+						state.entries,
+						pluginId,
+						key,
+						selectedHistoryEntryIds
+					);
 					if (
 						previous !== undefined &&
 						previous.schemaVersion !== schemaVersion
@@ -6117,6 +6521,24 @@ export const createSessionJsonlStore = (
 			};
 		}
 	};
+	const navigateSessionHistory = async (
+		sessionId: SessionId,
+		targetEntryId: string | null,
+		operationId: string
+	): Promise<SessionWriteOutcome> =>
+		withWriteOutcome(sessionId, operationId, async () => {
+			await assertSessionWritable(sessionId);
+			const state = await ensureProjected(sessionId);
+			return await commitWrite(sessionId, {
+				operationId,
+				payload: {
+					activeLeafId: targetEntryId,
+					previousActiveLeafId: activeHistoryLeafFromState(state),
+				},
+				type: "session.history-navigated",
+			});
+		});
+
 	const appendContextEdit = async (
 		sessionId: SessionId,
 		input: SessionContextEdit
@@ -6393,7 +6815,8 @@ export const createSessionJsonlStore = (
 		pendingIntent: SessionWriteIntent | undefined,
 		operationId: string,
 		payload: Readonly<Record<string, unknown>>,
-		sessionId: SessionId
+		sessionId: SessionId,
+		state: SessionLogState
 	): void => {
 		if (
 			pendingIntent?.operationId !== operationId ||
@@ -6401,15 +6824,20 @@ export const createSessionJsonlStore = (
 		) {
 			return;
 		}
+		const preparedWrite = withSessionHistoryReferences(sessionId, state, {
+			operationId,
+			payload,
+			type: "compaction.committed",
+		});
 		assertSameSessionWriteIntent(
 			pendingIntent,
 			{
 				operationDigest: sessionLogOperationDigest(
-					"compaction.committed",
-					payload
+					preparedWrite.type,
+					preparedWrite.payload
 				),
 				operationId,
-				type: "compaction.committed",
+				type: preparedWrite.type,
 			},
 			sessionId
 		);
@@ -6457,7 +6885,8 @@ export const createSessionJsonlStore = (
 				pendingIntent,
 				operationId,
 				payload,
-				input.sessionId
+				input.sessionId,
+				state
 			);
 			assertCompactionReferencesIfNew(state, compaction, operationId);
 			const write: SessionWrite = omitUndefined({
@@ -7601,6 +8030,7 @@ export const createSessionJsonlStore = (
 		tree: Readonly<{
 			activeLeafId: string | null;
 			entries: readonly SessionHistoryTreeEntry[];
+			historyGeneration: number;
 		}>
 	): Promise<void> => {
 		try {
@@ -7612,6 +8042,7 @@ export const createSessionJsonlStore = (
 			sessionHistoryTreeSnapshotCache.delete(key);
 			sessionHistoryTreeSnapshotCache.set(key, {
 				activeLeafId: tree.activeLeafId,
+				historyGeneration: tree.historyGeneration,
 				ctimeMs: stats.ctimeMs,
 				device: stats.dev,
 				entries: tree.entries,
@@ -7709,6 +8140,104 @@ export const createSessionJsonlStore = (
 				await cacheSessionHistoryTreeSnapshot(logPath, snapshot, tree);
 			}
 			return page;
+		});
+	};
+
+	const readSessionHistoryPath = async (
+		sessionId: SessionId
+	): Promise<SessionHistoryPath> => {
+		await ensureDeletedSessionsReconciled();
+		await ensureBoundSessionProjectedIfStale(sessionId);
+		return await withSessionCatalogLifecycleGate(logRoot, async () => {
+			assertSessionHistoryWorkspaceBinding(sessionId, undefined);
+			await checkDeletedMarker(sessionId);
+			const logPath = resolveSessionLogFilePath(
+				await fs.realpath(logRoot),
+				sessionId
+			);
+			const { state } = await readLogForHistoryTree(logPath, sessionId);
+			const tree = buildSessionHistoryTreeEntries(
+				state,
+				sessionId,
+				state.nextSequence - 1
+			);
+			const entries = tree.entries.filter(({ selectedPath }) => selectedPath);
+			const submissionUpdates = new Map(
+				entries.flatMap((entry) =>
+					entry.kind === "submission-status"
+						? [
+								[
+									`${entry.recordId}\0${entry.messageId}\0${entry.submissionId}`,
+									entry,
+								],
+							]
+						: []
+				)
+			);
+			const records = entries.flatMap((entry) =>
+				entry.kind === "record"
+					? [
+							{
+								...entry.record,
+								messages: entry.record.messages.map((message) => {
+									const submissionId = message.metadata?.submissionId;
+									if (message.role !== "user" || submissionId === undefined) {
+										return message;
+									}
+									const status = submissionUpdates.get(
+										`${entry.recordId}\0${message.id}\0${submissionId}`
+									);
+									return status === undefined
+										? message
+										: withSubmissionStatus(message, {
+												failure: status.failure,
+												status: status.status,
+												submissionId: toSubmissionId(status.submissionId),
+											});
+								}),
+							},
+						]
+					: []
+			);
+			const compactionIds = new Set(
+				entries.flatMap((entry) =>
+					entry.kind === "compaction" ? [entry.compactionId] : []
+				)
+			);
+			const contextEditOperationIds = new Set(
+				entries.flatMap((entry) =>
+					entry.kind === "context-edit" ? [entry.operationId] : []
+				)
+			);
+			const [allCompactions, allContextEdits] = await Promise.all([
+				projectionStore.getCompactions(sessionId),
+				projectionStore.getSessionContextEdits(sessionId),
+			]);
+			let model = state.entries.find(
+				({ envelope }) => envelope.type === "session.created"
+			)?.envelope.payload.model as ProviderModelSelection | undefined;
+			let thinkingLevel = state.entries.find(
+				({ envelope }) => envelope.type === "session.created"
+			)?.envelope.payload.thinkingLevel as ThinkingLevel | undefined;
+			for (const entry of entries) {
+				if (entry.kind !== "record") {
+					continue;
+				}
+				model = entry.sessionModel ?? model;
+				thinkingLevel = entry.sessionThinkingLevel ?? thinkingLevel;
+			}
+			return {
+				activeLeafId: tree.activeLeafId,
+				compactions: allCompactions.filter(({ id }) => compactionIds.has(id)),
+				contextEdits: allContextEdits.filter(({ operationId }) =>
+					contextEditOperationIds.has(operationId)
+				),
+				entries,
+				historyGeneration: tree.historyGeneration,
+				model,
+				records,
+				thinkingLevel,
+			};
 		});
 	};
 
@@ -7937,6 +8466,14 @@ export const createSessionJsonlStore = (
 					assertProjectionReady(sourceSessionId);
 					await assertSessionWritable(sourceSessionId);
 					const sourceState = await ensureProjected(sourceSessionId);
+					if (hasInactiveHistoryEntries(sourceState, sourceSessionId)) {
+						throw new SessionForkError(
+							"session_history_branches_unsupported",
+							"Session fork is not supported for a Session with multiple history branches.",
+							sourceSessionId,
+							operationId
+						);
+					}
 					const checkpointEntry = sourceState.entries.find(
 						(entry) =>
 							recordFromSessionLogEntry(entry)?.id === checkpoint.recordId
@@ -8223,16 +8760,68 @@ export const createSessionJsonlStore = (
 							activeLeafId = historyEntryId;
 							continue;
 						}
+						if (entry.envelope.type === "submission.status-updated") {
+							const status = parseSessionSubmissionStatusPayload(
+								entry.envelope.payload
+							);
+							const recordId = identityMap.records.get(status.recordId);
+							const messageId = identityMap.messages.get(status.messageId);
+							const submissionId = identityMap.submissions.get(
+								status.submissionId
+							);
+							if (
+								recordId !== undefined &&
+								messageId !== undefined &&
+								submissionId !== undefined
+							) {
+								const statusOperationId = `fork-submission-status-${entry.envelope.sequence}`;
+								const historyEntryId = sessionHistoryEntryIdForOperation(
+									targetSessionId,
+									statusOperationId
+								);
+								appendLine(
+									createSessionLogEvent({
+										operationId: statusOperationId,
+										payload: {
+											activeLeafId: historyEntryId,
+											historyEntryId,
+											messageId,
+											parentEntryId: activeLeafId,
+											recordId,
+											status: "processed",
+											submissionId,
+										},
+										previousHash,
+										sequence: nextSequence,
+										sessionId: targetSessionId,
+										timestamp: entry.envelope.timestamp,
+										type: "submission.status-updated",
+									})
+								);
+								activeLeafId = historyEntryId;
+							}
+							continue;
+						}
 						if (entry.envelope.type === "compaction.committed") {
 							const sourceCompaction = parseSessionCompactionPayload(
 								entry.envelope.payload
 							);
 							const compaction = remappedCompactions.get(sourceCompaction.id);
 							if (compaction !== undefined) {
+								const operationId = `compaction-${compaction.id}`;
+								const historyEntryId = sessionHistoryEntryIdForOperation(
+									targetSessionId,
+									operationId
+								);
 								appendLine(
 									createSessionLogEvent({
-										operationId: `compaction-${compaction.id}`,
-										payload: compaction,
+										operationId,
+										payload: {
+											...compaction,
+											activeLeafId: historyEntryId,
+											historyEntryId,
+											parentEntryId: activeLeafId,
+										},
 										previousHash,
 										sequence: nextSequence,
 										sessionId: targetSessionId,
@@ -8240,11 +8829,12 @@ export const createSessionJsonlStore = (
 										type: "compaction.committed",
 									})
 								);
+								activeLeafId = historyEntryId;
 							}
 							continue;
 						}
 						if (entry.envelope.type === "context.edited") {
-							const edit = sessionContextEditSchema.parse(
+							const edit = parseSessionContextEditPayload(
 								entry.envelope.payload
 							);
 							const targetId = identityMap.messages.get(edit.targetId);
@@ -8254,12 +8844,19 @@ export const createSessionJsonlStore = (
 								)
 									? `${FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX}fork-${entry.envelope.sequence}`
 									: `fork-context-${entry.envelope.sequence}`;
+								const historyEntryId = sessionHistoryEntryIdForOperation(
+									targetSessionId,
+									editOperationId
+								);
 								appendLine(
 									createSessionLogEvent({
 										operationId: editOperationId,
 										payload: {
 											...edit,
+											activeLeafId: historyEntryId,
+											historyEntryId,
 											operationId: editOperationId,
+											parentEntryId: activeLeafId,
 											targetId,
 										},
 										previousHash,
@@ -8269,6 +8866,7 @@ export const createSessionJsonlStore = (
 										type: "context.edited",
 									})
 								);
+								activeLeafId = historyEntryId;
 							}
 							continue;
 						}
@@ -8678,6 +9276,32 @@ export const createSessionJsonlStore = (
 				statisticsProjection.forkProvenance === undefined
 					? undefined
 					: toSessionForkProvenance(statisticsProjection.forkProvenance);
+			const logPath = resolveSessionLogFilePath(
+				await fs.realpath(logRoot),
+				sessionId
+			);
+			const { state } = await readLog(logPath, sessionId);
+			const historyTree = buildSessionHistoryTreeEntries(
+				state,
+				sessionId,
+				statisticsProjection.readPoint.readPointSequence
+			);
+			const selectedPath: SessionStatisticsHistoryPath = {
+				compactionIds: new Set(
+					historyTree.entries.flatMap((entry) =>
+						entry.kind === "compaction" && entry.selectedPath
+							? [String(entry.compactionId)]
+							: []
+					)
+				),
+				recordIds: new Set(
+					historyTree.entries.flatMap((entry) =>
+						entry.kind === "record" && entry.selectedPath
+							? [String(entry.recordId)]
+							: []
+					)
+				),
+			};
 			return buildSessionStatistics({
 				compactions: statisticsProjection.compactions,
 				inheritedCompactionIds: new Set(
@@ -8689,6 +9313,7 @@ export const createSessionJsonlStore = (
 				inheritedUsage: forkProvenance?.inheritedUsage,
 				readPoint: encodeSessionPageToken(statisticsProjection.readPoint),
 				records: statisticsProjection.records,
+				selectedPath,
 				sessionId,
 				summary: statisticsProjection.summary,
 				...(options.turnId === undefined ? {} : { turnId: options.turnId }),
@@ -9031,6 +9656,8 @@ export const createSessionJsonlStore = (
 		listSessionsPage,
 		readSessionHistoryPage,
 		readSessionHistoryTreePage,
+		readSessionHistoryPath,
+		navigateSessionHistory,
 		getSessionStatistics,
 		listSessionUsageEntries: wrapRead(projectionStore.listSessionUsageEntries),
 		listSessions,

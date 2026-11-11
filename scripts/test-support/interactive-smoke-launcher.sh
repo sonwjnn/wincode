@@ -11,6 +11,14 @@ MANAGED_HOME=0
 if [[ -n "${WINCODE_SMOKE_HOME:-}" && -n "${WINCODE_SMOKE_BUN:-}" ]]; then
   TEST_HOME="$WINCODE_SMOKE_HOME"
   BUN_PATH="$WINCODE_SMOKE_BUN"
+  TEST_HOME="$(cd "$TEST_HOME" && pwd -P)"
+  WORKSPACE="$TEST_HOME/workspace"
+  mkdir -p "$TEST_HOME/data" "$TEST_HOME/config" "$TEST_HOME/tmp" \
+    "$WORKSPACE/.wincode" "$TEST_HOME/.wincode"
+  cp "$ROOT/scripts/test-support/interactive-smoke-wincode.json" \
+    "$WORKSPACE/.wincode/settings.json"
+  printf 'smoke-file-content\n' > "$WORKSPACE/smoke-fixture.txt"
+  cd "$WORKSPACE"
 else
   if ! command -v bun >/dev/null 2>&1; then
     printf 'bun is required for the interactive smoke.\n' >&2
@@ -27,6 +35,12 @@ else
   printf 'smoke-file-content\n' > "$WORKSPACE/smoke-fixture.txt"
   cd "$WORKSPACE"
   MANAGED_HOME=1
+fi
+
+if [[ "$MANAGED_HOME" == '1' || -n "${WINCODE_SMOKE_HOME:-}" ]]; then
+  mkdir -p "$TEST_HOME/.wincode"
+  printf '{"version":1,"decisions":[{"decision":"trust","directory":"%s"},{"decision":"trust","directory":"%s"}]}\n' \
+    "$ROOT" "$WORKSPACE" > "$TEST_HOME/.wincode/project-trust.json"
 fi
 
 cleanup() {

@@ -20,6 +20,7 @@ import {
 import { SessionLogError } from "./storage/session-jsonl-codec";
 import {
 	SessionBundleExportCleanupError,
+	SessionHistoryBranchesUnsupportedError,
 	SessionWriteOutcomeError,
 } from "./storage/session-jsonl-store";
 import type { SessionStore } from "./storage/session-store";
@@ -34,6 +35,7 @@ export type SessionBundleExportErrorCode =
 	| "session_export_cleanup_failed"
 	| "session_export_failed"
 	| "session_export_unavailable"
+	| "session_history_branches_unsupported"
 	| "session_lock_failed"
 	| "session_log_corrupt"
 	| "session_log_version_unsupported"
@@ -118,6 +120,11 @@ const exportErrorFor = (
 		});
 	}
 	if (error instanceof SessionBundleValidationError) {
+		return new SessionBundleExportError(error.code, sessionId, error.message, {
+			cause: error,
+		});
+	}
+	if (error instanceof SessionHistoryBranchesUnsupportedError) {
 		return new SessionBundleExportError(error.code, sessionId, error.message, {
 			cause: error,
 		});

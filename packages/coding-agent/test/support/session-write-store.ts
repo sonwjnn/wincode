@@ -55,6 +55,42 @@ export const sessionStoreWithSuccessfulWrites = (
 			"Session history tree pages are not used by this test store."
 		);
 	},
+	readSessionHistoryPath: async (sessionId) => {
+		const [session, records, compactions, contextEdits] = await Promise.all([
+			projectionStore.getSession(sessionId),
+			projectionStore.listSessionRecords(sessionId),
+			projectionStore.getCompactions(sessionId),
+			projectionStore.getSessionContextEdits(sessionId),
+		]);
+		const entries = records.map((record, index) => {
+			const previousRecord = records[index - 1];
+			return {
+				createdAt: new Date(),
+				id: `test-history-entry-${record.id}`,
+				kind: "record" as const,
+				parentEntryId:
+					previousRecord === undefined
+						? null
+						: `test-history-entry-${previousRecord.id}`,
+				record,
+				recordId: record.id,
+				selectedPath: true,
+				sequence: index + 1,
+			};
+		});
+		return {
+			activeLeafId: entries.at(-1)?.id ?? null,
+			compactions,
+			contextEdits,
+			entries,
+			historyGeneration: 0,
+			model: session.model,
+			records,
+			thinkingLevel: session.thinkingLevel,
+		};
+	},
+	navigateSessionHistory: async (_sessionId, _targetEntryId, operationId) =>
+		successfulSessionWriteOutcome(operationId),
 	forkSession: async () => {
 		throw new Error(
 			"Session forking is not used by this projection-only test store."
@@ -117,9 +153,15 @@ export const sessionStoreWithSuccessfulWrites = (
 					}),
 			usage: {
 				actual: emptyUsage,
-				contributions: { actual: [], auxiliary: [], inherited: [] },
 				auxiliary: emptyUsage,
+				contributions: {
+					actual: [],
+					auxiliary: [],
+					inherited: [],
+					selectedPath: [],
+				},
 				inherited: emptyUsage,
+				selectedPath: emptyUsage,
 			},
 		};
 	},

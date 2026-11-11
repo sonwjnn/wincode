@@ -132,11 +132,15 @@ export function StoredSessionHistoryView({
 					{`Persisted statistics · read point ${statistics.readPoint.slice(0, 12)}… · ${statistics.recordCount} committed records · ${statistics.completedToolCallCount} completed Tool Calls`}
 				</text>
 				<text fg={colors.textMuted}>
-					{usageLabel("Actual", statistics.usage.actual)}
+					{usageLabel("Selected path", statistics.usage.selectedPath)}
 				</text>
 				<text fg={colors.textMuted}>
-					Inherited usage is historical source spend, not new spend in this
-					Session.
+					{usageLabel("Whole Session actual", statistics.usage.actual)}
+				</text>
+				<text fg={colors.textMuted}>
+					Selected-path usage follows the current history branch; whole-Session
+					categories include all branches. Inherited usage is historical source
+					spend, not new spend in this Session.
 				</text>
 				<text fg={colors.textMuted}>
 					{usageLabel("Inherited", statistics.usage.inherited)}

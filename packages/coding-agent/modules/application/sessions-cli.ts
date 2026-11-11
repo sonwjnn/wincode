@@ -898,7 +898,11 @@ const writeSessionStatistics = (
 	);
 	outputLine(
 		io.stdout,
-		`Actual usage: ${statisticsUsageText(statistics.usage.actual)}`
+		`Selected-path usage: ${statisticsUsageText(statistics.usage.selectedPath)}`
+	);
+	outputLine(
+		io.stdout,
+		`Whole Session actual usage: ${statisticsUsageText(statistics.usage.actual)}`
 	);
 	outputLine(
 		io.stdout,

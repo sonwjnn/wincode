@@ -347,6 +347,7 @@ export const createRpcRequestHandler = (
 					submissionEvents: true,
 					sessionCatalogPagination: true,
 					sessionHistoryPagination: true,
+					sessionHistoryNavigation: true,
 					sessionStatistics: true,
 					sessionBundleExport: true,
 					sessionBundleImport: true,
@@ -411,6 +412,62 @@ export const createRpcRequestHandler = (
 				if (paginationError !== undefined) {
 					throw paginationError;
 				}
+				const writerError = mapSessionWriterError(error, sessionId);
+				if (writerError !== undefined) {
+					throw writerError;
+				}
+				throw error;
+			}
+		}
+		if (request.method === "session/navigateHistory") {
+			const assembly = state.assembly;
+			if (assembly?.store === undefined) {
+				throw appError("not_initialized", "Session storage is unavailable.");
+			}
+			const params = paramsOf(request);
+			const sessionIdValue = stringValue(params.sessionId);
+			const operationId = stringValue(params.operationId);
+			const targetValue = params.targetEntryId;
+			const targetEntryId =
+				targetValue === null ? null : stringValue(targetValue);
+			if (sessionIdValue === undefined || !isValidSessionId(sessionIdValue)) {
+				throw rpcInvalidParams("sessionId must be a valid Session ID.");
+			}
+			if (operationId === undefined || operationId.length === 0) {
+				throw rpcInvalidParams("operationId must be a non-empty string.");
+			}
+			if (targetEntryId === undefined) {
+				throw rpcInvalidParams(
+					"targetEntryId must be a history entry ID or null."
+				);
+			}
+			const sessionId = toSessionId(sessionIdValue);
+			if (state.boundSessionId !== sessionId) {
+				throw appError(
+					"session_not_open",
+					"Open the target Session before navigating its history.",
+					{ sessionId }
+				);
+			}
+			const activeHost = requireBound();
+			try {
+				const outcome = await assembly.capabilities
+					.getSessionHostManager()
+					.withIdleForSessionNavigation(
+						sessionId,
+						targetEntryId,
+						operationId,
+						async (idleHost) =>
+							idleHost === activeHost
+								? idleHost.navigateHistory(targetEntryId, operationId)
+								: {
+										kind: "rejected",
+										code: "session_host_changed",
+										reason: "Session Host is no longer open.",
+									}
+					);
+				return success(request.id, outcome);
+			} catch (error) {
 				const writerError = mapSessionWriterError(error, sessionId);
 				if (writerError !== undefined) {
 					throw writerError;

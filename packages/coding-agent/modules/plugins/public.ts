@@ -214,6 +214,20 @@ export type PluginSessionContext = Readonly<{
 	workspace: string;
 }>;
 
+export type PluginSessionHistoryNavigationContext = PluginSessionContext &
+	Readonly<{
+		fromEntryId: string | null;
+		historyGeneration: number;
+		operationId: string;
+		toEntryId: string | null;
+	}>;
+
+export type PluginBeforeSessionHistoryNavigationContext = Omit<
+	PluginSessionHistoryNavigationContext,
+	"sessionState"
+> &
+	Readonly<{ sessionState?: Pick<PluginSessionState, "read"> }>;
+
 export type PluginBeforeAgentTurnContext = PluginSessionContext &
 	Readonly<{
 		agentId: AgentId;
@@ -322,6 +336,20 @@ export type PluginSessionShutdownHook = (
 	context: PluginSessionContext
 ) => void | Promise<void>;
 
+export type PluginBeforeSessionHistoryNavigationResult =
+	| Readonly<{ cancel: string }>
+	| undefined;
+
+export type PluginBeforeSessionHistoryNavigationHook = (
+	context: PluginBeforeSessionHistoryNavigationContext
+) =>
+	| PluginBeforeSessionHistoryNavigationResult
+	| Promise<PluginBeforeSessionHistoryNavigationResult>;
+
+export type PluginSessionHistoryNavigatedHook = (
+	context: PluginSessionHistoryNavigationContext
+) => void | Promise<void>;
+
 export type PluginBeforeAgentTurnHook = (
 	context: PluginBeforeAgentTurnContext,
 	api: PluginToolRegistrationAPI
@@ -356,6 +384,12 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 		registerStatusPanel: (panel: PluginStatusPanelRegistration) => void;
 		onSessionStart: (handler: PluginSessionStartHook) => void;
 		onSessionShutdown: (handler: PluginSessionShutdownHook) => void;
+		onBeforeSessionHistoryNavigation: (
+			handler: PluginBeforeSessionHistoryNavigationHook
+		) => void;
+		onSessionHistoryNavigated: (
+			handler: PluginSessionHistoryNavigatedHook
+		) => void;
 		onBeforeAgentTurn: (handler: PluginBeforeAgentTurnHook) => void;
 		onBeforeCompaction: (handler: PluginBeforeCompactionHook) => void;
 		onCompactionCompleted: (handler: PluginCompactionCompletedHook) => void;

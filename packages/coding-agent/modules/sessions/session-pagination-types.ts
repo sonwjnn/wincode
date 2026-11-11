@@ -2,10 +2,13 @@ import type {
 	AttachmentId,
 	SessionMessageId,
 	SessionRecord,
+	SessionSubmissionStatus,
 } from "@wincode/agent-core";
 import type { ModelUsage, ThinkingLevel } from "@wincode/ai";
 import type { CompactionId, SessionId } from "../../shared/identifiers";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
+import type { SessionCompaction } from "./compaction/types";
+import type { SessionContextEdit } from "./context-edits";
 
 export type Session = Readonly<{
 	createdAt: Date;
@@ -84,6 +87,8 @@ export type SessionHistoryTreeRecordEntry = Readonly<{
 	recordId: SessionRecord["id"];
 	selectedPath: boolean;
 	sequence: number;
+	sessionModel?: ProviderModelSelection;
+	sessionThinkingLevel?: ThinkingLevel;
 }>;
 
 export type SessionHistoryTreePluginStateEntry = Readonly<{
@@ -99,13 +104,65 @@ export type SessionHistoryTreePluginStateEntry = Readonly<{
 	sequence: number;
 }>;
 
+export type SessionHistoryTreeContextEditEntry = Readonly<{
+	createdAt: Date;
+	id: string;
+	kind: "context-edit";
+	operation: "omit" | "replace";
+	operationId: string;
+	parentEntryId: string | null;
+	selectedPath: boolean;
+	sequence: number;
+	targetId: SessionMessageId;
+}>;
+
+export type SessionHistoryTreeCompactionEntry = Readonly<{
+	compactionId: CompactionId;
+	createdAt: Date;
+	id: string;
+	kind: "compaction";
+	parentEntryId: string | null;
+	selectedPath: boolean;
+	sequence: number;
+	trigger: SessionCompaction["trigger"];
+}>;
+
+export type SessionHistoryTreeSubmissionStatusEntry = Readonly<{
+	createdAt: Date;
+	failure?: string;
+	id: string;
+	kind: "submission-status";
+	messageId: SessionMessageId;
+	parentEntryId: string | null;
+	recordId: SessionRecord["id"];
+	selectedPath: boolean;
+	sequence: number;
+	status: SessionSubmissionStatus;
+	submissionId: string;
+}>;
+
 export type SessionHistoryTreeEntry =
 	| SessionHistoryTreePluginStateEntry
-	| SessionHistoryTreeRecordEntry;
+	| SessionHistoryTreeRecordEntry
+	| SessionHistoryTreeContextEditEntry
+	| SessionHistoryTreeCompactionEntry
+	| SessionHistoryTreeSubmissionStatusEntry;
 
 export type SessionHistoryTreePage = Readonly<{
 	activeLeafId: string | null;
+	historyGeneration: number;
 	entries: SessionHistoryTreeEntry[];
 	nextCursor?: string;
 	readPoint: string;
+}>;
+
+export type SessionHistoryPath = Readonly<{
+	activeLeafId: string | null;
+	compactions: SessionCompaction[];
+	contextEdits: SessionContextEdit[];
+	entries: readonly SessionHistoryTreeEntry[];
+	historyGeneration: number;
+	model: ProviderModelSelection | undefined;
+	records: SessionRecord[];
+	thinkingLevel: ThinkingLevel | undefined;
 }>;

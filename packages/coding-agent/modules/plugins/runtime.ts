@@ -25,6 +25,8 @@ import type {
 	PluginBeforeAgentTurnHook,
 	PluginBeforeCompactionHook,
 	PluginBeforeCompactionResult,
+	PluginBeforeSessionHistoryNavigationContext,
+	PluginBeforeSessionHistoryNavigationHook,
 	PluginCommandContext,
 	PluginCommandHandler,
 	PluginCommandRegistration,
@@ -41,6 +43,8 @@ import type {
 	PluginProviderRegistration,
 	PluginRegistrationAPI,
 	PluginSessionContext,
+	PluginSessionHistoryNavigatedHook,
+	PluginSessionHistoryNavigationContext,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginSessionState,
@@ -114,6 +118,8 @@ export type LoadedPlugin = Readonly<{
 	sourceIdentity?: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onBeforeCompaction?: PluginBeforeCompactionHook;
+	onBeforeSessionHistoryNavigation?: PluginBeforeSessionHistoryNavigationHook;
+	onSessionHistoryNavigated?: PluginSessionHistoryNavigatedHook;
 	onCompactionCompleted?: PluginCompactionCompletedHook;
 	onCompactionFailed?: PluginCompactionFailedHook;
 	onStart?: PluginProcessStartHook;
@@ -181,6 +187,12 @@ export type PluginRuntime = Readonly<{
 	runBeforeCompactionHooks: (
 		context: PluginCompactionContext
 	) => Promise<{ cancel?: string; summary?: string } | undefined>;
+	runBeforeSessionHistoryNavigation?: (
+		context: PluginSessionHistoryNavigationContext
+	) => Promise<string | undefined>;
+	notifySessionHistoryNavigated?: (
+		context: PluginSessionHistoryNavigationContext
+	) => Promise<void>;
 	/** Reports a committed compaction; a hook failure cannot undo it. */
 	notifyCompactionCompleted: (
 		context: PluginCompactionCompletedContext
@@ -208,6 +220,7 @@ type SessionPluginState = {
 	context: PluginSessionContext;
 	closed: boolean;
 	disabled: Set<string>;
+	generation: number;
 	maskedTools: Set<string>;
 	persistence?: PluginSessionStatePersistence;
 	started: Set<string>;
@@ -541,9 +554,11 @@ export const createPluginRuntime = (
 			return;
 		}
 		validatePluginSessionStateSchemaVersion(schemaVersion);
+		const generation = state.generation;
 		const assertActive = (): void => {
 			if (
 				state.closed ||
+				state.generation !== generation ||
 				sessionStates.get(state.context.sessionId) !== state
 			) {
 				throw new Error("Plugin Session State capability is no longer active.");
@@ -602,6 +617,7 @@ export const createPluginRuntime = (
 					kind: "set",
 					operationId,
 					schemaVersion,
+					expectedHistoryGeneration: generation,
 					value: copiedValue,
 				};
 				const result = await persistence.mutate(plugin.id, mutation);
@@ -627,6 +643,7 @@ export const createPluginRuntime = (
 					kind: "delete",
 					operationId,
 					schemaVersion,
+					expectedHistoryGeneration: generation,
 				};
 				const result = await persistence.mutate(plugin.id, mutation);
 				assertActive();
@@ -722,6 +739,7 @@ export const createPluginRuntime = (
 			context,
 			closed: false,
 			disabled: new Set(),
+			generation: persistence?.getHistoryGeneration() ?? 0,
 			...omitUndefined({ persistence }),
 			maskedTools: new Set(),
 			started: new Set(),
@@ -968,11 +986,98 @@ export const createPluginRuntime = (
 			}
 		}
 	};
+	const beforeNavigationContextForPlugin = (
+		plugin: LoadedPlugin,
+		state: SessionPluginState,
+		context: PluginSessionHistoryNavigationContext
+	): PluginBeforeSessionHistoryNavigationContext => {
+		const pluginContext = contextForPlugin(plugin, state, context);
+		const sessionState = pluginContext.sessionState;
+		return Object.freeze({
+			...pluginContext,
+			...(sessionState === undefined
+				? {}
+				: { sessionState: Object.freeze({ read: sessionState.read }) }),
+		});
+	};
+	const runBeforeSessionHistoryNavigation = async (
+		context: PluginSessionHistoryNavigationContext
+	): Promise<string | undefined> => {
+		const state = sessionStates.get(context.sessionId);
+		if (state === undefined) {
+			return;
+		}
+		await state.startPromise;
+		for (const plugin of plugins) {
+			if (
+				plugin.onBeforeSessionHistoryNavigation === undefined ||
+				!isEnabledForSession(plugin, context.sessionId)
+			) {
+				continue;
+			}
+			try {
+				const decision = await plugin.onBeforeSessionHistoryNavigation(
+					beforeNavigationContextForPlugin(plugin, state, context)
+				);
+				if (decision?.cancel !== undefined) {
+					return decision.cancel;
+				}
+			} catch (error) {
+				await logPluginFailure(
+					"Plugin pre-navigation hook failed",
+					plugin,
+					"session-history-navigation-before",
+					error
+				);
+				throw error;
+			}
+		}
+	};
+	const notifySessionHistoryNavigated = async (
+		context: PluginSessionHistoryNavigationContext
+	): Promise<void> => {
+		const state = sessionStates.get(context.sessionId);
+		if (state === undefined) {
+			return;
+		}
+		await state.startPromise;
+		state.context = context;
+		state.generation = context.historyGeneration;
+		let failure: Error | undefined;
+		for (const plugin of plugins) {
+			if (
+				plugin.onSessionHistoryNavigated === undefined ||
+				!isEnabledForSession(plugin, context.sessionId)
+			) {
+				continue;
+			}
+			try {
+				await plugin.onSessionHistoryNavigated(
+					contextForPlugin(plugin, state, context)
+				);
+			} catch (error) {
+				await logPluginFailure(
+					"Plugin post-navigation hook failed",
+					plugin,
+					"session-history-navigation-after",
+					error
+				);
+				failure ??=
+					error instanceof Error
+						? error
+						: new Error(`Plugin '${plugin.id}' post-navigation hook failed.`);
+			}
+		}
+		if (failure !== undefined) {
+			throw failure;
+		}
+	};
 
 	return Object.freeze({
 		get diagnostics() {
 			return Object.freeze([...diagnostics]);
 		},
+
 		bindPromptSelectionTarget: promptSelectionBridge.bindPromptSelectionTarget,
 		disablePlugin(pluginId, message) {
 			const plugin = plugins.find(({ id }) => id === pluginId);
@@ -1171,6 +1276,8 @@ export const createPluginRuntime = (
 		},
 		resolveToolsForTurn,
 		runBeforeCompactionHooks,
+		runBeforeSessionHistoryNavigation,
+		notifySessionHistoryNavigated,
 		notifyCompactionCompleted: (context) =>
 			notifyCompactionHooks("completed", context),
 		notifyCompactionFailed: (context) =>

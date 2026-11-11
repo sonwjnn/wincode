@@ -33,12 +33,14 @@ export type PluginSessionStateMutation =
 			kind: "delete";
 			operationId: string;
 			schemaVersion: number;
+			expectedHistoryGeneration: number;
 	  }>
 	| Readonly<{
 			key: string;
 			kind: "set";
 			operationId: string;
 			schemaVersion: number;
+			expectedHistoryGeneration: number;
 			value: PluginSessionStateJsonValue;
 	  }>;
 
@@ -53,6 +55,7 @@ export type PluginSessionStateMutationResult =
 	  }>;
 
 export type PluginSessionStatePersistence = Readonly<{
+	getHistoryGeneration: () => number;
 	read: (
 		pluginId: string,
 		key: string

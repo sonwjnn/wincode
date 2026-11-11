@@ -168,6 +168,37 @@ export type SessionSdkContinuationOutcome =
 			readonly turnId?: AgentTurnId;
 	  };
 
+export type SessionHistoryNavigationOutcome =
+	| {
+			readonly kind: "navigated";
+			readonly activeLeafId: string | null;
+			readonly writeOutcome: SessionWriteReceipt;
+	  }
+	| {
+			readonly kind: "unchanged";
+			readonly activeLeafId: string | null;
+	  }
+	| {
+			readonly kind: "rejected";
+			readonly reason: string;
+			readonly code?: string;
+			readonly writeOutcome?: SessionWriteOutcome;
+	  }
+	| {
+			readonly kind: "committed-blocked";
+			readonly activeLeafId: string | null;
+			readonly reason: string;
+			readonly writeOutcome?: SessionWriteReceipt;
+	  }
+	| {
+			readonly kind: "indeterminate";
+			readonly reason: string;
+			readonly writeOutcome: Extract<
+				SessionWriteOutcome,
+				{ kind: "indeterminate" }
+			>;
+	  };
+
 export type SessionSdkInterruptResult = Readonly<{
 	kind: "turn" | "compaction" | "none";
 	recalled: readonly object[];
@@ -187,6 +218,11 @@ export type SessionSdkSnapshot = Readonly<{
 export type SessionSdkHandle = Readonly<{
 	/** Appends an idle-only context edit without changing the original transcript. */
 	editContext: (edit: SessionContextEdit) => Promise<void>;
+	/** Selects any existing history entry (or the root) as the active leaf while idle. */
+	navigateHistory: (
+		targetEntryId: string | null,
+		operationId: string
+	) => Promise<SessionHistoryNavigationOutcome>;
 	continue: () => Promise<SessionSdkContinuationOutcome>;
 	fork: (
 		checkpoint: SessionForkCheckpoint,
@@ -233,6 +269,11 @@ export type SessionSdk = Readonly<{
 		sessionId: SessionId | string,
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryTreePage>;
+	navigateSessionHistory: (
+		sessionId: SessionId | string,
+		targetEntryId: string | null,
+		operationId: string
+	) => Promise<SessionHistoryNavigationOutcome>;
 	getSessionStatistics: (
 		sessionId: SessionId | string,
 		options?: SessionStatisticsOptions
@@ -278,6 +319,7 @@ export type SessionSdkOperations = Pick<
 	| "listSessionsPage"
 	| "readSessionHistoryPage"
 	| "readSessionHistoryTreePage"
+	| "navigateSessionHistory"
 	| "getSessionStatistics"
 	| "forkSession"
 	| "exportSessionBundle"
