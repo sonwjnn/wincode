@@ -6,7 +6,10 @@ import {
 	fauxText,
 	type Provider,
 } from "@wincode/ai";
-import type { PluginFactory } from "@wincode/coding-agent";
+import type {
+	PluginFactory,
+	PluginSessionContext,
+} from "@wincode/coding-agent";
 
 /** Successful smoke turns must distinguish completion from unknown. */
 const completedResponse = (response: FauxResponse): FauxResponse => ({
@@ -39,6 +42,19 @@ const historyBranchResponse = (
 ): FauxResponse | undefined => {
 	if (prompt.includes("branch from root")) {
 		return completedResponse(fauxText("root-branch-only"));
+	}
+	if (prompt.includes("turn excluded from selected ancestor")) {
+		return completedResponse(fauxText("excluded-turn-response"));
+	}
+	if (prompt.includes("continue from non-root ancestor")) {
+		const selectedAncestorContext =
+			transcript.includes("ancestor source turn") &&
+			!transcript.includes("turn excluded from selected ancestor");
+		return completedResponse(
+			fauxText(
+				selectedAncestorContext ? "ancestor-path-only" : "wrong-ancestor-path"
+			)
+		);
 	}
 	if (prompt.includes("continue preserved path")) {
 		const restoredOriginalPath =
@@ -138,6 +154,10 @@ const createSmokeProvider = (workspace: string): Provider => {
 	return {
 		...faux.provider,
 		async *streamChat(request, context) {
+			await Bun.write(
+				path.join(workspace, ".smoke-provider-request-seen"),
+				"request"
+			);
 			try {
 				yield* faux.provider.streamChat(request, context);
 			} finally {
@@ -151,7 +171,34 @@ const createSmokeProvider = (workspace: string): Provider => {
 
 const interactiveSmokePlugin: PluginFactory = (api, context) => {
 	const plugin = api.definePlugin({ id: "interactive_smoke" });
+	let sessionSdk: PluginSessionContext["sessionSdk"];
 	let historyNavigationCount = 0;
+	plugin.onSessionStart((session) => {
+		sessionSdk = session.sessionSdk;
+	});
+	plugin.registerCommand({
+		description:
+			"Exercise continuation rejection at a non-terminal checkpoint.",
+		name: "smoke-invalid-continue",
+		handler: async ({ sessionId }) => {
+			const operations = sessionSdk;
+			if (sessionId === undefined || operations === undefined) {
+				throw new Error("Session SDK is unavailable for the smoke command.");
+			}
+			const handle = await operations.openSession(sessionId, {
+				autoContinue: false,
+				view: false,
+			});
+			try {
+				const outcome = await handle.continue();
+				return outcome.kind === "rejected"
+					? `Invalid continuation endpoint rejected: ${outcome.reason}`
+					: `Unexpected continuation outcome: ${outcome.kind}`;
+			} finally {
+				await handle.dispose();
+			}
+		},
+	});
 	plugin.onSessionHistoryNavigated(() => {
 		historyNavigationCount += 1;
 		if (historyNavigationCount === 3) {

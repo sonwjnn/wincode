@@ -1991,6 +1991,52 @@ test("continue rejects incomplete Tool Calls even when a later user is last", as
 	await engine.internalPort.shutdown();
 });
 
+test("input rejects an incomplete history endpoint before starting the Provider", async () => {
+	let runtimeStarts = 0;
+	const user = fromPartial<SessionMessage>({
+		id: sessionMessageId("u-input-incomplete"),
+		metadata: { agent: agentId("build"), model },
+		parts: [{ text: "run a tool", type: "text" }],
+		role: "user",
+	});
+	const assistant = fromPartial<SessionMessage>({
+		id: sessionMessageId("a-input-incomplete"),
+		metadata: {
+			agent: agentId("build"),
+			model,
+			sourceUserMessageId: user.id,
+		},
+		parts: [
+			{
+				input: { path: "file.txt" },
+				state: "input-available",
+				toolCallId: toolCallId("call-input-incomplete"),
+				type: "tool-read",
+			},
+		],
+		role: "assistant",
+	});
+	const engine = createTestAgentSession([user, assistant], undefined, {
+		turnRunner: {
+			requestOverheadTokens: () => 0,
+			run: async () => {
+				runtimeStarts += 1;
+				return {};
+			},
+		},
+	});
+
+	const outcome = await engine.send(sendInput({ userText: "continue anyway" }));
+
+	expect(outcome).toMatchObject({
+		reason: "Incomplete Tool Calls cannot be continued.",
+		rejected: true,
+	});
+	expect(runtimeStarts).toBe(0);
+	expect(engine.getSnapshot().context).toEqual([user, assistant]);
+	await engine.internalPort.shutdown();
+});
+
 test("starts a queued admission with the identity it reserved", async () => {
 	const { release, summaryGenerator } = createHangingSummary();
 	const runtime = createQueuedRuntime();

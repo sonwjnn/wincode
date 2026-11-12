@@ -44,6 +44,8 @@ test("terminal smoke plugin uses the latest prompt after cancellation", async ()
 		definePlugin: () =>
 			fromPartial<PluginDefinitionAPI>({
 				onSessionHistoryNavigated: () => undefined,
+				onSessionStart: () => undefined,
+				registerCommand: () => undefined,
 				registerProvider: (registration: PluginProviderRegistration) => {
 					registrations.push(registration);
 				},

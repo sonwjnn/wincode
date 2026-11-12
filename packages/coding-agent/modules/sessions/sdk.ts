@@ -720,6 +720,7 @@ const handleFor = (
 	host: SessionHost,
 	sessionId: SessionId,
 	defaults: SessionSdkSelectionDefaults,
+	fallbackDefaults: SessionSdkSelectionDefaults,
 	pluginRuntime: PluginRuntime | undefined,
 	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
 	getPluginProviderSources:
@@ -1018,7 +1019,7 @@ const handleFor = (
 					await host.editContext(edit);
 				});
 		},
-		navigateHistory: async (targetEntryId, operationId) => {
+		navigateHistory: async (request) => {
 			if (disposed) {
 				return {
 					kind: "rejected",
@@ -1030,8 +1031,7 @@ const handleFor = (
 					.getSessionHostManager()
 					.withIdleForSessionNavigation(
 						sessionId,
-						targetEntryId,
-						operationId,
+						request,
 						async (idleHost) => {
 							if (idleHost !== host) {
 								return {
@@ -1039,18 +1039,20 @@ const handleFor = (
 									reason: "Session Host is no longer open.",
 								} satisfies SessionHistoryNavigationOutcome;
 							}
-							return await host.navigateHistory(targetEntryId, operationId);
+							return await host.navigateHistory(request);
 						}
 					);
 				if (outcome.kind === "navigated" || outcome.kind === "unchanged") {
 					const selection = host.getSelection();
-					if (selection !== null) {
+					if (selection === null) {
+						currentDefaults = fallbackDefaults;
+					} else {
 						currentDefaults = {
-							agent: selection.agent ?? defaults.agent,
+							agent: selection.agent ?? fallbackDefaults.agent,
 							model: selection.model,
 							...omitUndefined({
 								thinkingLevel:
-									selection.thinkingLevel ?? defaults.thinkingLevel,
+									selection.thinkingLevel ?? fallbackDefaults.thinkingLevel,
 							}),
 						};
 					}
@@ -1266,10 +1268,13 @@ const createSessionSdkInternal = async (
 				throw new Error("Session SDK is disposed.");
 			}
 			const sessionId = toSessionId(id);
-			const stored = await assembly.store.getSession(sessionId);
-			const records = await assembly.store.listSessionRecords(sessionId);
+			const [stored, historyPath] = await Promise.all([
+				assembly.store.getSession(sessionId),
+				assembly.store.readSessionHistoryPath(sessionId),
+			]);
+			const selectedPathRecords = historyPath.records;
 			const priorSelection = nextChatSelection({
-				messages: records.flatMap((record) =>
+				messages: selectedPathRecords.flatMap((record) =>
 					projectSessionMessageRecords(record.messages, record)
 				),
 			});
@@ -1279,7 +1284,7 @@ const createSessionSdkInternal = async (
 				false;
 			assertImportedSessionAgentIsAvailable(
 				assembly.capabilities.getRegistry(),
-				priorSelection?.persistedAgent ?? records.at(-1)?.agentId,
+				priorSelection?.persistedAgent ?? selectedPathRecords.at(-1)?.agentId,
 				isImportedSession
 			);
 			const hasStoredProviderModelSelection =
@@ -1330,6 +1335,7 @@ const createSessionSdkInternal = async (
 				host,
 				sessionId,
 				defaults,
+				fallbackSelection,
 				pluginRuntime,
 				inheritedPluginProviderSources,
 				getPluginProviderSources,
@@ -1598,7 +1604,7 @@ const createSessionSdkInternal = async (
 				toSessionId(sessionId),
 				pageOptions
 			),
-		navigateSessionHistory: async (sessionId, targetEntryId, operationId) => {
+		navigateSessionHistory: async (sessionId, request) => {
 			if (disposed) {
 				throw new Error("Session SDK is disposed.");
 			}
@@ -1607,7 +1613,7 @@ const createSessionSdkInternal = async (
 				view: true,
 			});
 			try {
-				return await handle.navigateHistory(targetEntryId, operationId);
+				return await handle.navigateHistory(request);
 			} finally {
 				await handle.dispose();
 			}
@@ -1813,10 +1819,8 @@ export const createSessionSdkOperations = (
 			return Object.freeze({
 				continue: () => withOperation(handle.continue),
 				editContext: (edit) => withOperation(() => handle.editContext(edit)),
-				navigateHistory: (targetEntryId, operationId) =>
-					withOperation(() =>
-						handle.navigateHistory(targetEntryId, operationId)
-					),
+				navigateHistory: (request) =>
+					withOperation(() => handle.navigateHistory(request)),
 				fork: (checkpoint, operationId) =>
 					withOperation(async () => {
 						const result = await handle.fork(checkpoint, operationId);
@@ -1862,10 +1866,9 @@ export const createSessionSdkOperations = (
 			store.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
 		readSessionHistoryTreePage: (sessionId, pageOptions) =>
 			store.readSessionHistoryTreePage(toSessionId(sessionId), pageOptions),
-		navigateSessionHistory: (sessionId, targetEntryId, operationId) =>
+		navigateSessionHistory: (sessionId, request) =>
 			withSessionRuntime(
-				(sdk) =>
-					sdk.navigateSessionHistory(sessionId, targetEntryId, operationId),
+				(sdk) => sdk.navigateSessionHistory(sessionId, request),
 				{ sessionId }
 			),
 		getSessionStatistics: (sessionId, statisticsOptions) =>

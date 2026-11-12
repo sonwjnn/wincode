@@ -1123,6 +1123,7 @@ export const createSessionJsonlProjection = (
 							assertSessionBinding();
 							break;
 						case "session.activation-confirmed":
+						case "plugin.entry-appended":
 						case "plugin.state-replaced":
 						case "plugin.state-deleted":
 							break;

@@ -6,6 +6,11 @@ import {
 } from "@wincode/utils";
 import { isValidSessionLogIdentifier } from "../sessions/session-log-identifiers";
 import {
+	copyPluginSessionHistoryPayload,
+	type PluginSessionHistoryPersistence,
+	validatePluginSessionHistoryType,
+} from "../sessions/session-plugin-history";
+import {
 	type PluginSessionStateMutation,
 	type PluginSessionStatePersistence,
 	serializePluginSessionStateValue,
@@ -43,8 +48,10 @@ import type {
 	PluginProviderRegistration,
 	PluginRegistrationAPI,
 	PluginSessionContext,
+	PluginSessionHistory,
 	PluginSessionHistoryNavigatedHook,
 	PluginSessionHistoryNavigationContext,
+	PluginSessionHistoryReader,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginSessionState,
@@ -55,6 +62,7 @@ import type {
 	PluginToolRegistrationAPI,
 } from "./public";
 import {
+	PluginSessionHistoryWriteError,
 	PluginSessionStateVersionError,
 	PluginSessionStateWriteError,
 } from "./public";
@@ -204,7 +212,8 @@ export type PluginRuntime = Readonly<{
 	shutdown: () => Promise<void>;
 	startSession: (
 		context: PluginSessionContext,
-		persistence?: PluginSessionStatePersistence
+		persistence?: PluginSessionStatePersistence,
+		historyPersistence?: PluginSessionHistoryPersistence
 	) => Promise<void>;
 	stopSession: (context: PluginSessionContext) => Promise<void>;
 }>;
@@ -223,6 +232,7 @@ type SessionPluginState = {
 	generation: number;
 	maskedTools: Set<string>;
 	persistence?: PluginSessionStatePersistence;
+	historyPersistence?: PluginSessionHistoryPersistence;
 	started: Set<string>;
 	startPromise: Promise<void>;
 	storageError?: Error;
@@ -541,6 +551,21 @@ export const createPluginRuntime = (
 			}
 		}
 	};
+	const assertPluginSessionCapabilityActive = (
+		state: SessionPluginState,
+		generation: number,
+		capability: "State" | "History"
+	): void => {
+		if (
+			state.closed ||
+			state.generation !== generation ||
+			sessionStates.get(state.context.sessionId) !== state
+		) {
+			throw new Error(
+				`Plugin Session ${capability} capability is no longer active.`
+			);
+		}
+	};
 	const pluginSessionStateFor = (
 		plugin: LoadedPlugin,
 		state: SessionPluginState | undefined
@@ -555,15 +580,8 @@ export const createPluginRuntime = (
 		}
 		validatePluginSessionStateSchemaVersion(schemaVersion);
 		const generation = state.generation;
-		const assertActive = (): void => {
-			if (
-				state.closed ||
-				state.generation !== generation ||
-				sessionStates.get(state.context.sessionId) !== state
-			) {
-				throw new Error("Plugin Session State capability is no longer active.");
-			}
-		};
+		const assertActive = (): void =>
+			assertPluginSessionCapabilityActive(state, generation, "State");
 		const writeErrorFor = (
 			writeOutcome: SessionWriteOutcome
 		): PluginSessionStateWriteError => {
@@ -659,17 +677,80 @@ export const createPluginRuntime = (
 			},
 		});
 	};
+	const pluginSessionHistoryFor = (
+		plugin: LoadedPlugin,
+		state: SessionPluginState | undefined
+	): PluginSessionHistory | undefined => {
+		if (state?.historyPersistence === undefined) {
+			return;
+		}
+		const persistence = state.historyPersistence;
+		const generation = state.generation;
+		const assertActive = (): void =>
+			assertPluginSessionCapabilityActive(state, generation, "History");
+		const writeErrorFor = (writeOutcome: SessionWriteOutcome): Error => {
+			const error = new PluginSessionHistoryWriteError(writeOutcome);
+			if (
+				writeOutcome.kind === "indeterminate" ||
+				(writeOutcome.kind === "committed" &&
+					writeOutcome.projection === "blocked")
+			) {
+				state.storageError ??=
+					persistence.reportWriteOutcome?.(writeOutcome) ?? error;
+				return new PluginSessionHistoryWriteError(
+					writeOutcome,
+					state.storageError
+				);
+			}
+			return error;
+		};
+		return Object.freeze({
+			append: async (type, value, operationId) => {
+				validatePluginSessionHistoryType(type);
+				if (!isValidSessionLogIdentifier(operationId)) {
+					throw new Error("Plugin Session History operation ID is invalid.");
+				}
+				const payload = copyPluginSessionHistoryPayload(value);
+				assertActive();
+				const result = await persistence.append(plugin.id, {
+					expectedHistoryGeneration: generation,
+					operationId,
+					payload,
+					type,
+				});
+				assertActive();
+				if (
+					result.writeOutcome.kind !== "committed" ||
+					result.writeOutcome.projection !== "ready"
+				) {
+					throw writeErrorFor(result.writeOutcome);
+				}
+				return result.entryId;
+			},
+			read: async (options) => {
+				assertActive();
+				const page = await persistence.read(plugin.id, options);
+				assertActive();
+				return structuredClone(page);
+			},
+		});
+	};
 	const contextForPlugin = <Context extends PluginSessionContext>(
 		plugin: LoadedPlugin,
 		state: SessionPluginState | undefined,
 		context: Context
 	): Context => {
-		const { sessionState: _ignored, ...base } = context;
+		const {
+			sessionHistory: _ignoredHistory,
+			sessionState: _ignoredState,
+			...base
+		} = context;
+		const sessionHistory = pluginSessionHistoryFor(plugin, state);
 		const sessionState =
 			state === undefined ? undefined : pluginSessionStateFor(plugin, state);
 		return Object.freeze({
 			...base,
-			...omitUndefined({ sessionState }),
+			...omitUndefined({ sessionHistory, sessionState }),
 		}) as Context;
 	};
 	const initializePluginSession = async (
@@ -726,7 +807,8 @@ export const createPluginRuntime = (
 	};
 	const startSession = async (
 		context: PluginSessionContext,
-		persistence?: PluginSessionStatePersistence
+		persistence?: PluginSessionStatePersistence,
+		historyPersistence?: PluginSessionHistoryPersistence
 	): Promise<void> => {
 		const existing = sessionStates.get(context.sessionId);
 		if (existing !== undefined) {
@@ -740,7 +822,7 @@ export const createPluginRuntime = (
 			closed: false,
 			disabled: new Set(),
 			generation: persistence?.getHistoryGeneration() ?? 0,
-			...omitUndefined({ persistence }),
+			...omitUndefined({ historyPersistence, persistence }),
 			maskedTools: new Set(),
 			started: new Set(),
 			startPromise: deferred.promise,
@@ -992,9 +1074,17 @@ export const createPluginRuntime = (
 		context: PluginSessionHistoryNavigationContext
 	): PluginBeforeSessionHistoryNavigationContext => {
 		const pluginContext = contextForPlugin(plugin, state, context);
+		const sessionHistory = pluginContext.sessionHistory;
 		const sessionState = pluginContext.sessionState;
 		return Object.freeze({
 			...pluginContext,
+			...(sessionHistory === undefined
+				? {}
+				: {
+						sessionHistory: Object.freeze({
+							read: sessionHistory.read,
+						}) satisfies PluginSessionHistoryReader,
+					}),
 			...(sessionState === undefined
 				? {}
 				: { sessionState: Object.freeze({ read: sessionState.read }) }),

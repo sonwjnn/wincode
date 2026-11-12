@@ -896,13 +896,13 @@ export const createSessionHost = async ({
 				openedAgentSession.internalPort.replaceContext(context);
 				openedStatefulAgent.invalidateContext();
 			},
-			navigateHistory: async (targetEntryId, operationId) => {
+			navigateHistory: async (request) => {
+				const { targetEntryId } = request;
 				const previousPath =
 					await sessionStore.readSessionHistoryPath(sessionId);
 				const writeOutcome = await sessionStore.navigateSessionHistory(
 					sessionId,
-					targetEntryId,
-					operationId
+					request
 				);
 				if (writeOutcome.kind === "not-committed") {
 					return {

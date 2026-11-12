@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { logger } from "@wincode/utils";
+import { toSessionHistoryEntryId } from "@/shared/identifiers";
 import {
 	createLoggerHome,
 	type LoggerRecord,
@@ -34,7 +35,10 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "../modules/sessions/host/types";
-import type { SessionHistoryNavigationOutcome } from "../modules/sessions/sdk-contract";
+import type {
+	SessionHistoryNavigationOutcome,
+	SessionHistoryNavigationRequest,
+} from "../modules/sessions/sdk-contract";
 import { SessionBundleImportError } from "../modules/sessions/session-bundle-import";
 import { SessionLogError } from "../modules/sessions/storage/session-jsonl-codec";
 import { SessionPaginationError } from "../modules/sessions/storage/session-pagination";
@@ -94,7 +98,7 @@ test("RPC preserves committed-blocked and indeterminate history navigation outco
 			"entry-blocked",
 			{
 				kind: "committed-blocked",
-				activeLeafId: "entry-selected",
+				activeLeafId: toSessionHistoryEntryId("entry-selected"),
 				reason: "Plugin State restore failed.",
 				writeOutcome: receipt,
 			},
@@ -118,9 +122,9 @@ test("RPC preserves committed-blocked and indeterminate history navigation outco
 	]);
 	const host = fromPartial<SessionHost>({
 		navigateHistory: async (
-			targetEntryId: string | null
+			request: SessionHistoryNavigationRequest
 		): Promise<SessionHistoryNavigationOutcome> => {
-			const outcome = outcomes.get(targetEntryId ?? "root");
+			const outcome = outcomes.get(request.targetEntryId ?? "root");
 			if (outcome === undefined) {
 				throw new Error("Unexpected RPC history navigation target.");
 			}
@@ -128,7 +132,7 @@ test("RPC preserves committed-blocked and indeterminate history navigation outco
 		},
 	});
 	const withIdleForSessionNavigation: SessionHostManager["withIdleForSessionNavigation"] =
-		async (requestedSessionId, _targetEntryId, _operationId, action) => {
+		async (requestedSessionId, _request, action) => {
 			expect(requestedSessionId).toBe(sourceSessionId);
 			return action(host);
 		};

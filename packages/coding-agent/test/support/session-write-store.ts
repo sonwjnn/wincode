@@ -1,4 +1,5 @@
 import { randomUUIDv7 } from "bun";
+import { toSessionHistoryEntryId } from "@/shared/identifiers";
 import type {
 	CreateSessionUsageEntryInput,
 	SessionProjectionStore,
@@ -55,6 +56,14 @@ export const sessionStoreWithSuccessfulWrites = (
 			"Session history tree pages are not used by this test store."
 		);
 	},
+	hasSessionHistoryEntry: async () => false,
+	readPluginSessionHistoryPage: async () => {
+		throw new Error("Plugin history pages are not used by this test store.");
+	},
+	appendPluginSessionHistoryEntry: async (_sessionId, _pluginId, input) => ({
+		entryId: toSessionHistoryEntryId("test-plugin-history-entry"),
+		writeOutcome: successfulSessionWriteOutcome(input.operationId),
+	}),
 	readSessionHistoryPath: async (sessionId) => {
 		const [session, records, compactions, contextEdits] = await Promise.all([
 			projectionStore.getSession(sessionId),
@@ -66,12 +75,14 @@ export const sessionStoreWithSuccessfulWrites = (
 			const previousRecord = records[index - 1];
 			return {
 				createdAt: new Date(),
-				id: `test-history-entry-${record.id}`,
+				id: toSessionHistoryEntryId(`test-history-entry-${record.id}`),
 				kind: "record" as const,
 				parentEntryId:
 					previousRecord === undefined
 						? null
-						: `test-history-entry-${previousRecord.id}`,
+						: toSessionHistoryEntryId(
+								`test-history-entry-${previousRecord.id}`
+							),
 				record,
 				recordId: record.id,
 				selectedPath: true,
@@ -89,8 +100,8 @@ export const sessionStoreWithSuccessfulWrites = (
 			thinkingLevel: session.thinkingLevel,
 		};
 	},
-	navigateSessionHistory: async (_sessionId, _targetEntryId, operationId) =>
-		successfulSessionWriteOutcome(operationId),
+	navigateSessionHistory: async (_sessionId, request) =>
+		successfulSessionWriteOutcome(request.operationId),
 	forkSession: async () => {
 		throw new Error(
 			"Session forking is not used by this projection-only test store."

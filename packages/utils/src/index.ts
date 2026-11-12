@@ -8,3 +8,4 @@ export * from "./json-value.ts";
 export * from "./logger.ts";
 export * from "./objects.ts";
 export * from "./sensitive-key.ts";
+export * from "./utf8.ts";

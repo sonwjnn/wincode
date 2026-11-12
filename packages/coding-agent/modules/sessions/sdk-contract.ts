@@ -5,7 +5,10 @@ import type {
 	SubmissionId,
 } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
-import type { SessionId } from "../../shared/identifiers";
+import type {
+	SessionHistoryEntryId,
+	SessionId,
+} from "../../shared/identifiers";
 import type { PluginFactory } from "../plugins/public";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
 import type { SessionContextEdit } from "./context-edits";
@@ -18,6 +21,7 @@ import type {
 import type { SessionSdkEvent } from "./session-events";
 import type {
 	SessionCatalogPage,
+	SessionHistoryNavigationRequest,
 	SessionHistoryPage,
 	SessionHistoryTreePage,
 	SessionPageOptions,
@@ -49,6 +53,7 @@ export type {
 export type {
 	Session,
 	SessionCatalogPage,
+	SessionHistoryNavigationRequest,
 	SessionHistoryPage,
 	SessionHistoryTreeEntry,
 	SessionHistoryTreePage,
@@ -171,12 +176,12 @@ export type SessionSdkContinuationOutcome =
 export type SessionHistoryNavigationOutcome =
 	| {
 			readonly kind: "navigated";
-			readonly activeLeafId: string | null;
+			readonly activeLeafId: SessionHistoryEntryId | null;
 			readonly writeOutcome: SessionWriteReceipt;
 	  }
 	| {
 			readonly kind: "unchanged";
-			readonly activeLeafId: string | null;
+			readonly activeLeafId: SessionHistoryEntryId | null;
 	  }
 	| {
 			readonly kind: "rejected";
@@ -186,7 +191,7 @@ export type SessionHistoryNavigationOutcome =
 	  }
 	| {
 			readonly kind: "committed-blocked";
-			readonly activeLeafId: string | null;
+			readonly activeLeafId: SessionHistoryEntryId | null;
 			readonly reason: string;
 			readonly writeOutcome?: SessionWriteReceipt;
 	  }
@@ -220,8 +225,7 @@ export type SessionSdkHandle = Readonly<{
 	editContext: (edit: SessionContextEdit) => Promise<void>;
 	/** Selects any existing history entry (or the root) as the active leaf while idle. */
 	navigateHistory: (
-		targetEntryId: string | null,
-		operationId: string
+		request: SessionHistoryNavigationRequest
 	) => Promise<SessionHistoryNavigationOutcome>;
 	continue: () => Promise<SessionSdkContinuationOutcome>;
 	fork: (
@@ -271,8 +275,7 @@ export type SessionSdk = Readonly<{
 	) => Promise<SessionHistoryTreePage>;
 	navigateSessionHistory: (
 		sessionId: SessionId | string,
-		targetEntryId: string | null,
-		operationId: string
+		request: SessionHistoryNavigationRequest
 	) => Promise<SessionHistoryNavigationOutcome>;
 	getSessionStatistics: (
 		sessionId: SessionId | string,

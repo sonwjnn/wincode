@@ -27,7 +27,9 @@ import {
 import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import { createSkillSnapshot } from "@/modules/skills";
 import {
+	isValidSessionHistoryEntryId,
 	isValidSessionId,
+	type SessionHistoryEntryId,
 	type SessionId,
 	toSessionId,
 } from "@/shared/identifiers";
@@ -428,8 +430,17 @@ export const createRpcRequestHandler = (
 			const sessionIdValue = stringValue(params.sessionId);
 			const operationId = stringValue(params.operationId);
 			const targetValue = params.targetEntryId;
-			const targetEntryId =
-				targetValue === null ? null : stringValue(targetValue);
+			let targetEntryId: SessionHistoryEntryId | null | undefined;
+			if (targetValue === null) {
+				targetEntryId = null;
+			} else if (
+				typeof targetValue === "string" &&
+				isValidSessionHistoryEntryId(targetValue)
+			) {
+				targetEntryId = targetValue;
+			} else {
+				targetEntryId = undefined;
+			}
 			if (sessionIdValue === undefined || !isValidSessionId(sessionIdValue)) {
 				throw rpcInvalidParams("sessionId must be a valid Session ID.");
 			}
@@ -455,11 +466,10 @@ export const createRpcRequestHandler = (
 					.getSessionHostManager()
 					.withIdleForSessionNavigation(
 						sessionId,
-						targetEntryId,
-						operationId,
+						{ operationId, targetEntryId },
 						async (idleHost) =>
 							idleHost === activeHost
-								? idleHost.navigateHistory(targetEntryId, operationId)
+								? idleHost.navigateHistory({ operationId, targetEntryId })
 								: {
 										kind: "rejected",
 										code: "session_host_changed",

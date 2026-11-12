@@ -56,10 +56,22 @@ const getPluginStateEntryTitle = (
 	return `Plugin State · ${pluginId} / ${key}`;
 };
 
+const getPluginHistoryEntryTitle = (
+	entry: Extract<SessionHistoryTreeEntry, { kind: "plugin-entry" }>
+): string => {
+	const pluginId = stripControlCharacters(entry.pluginId)
+		.replace(/\s+/gu, " ")
+		.trim();
+	const type = stripControlCharacters(entry.type).replace(/\s+/gu, " ").trim();
+	return `Plugin Entry · ${pluginId} / ${type}`;
+};
+
 const getEntrySummary = (entry: SessionHistoryTreeEntry): string => {
 	switch (entry.kind) {
 		case "plugin-state":
 			return `${getPluginStateEntryTitle(entry)} · ${entry.operation} · v${entry.schemaVersion}`;
+		case "plugin-entry":
+			return getPluginHistoryEntryTitle(entry);
 		case "record": {
 			const role =
 				entry.record.messages.at(-1)?.role ?? entry.record.outcome.kind;
@@ -104,6 +116,8 @@ const getEntryPreviewContent = (entry: SessionHistoryTreeEntry): string => {
 			return getRecordText(entry).slice(0, MAX_PREVIEW_LENGTH);
 		case "plugin-state":
 			return "Plugin State payload is intentionally hidden from the history preview.";
+		case "plugin-entry":
+			return "Plugin history payload is intentionally hidden from the history preview.";
 		default:
 			return getEntrySummary(entry);
 	}
@@ -115,6 +129,8 @@ const getEntryPreviewTitle = (entry: SessionHistoryTreeEntry): string => {
 			return `Record ${entry.recordId}`;
 		case "plugin-state":
 			return getPluginStateEntryTitle(entry);
+		case "plugin-entry":
+			return getPluginHistoryEntryTitle(entry);
 		default:
 			return getEntrySummary(entry);
 	}
@@ -169,6 +185,7 @@ export function SessionHistoryTreeDialogContent({
 	const [error, setError] = useState<string>();
 	const nextCursorRef = useRef<string | undefined>(undefined);
 	const loadingMoreRef = useRef(false);
+	const navigationPendingRef = useRef(false);
 	const depths = useMemo(() => getEntryDepths(entries), [entries]);
 
 	useEffect(() => {
@@ -250,14 +267,17 @@ export function SessionHistoryTreeDialogContent({
 		[dialog]
 	);
 	const navigateTo = useCallback(
-		async (targetEntryId: string | null) => {
+		async (targetEntryId: SessionHistoryTreeEntry["id"] | null) => {
+			if (navigationPendingRef.current) {
+				return;
+			}
+			navigationPendingRef.current = true;
 			setError(undefined);
 			try {
-				const outcome = await sessionSdk.navigateSessionHistory(
-					sessionId,
+				const outcome = await sessionSdk.navigateSessionHistory(sessionId, {
+					operationId: randomUUIDv7(),
 					targetEntryId,
-					randomUUIDv7()
-				);
+				});
 				if (outcome.kind === "navigated" || outcome.kind === "unchanged") {
 					dialog.close();
 					return;
@@ -269,6 +289,8 @@ export function SessionHistoryTreeDialogContent({
 						? navigationError.message
 						: "Could not navigate Session history."
 				);
+			} finally {
+				navigationPendingRef.current = false;
 			}
 		},
 		[dialog, sessionId, sessionSdk]
@@ -325,6 +347,14 @@ export function SessionHistoryTreeDialogContent({
 				maxVisibleItems={maxVisibleItems}
 				onKey={(key, highlightedEntry, isSearching) => {
 					if (
+						navigationPendingRef.current &&
+						(key.name === "enter" ||
+							key.name === "return" ||
+							(key.ctrl && key.name === "home"))
+					) {
+						return true;
+					}
+					if (
 						key.ctrl &&
 						key.name === "down" &&
 						nextCursorRef.current !== undefined
@@ -357,7 +387,9 @@ export function SessionHistoryTreeDialogContent({
 						<text
 							attributes={isActive ? TextAttributes.BOLD : undefined}
 							fg={
-								entry.kind === "plugin-state" ? colors.textMuted : colors.text
+								entry.kind === "plugin-state" || entry.kind === "plugin-entry"
+									? colors.textMuted
+									: colors.text
 							}
 							selectable={false}
 						>

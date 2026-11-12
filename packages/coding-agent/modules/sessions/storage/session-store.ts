@@ -17,6 +17,7 @@ import type {
 import type { EditMode, FileObservationStore } from "@/modules/tools";
 import type {
 	CompactionId,
+	SessionHistoryEntryId,
 	SessionId,
 	SessionUsageEntryId,
 } from "@/shared/identifiers";
@@ -27,6 +28,7 @@ import type {
 import type {
 	Session,
 	SessionCatalogPage,
+	SessionHistoryNavigationRequest,
 	SessionHistoryPage,
 	SessionHistoryPath,
 	SessionHistoryTreePage,
@@ -65,6 +67,11 @@ export type {
 
 import type { SessionContextEdit } from "../context-edits";
 import type { SessionBundleImportResult } from "../session-bundle-contract";
+import type {
+	PluginSessionHistoryAppendInput,
+	PluginSessionHistoryAppendResult,
+	PluginSessionHistoryPage,
+} from "../session-plugin-history";
 import type {
 	PluginSessionStateMutation,
 	PluginSessionStateMutationResult,
@@ -394,10 +401,23 @@ export type SessionStore = Omit<
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryTreePage>;
 	readSessionHistoryPath: (sessionId: SessionId) => Promise<SessionHistoryPath>;
+	readPluginSessionHistoryPage: (
+		sessionId: SessionId,
+		pluginId: string,
+		options?: SessionPageOptions
+	) => Promise<PluginSessionHistoryPage>;
+	appendPluginSessionHistoryEntry: (
+		sessionId: SessionId,
+		pluginId: string,
+		input: PluginSessionHistoryAppendInput
+	) => Promise<PluginSessionHistoryAppendResult>;
+	hasSessionHistoryEntry: (
+		sessionId: SessionId,
+		entryId: SessionHistoryEntryId
+	) => Promise<boolean>;
 	navigateSessionHistory: (
 		sessionId: SessionId,
-		targetEntryId: string | null,
-		operationId: string
+		request: SessionHistoryNavigationRequest
 	) => Promise<SessionWriteOutcome>;
 	getSessionStatistics: (
 		sessionId: SessionId,

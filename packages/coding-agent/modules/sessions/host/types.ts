@@ -20,6 +20,7 @@ import type {
 } from "../sdk-contract";
 import type { SessionSelection } from "../selection";
 import type { SessionSdkEvent } from "../session-events";
+import type { SessionHistoryNavigationRequest } from "../session-pagination-types";
 import type {
 	SessionForkCheckpoint,
 	SessionForkResult,
@@ -117,8 +118,7 @@ export type SessionHost = Readonly<{
 	editContext: (edit: SessionContextEdit) => Promise<void>;
 	/** Selects a history entry while the manager holds the idle gate. */
 	navigateHistory: (
-		targetEntryId: string | null,
-		operationId: string
+		request: SessionHistoryNavigationRequest
 	) => Promise<SessionHistoryNavigationOutcome>;
 	/** Blocks new work after a committed write leaves Session storage unresolved. */
 	reportStorageError: (error: Error) => void;
@@ -209,8 +209,7 @@ export type SessionHostManager = Readonly<{
 	) => Promise<Result>;
 	withIdleForSessionNavigation: (
 		sessionId: SessionId,
-		targetEntryId: string | null,
-		operationId: string,
+		request: SessionHistoryNavigationRequest,
 		action: (
 			host: SessionHost | undefined
 		) => Promise<SessionHistoryNavigationOutcome>

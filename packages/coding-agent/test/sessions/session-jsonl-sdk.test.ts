@@ -19,6 +19,7 @@ import {
 	type SessionSdkEvent,
 } from "@wincode/coding-agent";
 import { readUtf8File } from "@wincode/utils";
+import { buildAgentRegistry } from "@/modules/agents/registry";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import { rebuildActiveMessages } from "@/modules/sessions/compaction/compaction";
@@ -61,6 +62,7 @@ import {
 } from "@/modules/sessions/storage/session-jsonl-codec";
 import {
 	createSessionJsonlStore,
+	type SessionJsonlStoreTestObserver,
 	type SessionLogFileIo,
 } from "@/modules/sessions/storage/session-jsonl-store";
 import {
@@ -78,7 +80,11 @@ import {
 	withSessionCatalogLifecycleGate,
 } from "@/modules/sessions/storage/session-writer-lock";
 import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
-import { type SessionId, toSessionId } from "@/shared/identifiers";
+import {
+	type SessionId,
+	toSessionHistoryEntryId,
+	toSessionId,
+} from "@/shared/identifiers";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
@@ -133,7 +139,8 @@ const createSessionJsonlTestPersistence = (
 	workspaceRoot: string,
 	fileIo: SessionLogFileIo = {},
 	syncBlob?: (handle: fs.FileHandle) => Promise<void>,
-	attachmentRepositoryOverride?: AttachmentMetadataRepository
+	attachmentRepositoryOverride?: AttachmentMetadataRepository,
+	testObserver?: SessionJsonlStoreTestObserver
 ) => {
 	const operational = createDatabase(databasePath);
 	const projection = createDatabase(
@@ -157,7 +164,12 @@ const createSessionJsonlTestPersistence = (
 		sessionLogRoot: logRoot,
 		workspaceRoot,
 	});
-	const store = createSessionJsonlStore(projectionStore, logRoot, fileIo);
+	const store = createSessionJsonlStore(
+		projectionStore,
+		logRoot,
+		fileIo,
+		testObserver
+	);
 	return {
 		attachmentRepository,
 		attachmentStore,
@@ -170,6 +182,451 @@ const createSessionJsonlTestPersistence = (
 		store,
 	};
 };
+
+type TestPluginSessionHistory = Readonly<{
+	append: (
+		type: string,
+		payload: unknown,
+		operationId: string
+	) => Promise<string>;
+	read: (options?: Readonly<{ cursor?: string; limit?: number }>) => Promise<{
+		entries: readonly Readonly<{
+			createdAt: Date;
+			id: string;
+			parentEntryId: string | null;
+			payload: unknown;
+			sequence: number;
+			type: string;
+		}>[];
+		nextCursor?: string;
+		readPoint: string;
+	}>;
+}>;
+
+const isTestPluginSessionHistory = (
+	value: unknown
+): value is TestPluginSessionHistory =>
+	typeof value === "object" &&
+	value !== null &&
+	"append" in value &&
+	typeof value.append === "function" &&
+	"read" in value &&
+	typeof value.read === "function";
+
+const createPluginSessionHistoryFixture = async (
+	name: string,
+	options: Readonly<{
+		onBeforeHistoryNavigation?: () => void;
+		testObserver?: SessionJsonlStoreTestObserver;
+	}> = {}
+) => {
+	const databasePath = path.join(root, name, "sessions.sqlite");
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace,
+		{},
+		undefined,
+		undefined,
+		options.testObserver
+	);
+	const recorder = createFakeProviderRecorder();
+	const histories = new Map<string, TestPluginSessionHistory>();
+	const captureHistory = (
+		pluginId: string,
+		_sessionId: string,
+		context: object
+	): void => {
+		if (!("sessionHistory" in context)) {
+			throw new Error("Missing Plugin Session History capability.");
+		}
+		const history = context.sessionHistory;
+		if (!isTestPluginSessionHistory(history)) {
+			throw new Error("Missing Plugin Session History capability.");
+		}
+		histories.set(pluginId, history);
+	};
+	const factory: PluginFactory = (api) => {
+		const plugin = api.definePlugin({ id: "history_entries" });
+		plugin.onSessionStart(({ sessionId, ...context }) => {
+			captureHistory("history_entries", sessionId, context);
+		});
+		plugin.onSessionHistoryNavigated(({ sessionId, ...context }) => {
+			captureHistory("history_entries", sessionId, context);
+		});
+	};
+	const observerFactory: PluginFactory = (api) => {
+		const observer = api.definePlugin({ id: "history_observer" });
+		observer.onSessionStart(({ sessionId, ...context }) => {
+			captureHistory("history_observer", sessionId, context);
+		});
+		observer.onSessionHistoryNavigated(({ sessionId, ...context }) => {
+			captureHistory("history_observer", sessionId, context);
+		});
+		if (options.onBeforeHistoryNavigation !== undefined) {
+			observer.onBeforeSessionHistoryNavigation(() => {
+				options.onBeforeHistoryNavigation?.();
+				return;
+			});
+		}
+	};
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		pluginFactories: [
+			{ factory, id: "history_entries" },
+			{ factory: observerFactory, id: "history_observer" },
+		],
+		pluginPaths: [],
+		store: persistence.store,
+		workspace,
+	});
+	const sessionId = await sdk.createEmptySession({
+		model: DEFAULT_PROVIDER_MODEL_SELECTION,
+	});
+	const handle = await sdk.openSession(sessionId, { autoContinue: false });
+	return {
+		close: async () => {
+			await handle.dispose();
+			await sdk.dispose();
+			persistence.close();
+		},
+		getHistory: (pluginId = "history_entries"): TestPluginSessionHistory => {
+			const history = histories.get(pluginId);
+			if (history === undefined) {
+				throw new Error("The Plugin has no Session History capability.");
+			}
+			return history;
+		},
+		handle,
+		recorder,
+		sdk,
+		sessionId,
+		store: persistence.store,
+	};
+};
+
+test("Plugin Session History reads paginated entries only from the Selected Path", async () => {
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-custom-history-selected-path"
+	);
+	try {
+		const originalHistory = fixture.getHistory();
+		const firstId = await originalHistory.append(
+			"item-added",
+			{ itemId: "A" },
+			"plugin-history-add-A"
+		);
+		const secondId = await originalHistory.append(
+			"item-added",
+			{ itemId: "B" },
+			"plugin-history-add-B"
+		);
+		expect(
+			(await fixture.getHistory("history_observer").read({ limit: 20 })).entries
+		).toHaveLength(0);
+		const firstPage = await originalHistory.read({ limit: 1 });
+		expect(firstPage.entries).toMatchObject([
+			{ id: firstId, type: "item-added", payload: { itemId: "A" } },
+		]);
+		expect(firstPage.nextCursor).toBeDefined();
+		const secondPage = await originalHistory.read({
+			cursor: firstPage.nextCursor,
+			limit: 1,
+		});
+		expect(secondPage.entries).toMatchObject([
+			{ id: secondId, type: "item-added", payload: { itemId: "B" } },
+		]);
+
+		await fixture.handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "plugin-history-branch-at-root",
+		});
+		const newBranchHistory = fixture.getHistory();
+		const resetId = await newBranchHistory.append(
+			"cart-reset",
+			{ itemCount: 0 },
+			"plugin-history-reset-at-root"
+		);
+		const selectedPath = await newBranchHistory.read({ limit: 20 });
+		expect(selectedPath.entries).toMatchObject([
+			{ id: resetId, type: "cart-reset", payload: { itemCount: 0 } },
+		]);
+		expect(selectedPath.entries).toHaveLength(1);
+		const tree = await fixture.sdk.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		const opaqueTreeEntry = tree.entries.find(
+			(entry) => entry.kind === "plugin-entry"
+		);
+		expect(opaqueTreeEntry).toBeDefined();
+		expect(opaqueTreeEntry).not.toHaveProperty("payload");
+		expect(fixture.recorder.requests).toEqual([]);
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("Plugin Session History operation IDs replay identical entries and reject changed content", async () => {
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-custom-history-operation-replay"
+	);
+	try {
+		const history = fixture.getHistory();
+		const firstId = await history.append(
+			"item-added",
+			{ itemId: "A" },
+			"plugin-history-operation-replay"
+		);
+		const retryId = await history.append(
+			"item-added",
+			{ itemId: "A" },
+			"plugin-history-operation-replay"
+		);
+		expect(retryId).toBe(firstId);
+		await expect(
+			history.append(
+				"item-added",
+				{ itemId: "B" },
+				"plugin-history-operation-replay"
+			)
+		).rejects.toMatchObject({
+			code: "plugin_session_history_write_failed",
+			writeOutcome: {
+				kind: "not-committed",
+				error: { code: "session_operation_conflict" },
+			},
+		});
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("Forking a Selected Path preserves opaque Plugin history entries before its checkpoint", async () => {
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-custom-history-fork"
+	);
+	let forkHandle: SessionSdkHandle | undefined;
+	try {
+		const sourceHistory = fixture.getHistory();
+		await sourceHistory.append(
+			"item-added",
+			{ itemId: "forked-item" },
+			"plugin-history-before-fork-checkpoint"
+		);
+		const record = buildUserSessionRecord({
+			agentId: agentId("plugin-history-fork"),
+			message: createSessionUserMessage("fork checkpoint"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("plugin-history-fork-checkpoint"),
+		});
+		await fixture.store.commitSessionRecord({
+			record,
+			sessionId: fixture.sessionId,
+		});
+		const fork = await fixture.sdk.forkSession(
+			fixture.sessionId,
+			{ recordId: record.id },
+			"plugin-history-fork-operation"
+		);
+		forkHandle = fork.handle;
+		const tree = await fixture.sdk.readSessionHistoryTreePage(fork.id);
+		const forkedEntry = tree.entries.find(
+			(entry) => entry.kind === "plugin-entry"
+		);
+		expect(forkedEntry).toMatchObject({
+			kind: "plugin-entry",
+			pluginId: "history_entries",
+			selectedPath: true,
+			type: "item-added",
+		});
+		const forkedHistory = fixture.getHistory();
+		expect((await forkedHistory.read({ limit: 20 })).entries).toMatchObject([
+			{ type: "item-added", payload: { itemId: "forked-item" } },
+		]);
+	} finally {
+		await forkHandle?.dispose();
+		await fixture.close();
+	}
+});
+
+test("Plugin Session History capabilities cannot append after navigation changes the path", async () => {
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-custom-history-stale-writer"
+	);
+	try {
+		const staleHistory = fixture.getHistory();
+		await staleHistory.append(
+			"item-added",
+			{ itemId: "A" },
+			"plugin-history-stale-write-setup"
+		);
+		await fixture.handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "plugin-history-stale-writer-root",
+		});
+		fixture.getHistory();
+		await expect(
+			staleHistory.append(
+				"item-added",
+				{ itemId: "stale" },
+				"plugin-history-stale-write-after-navigation"
+			)
+		).rejects.toThrow("Plugin Session History capability is no longer active.");
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("Plugin Session History commits before navigation can retarget its parent entry", async () => {
+	const operationId = "plugin-history-write-before-navigation";
+	const generationValidated = Promise.withResolvers<void>();
+	const allowWrite = Promise.withResolvers<void>();
+	const beforeNavigation = Promise.withResolvers<void>();
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-history-write-navigation-race",
+		{
+			onBeforeHistoryNavigation: () => beforeNavigation.resolve(),
+			testObserver: {
+				onPluginWriteGenerationValidated: async (write) => {
+					if (write.operationId === operationId) {
+						generationValidated.resolve();
+						await allowWrite.promise;
+					}
+				},
+			},
+		}
+	);
+	try {
+		const history = fixture.getHistory();
+		const parentEntryId = await history.append(
+			"item-added",
+			{ itemId: "parent" },
+			"plugin-history-write-navigation-race-parent"
+		);
+		const pendingWrite = history.append(
+			"item-added",
+			{ itemId: "child" },
+			operationId
+		);
+		await generationValidated.promise;
+		const navigation = fixture.handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "plugin-history-write-navigation-race-root",
+		});
+		await beforeNavigation.promise;
+		allowWrite.resolve();
+		await pendingWrite.catch(() => undefined);
+		await expect(navigation).resolves.toMatchObject({ kind: "navigated" });
+
+		const tree = await fixture.store.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		const childEntry = tree.entries.find(
+			({ id }) =>
+				id === sessionHistoryEntryIdForOperation(fixture.sessionId, operationId)
+		);
+		expect(tree.activeLeafId).toBeNull();
+		expect(childEntry).toMatchObject({
+			kind: "plugin-entry",
+			parentEntryId,
+			pluginId: "history_entries",
+			selectedPath: false,
+			type: "item-added",
+		});
+	} finally {
+		allowWrite.resolve();
+		await fixture.close();
+	}
+});
+
+test("Plugin State commits before navigation can retarget its parent entry", async () => {
+	const operationId = "plugin-state-write-before-navigation";
+	const generationValidated = Promise.withResolvers<void>();
+	const allowWrite = Promise.withResolvers<void>();
+	const beforeNavigation = Promise.withResolvers<void>();
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-state-write-navigation-race",
+		{
+			onBeforeHistoryNavigation: () => beforeNavigation.resolve(),
+			testObserver: {
+				onPluginWriteGenerationValidated: async (write) => {
+					if (write.operationId === operationId) {
+						generationValidated.resolve();
+						await allowWrite.promise;
+					}
+				},
+			},
+		}
+	);
+	try {
+		const firstOperationId = "plugin-state-write-navigation-race-parent";
+		const firstMutation = await fixture.store.mutatePluginSessionState(
+			fixture.sessionId,
+			"history_entries",
+			{
+				key: "status",
+				kind: "set",
+				operationId: firstOperationId,
+				schemaVersion: 1,
+				expectedHistoryGeneration: 0,
+				value: { itemId: "parent" },
+			}
+		);
+		expect(firstMutation).toMatchObject({
+			kind: "written",
+			writeOutcome: { kind: "committed" },
+		});
+		const parentEntryId = sessionHistoryEntryIdForOperation(
+			fixture.sessionId,
+			firstOperationId
+		);
+		const pendingWrite = fixture.store.mutatePluginSessionState(
+			fixture.sessionId,
+			"history_entries",
+			{
+				key: "status",
+				kind: "set",
+				operationId,
+				schemaVersion: 1,
+				expectedHistoryGeneration: 0,
+				value: { itemId: "child" },
+			}
+		);
+		await generationValidated.promise;
+		const navigation = fixture.handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "plugin-state-write-navigation-race-root",
+		});
+		await beforeNavigation.promise;
+		allowWrite.resolve();
+		await expect(pendingWrite).resolves.toMatchObject({
+			kind: "written",
+			writeOutcome: { kind: "committed" },
+		});
+		await expect(navigation).resolves.toMatchObject({ kind: "navigated" });
+
+		const tree = await fixture.store.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		const childEntry = tree.entries.find(
+			({ id }) =>
+				id === sessionHistoryEntryIdForOperation(fixture.sessionId, operationId)
+		);
+		expect(tree.activeLeafId).toBeNull();
+		expect(childEntry).toMatchObject({
+			kind: "plugin-state",
+			operation: "set",
+			parentEntryId,
+			pluginId: "history_entries",
+			selectedPath: false,
+		});
+	} finally {
+		allowWrite.resolve();
+		await fixture.close();
+	}
+});
 
 test("public Session SDK includes Plugin State in the paginated history tree without exposing its value", async () => {
 	const databasePath = path.join(
@@ -397,11 +854,10 @@ test("Session SDK navigation selects one branch and a retry does not move a late
 			throw new Error("Expected the root history entry.");
 		}
 
-		const navigation = await sdk.navigateSessionHistory(
-			sessionId,
-			rootEntry.id,
-			"history-navigation-to-root"
-		);
+		const navigation = await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "history-navigation-to-root",
+		});
 		expect(navigation).toMatchObject({
 			activeLeafId: rootEntry.id,
 			kind: "navigated",
@@ -421,11 +877,10 @@ test("Session SDK navigation selects one branch and a retry does not move a late
 			record: newBranchRecord,
 			sessionId,
 		});
-		const retriedNavigation = await sdk.navigateSessionHistory(
-			sessionId,
-			rootEntry.id,
-			"history-navigation-to-root"
-		);
+		const retriedNavigation = await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "history-navigation-to-root",
+		});
 		expect(retriedNavigation).toMatchObject({ kind: "unchanged" });
 
 		const selectedTree = await sdk.readSessionHistoryTreePage(sessionId);
@@ -439,6 +894,219 @@ test("Session SDK navigation selects one branch and a retry does not move a late
 		expect(selectedPathByRecord.get(oldBranchRecord.id)).toBe(false);
 		expect(selectedPathByRecord.get(newBranchRecord.id)).toBe(true);
 		expect(recorder.requests).toEqual([]);
+	} finally {
+		await sdk.dispose();
+		persistence.close();
+	}
+});
+
+test("navigating to a path without an Agent falls back to the configured SDK Agent", async () => {
+	const databasePath = path.join(
+		root,
+		"history-navigation-agent-fallback",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const configuredDefaultAgent = agentId("history-configured-default");
+	const branchAgent = agentId("history-branch-agent");
+	const registry = buildAgentRegistry({
+		diagnostics: [],
+		document: {
+			agents: {
+				[configuredDefaultAgent]: {
+					description: "Configured default Agent for navigation tests.",
+					instructions: "Use the selected Provider Model.",
+					role: "primary",
+				},
+				[branchAgent]: {
+					description: "Agent recorded on one history branch.",
+					instructions: "Use the selected Provider Model.",
+					role: "primary",
+				},
+			},
+			default_agent: configuredDefaultAgent,
+		},
+		sourceFor: () => undefined,
+		sources: [],
+	});
+	const recorder = createFakeProviderRecorder();
+	const sdk = await createSessionSdkWithRuntime({
+		agent: configuredDefaultAgent,
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		getRegistry: () => registry,
+		pluginPaths: [],
+		store: persistence.store,
+		workspace,
+	});
+	let handle: SessionSdkHandle | undefined;
+	let unsubscribe: (() => void) | undefined;
+	try {
+		const sessionId = await sdk.createEmptySession({
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		});
+		const branchRecord = buildUserSessionRecord({
+			agentId: branchAgent,
+			message: createSessionUserMessage("recorded only on the old branch"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-agent-fallback-branch-turn"),
+		});
+		await persistence.store.commitSessionRecord({
+			record: branchRecord,
+			sessionId,
+		});
+		handle = await sdk.openSession(sessionId, { autoContinue: false });
+
+		const navigation = await handle.navigateHistory({
+			operationId: "history-agent-fallback-to-root",
+			targetEntryId: null,
+		});
+		expect(navigation).toMatchObject({ kind: "navigated", activeLeafId: null });
+
+		const turnCompleted = Promise.withResolvers<void>();
+		unsubscribe = handle.onEvent((event) => {
+			if (event.type === "agent-turn-completed") {
+				turnCompleted.resolve();
+			}
+		});
+		const promptText =
+			"Use the configured default Agent after navigating to root.";
+		const admission = await handle.prompt({ text: promptText });
+		expect(admission.rejected).toBe(false);
+		await turnCompleted.promise;
+
+		const selectedPath = await sdk.readSessionHistoryTreePage(sessionId);
+		const promptedRecord = selectedPath.entries.find(
+			(entry) =>
+				entry.kind === "record" &&
+				entry.record.messages.some(
+					(message) =>
+						message.role === "user" &&
+						message.parts.some(
+							(part) => part.type === "text" && part.text.includes(promptText)
+						)
+				)
+		);
+		expect(promptedRecord?.kind).toBe("record");
+		if (promptedRecord?.kind !== "record") {
+			throw new Error("Expected the post-navigation prompt record.");
+		}
+		expect(promptedRecord.record.agentId).toBe(configuredDefaultAgent);
+		expect(recorder.requests).toHaveLength(1);
+	} finally {
+		unsubscribe?.();
+		await handle?.dispose();
+		await sdk.dispose();
+		persistence.close();
+	}
+});
+
+test("reopening an imported Session ignores an unavailable Agent on an inactive sibling", async () => {
+	const databasePath = path.join(
+		root,
+		"history-navigation-inactive-agent-sibling",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const selectedAgent = agentId("history-selected-agent");
+	const inactiveAgent = agentId("history-inactive-unavailable-agent");
+	const registry = buildAgentRegistry({
+		diagnostics: [],
+		document: {
+			agents: {
+				[selectedAgent]: {
+					description: "Agent on the selected history path.",
+					instructions: "Use the selected Provider Model.",
+					role: "primary",
+				},
+			},
+			default_agent: selectedAgent,
+		},
+		sourceFor: () => undefined,
+		sources: [],
+	});
+	const store = {
+		...persistence.store,
+		isSessionImported: async () => true,
+	};
+	const recorder = createFakeProviderRecorder();
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		getRegistry: () => registry,
+		pluginPaths: [],
+		store,
+		workspace,
+	});
+	try {
+		const { id: sessionId } = await persistence.store.createEmptySession({
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		});
+		const selectedRecord = buildUserSessionRecord({
+			agentId: selectedAgent,
+			message: createSessionUserMessage("selected path agent"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("inactive-agent-sibling-selected-turn"),
+		});
+		await persistence.store.commitSessionRecord({
+			record: selectedRecord,
+			sessionId,
+		});
+		const selectedTree =
+			await persistence.store.readSessionHistoryTreePage(sessionId);
+		const selectedEntryId = selectedTree.activeLeafId;
+		if (selectedEntryId === null) {
+			throw new Error("Expected the selected Agent's history entry.");
+		}
+
+		const rootNavigation = await persistence.store.navigateSessionHistory(
+			sessionId,
+			{
+				operationId: "inactive-agent-sibling-root",
+				targetEntryId: null,
+			}
+		);
+		expect(rootNavigation.kind).toBe("committed");
+		const inactiveRecord = buildUserSessionRecord({
+			agentId: inactiveAgent,
+			message: createSessionUserMessage("inactive sibling agent"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("inactive-agent-sibling-turn"),
+		});
+		await persistence.store.commitSessionRecord({
+			record: inactiveRecord,
+			sessionId,
+		});
+		const returnNavigation = await persistence.store.navigateSessionHistory(
+			sessionId,
+			{
+				operationId: "inactive-agent-sibling-return",
+				targetEntryId: selectedEntryId,
+			}
+		);
+		expect(returnNavigation.kind).toBe("committed");
+
+		const opened = await sdk.openSession(sessionId, { autoContinue: false });
+		try {
+			expect(opened.sessionId).toBe(sessionId);
+			const selectedPath =
+				await persistence.store.readSessionHistoryPath(sessionId);
+			expect(selectedPath.records.map(({ agentId }) => agentId)).toEqual([
+				selectedAgent,
+			]);
+		} finally {
+			await opened.dispose();
+		}
 	} finally {
 		await sdk.dispose();
 		persistence.close();
@@ -470,11 +1138,10 @@ test("public Session SDK rejects a missing history endpoint without changing the
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
 		const beforeNavigation = await sdk.readSessionHistoryTreePage(sessionId);
-		const outcome = await sdk.navigateSessionHistory(
-			sessionId,
-			"missing-history-endpoint",
-			"history-navigation-missing-endpoint"
-		);
+		const outcome = await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: toSessionHistoryEntryId("missing-history-endpoint"),
+			operationId: "history-navigation-missing-endpoint",
+		});
 		const afterNavigation = await sdk.readSessionHistoryTreePage(sessionId);
 
 		expect(outcome).toMatchObject({
@@ -558,10 +1225,10 @@ test("public Session SDK refuses navigation after input admission while a Provid
 		await enteredProvider.promise;
 		const beforeNavigation = await sdk.readSessionHistoryTreePage(sessionId);
 
-		const outcome = await handle.navigateHistory(
-			null,
-			"history-navigation-during-active-request"
-		);
+		const outcome = await handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "history-navigation-during-active-request",
+		});
 		expect(outcome).toMatchObject({ kind: "rejected", code: "session_busy" });
 		const afterNavigation = await sdk.readSessionHistoryTreePage(sessionId);
 		expect(afterNavigation.activeLeafId).toBe(beforeNavigation.activeLeafId);
@@ -685,11 +1352,10 @@ test("public Session SDK separates whole-session usage from selected-path usage"
 		if (rootEntry === undefined || preservedBranchEntry === undefined) {
 			throw new Error("Expected root and preserved branch entries.");
 		}
-		await sdk.navigateSessionHistory(
-			sessionId,
-			rootEntry.id,
-			"history-selected-path-return-to-root"
-		);
+		await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "history-selected-path-return-to-root",
+		});
 		const newBranchRecord = recordWithUsage(
 			"history-selected-path-new",
 			agentTurnId("history-selected-path-new-turn"),
@@ -709,11 +1375,10 @@ test("public Session SDK separates whole-session usage from selected-path usage"
 		});
 		expect(historicalSelectedPath.usage.selectedPath.inputTokens).toBe(120);
 
-		await sdk.navigateSessionHistory(
-			sessionId,
-			preservedBranchEntry.id,
-			"history-selected-path-return-to-preserved"
-		);
+		await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: preservedBranchEntry.id,
+			operationId: "history-selected-path-return-to-preserved",
+		});
 		const selectedPreservedBranch = await sdk.getSessionStatistics(sessionId);
 		expect(selectedPreservedBranch.usage.actual.inputTokens).toBe(150);
 		expect(selectedPreservedBranch.usage.selectedPath.inputTokens).toBe(120);
@@ -779,11 +1444,10 @@ test("public Session SDK can return to a preserved sibling history branch", asyn
 		if (preservedBranchEntry === undefined || rootEntry === undefined) {
 			throw new Error("Expected root and preserved branch entries.");
 		}
-		await sdk.navigateSessionHistory(
-			sessionId,
-			rootEntry.id,
-			"history-navigation-return-to-root"
-		);
+		await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "history-navigation-return-to-root",
+		});
 		const newBranchRecord = buildUserSessionRecord({
 			agentId: agentId("history-navigation-return"),
 			message: createSessionUserMessage("new branch"),
@@ -795,11 +1459,10 @@ test("public Session SDK can return to a preserved sibling history branch", asyn
 			sessionId,
 		});
 
-		const returned = await sdk.navigateSessionHistory(
-			sessionId,
-			preservedBranchEntry.id,
-			"history-navigation-return-to-preserved-branch"
-		);
+		const returned = await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: preservedBranchEntry.id,
+			operationId: "history-navigation-return-to-preserved-branch",
+		});
 		expect(returned).toMatchObject({ kind: "navigated" });
 		const returnedTree = await sdk.readSessionHistoryTreePage(sessionId);
 		const selectedPathByRecord = new Map(
@@ -810,6 +1473,108 @@ test("public Session SDK can return to a preserved sibling history branch", asyn
 		expect(selectedPathByRecord.get(rootRecord.id)).toBe(true);
 		expect(selectedPathByRecord.get(preservedBranchRecord.id)).toBe(true);
 		expect(selectedPathByRecord.get(newBranchRecord.id)).toBe(false);
+		expect(recorder.requests).toEqual([]);
+	} finally {
+		await sdk.dispose();
+		persistence.close();
+	}
+});
+
+test("public Session SDK lets a Plugin veto navigation to an inactive sibling before commit", async () => {
+	const databasePath = path.join(
+		root,
+		"history-navigation-sibling-veto",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const recorder = createFakeProviderRecorder();
+	const hookTargets: (string | null)[] = [];
+	let preservedBranchEntryId: string | undefined;
+	const factory: PluginFactory = (api) => {
+		api
+			.definePlugin({ id: "history_navigation_veto" })
+			.onBeforeSessionHistoryNavigation(({ toEntryId }) => {
+				hookTargets.push(toEntryId);
+				return toEntryId === preservedBranchEntryId
+					? { cancel: "preserved sibling is protected" }
+					: undefined;
+			});
+	};
+	const sdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: workspace,
+		databasePath,
+		pluginFactories: [{ factory, id: "history_navigation_veto" }],
+		pluginPaths: [],
+		store: persistence.store,
+		workspace,
+	});
+	try {
+		const { id: sessionId } = await persistence.store.createEmptySession({});
+		const rootRecord = buildUserSessionRecord({
+			agentId: agentId("history-navigation-sibling-veto"),
+			message: createSessionUserMessage("shared root"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-navigation-sibling-veto-root"),
+		});
+		const preservedRecord = buildUserSessionRecord({
+			agentId: agentId("history-navigation-sibling-veto"),
+			message: createSessionUserMessage("preserved branch"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-navigation-sibling-veto-preserved"),
+		});
+		await persistence.store.commitSessionRecord({
+			record: rootRecord,
+			sessionId,
+		});
+		await persistence.store.commitSessionRecord({
+			record: preservedRecord,
+			sessionId,
+		});
+		const initialTree = await sdk.readSessionHistoryTreePage(sessionId);
+		const rootEntry = initialTree.entries.find(
+			(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
+		);
+		const preservedEntry = initialTree.entries.find(
+			(entry) =>
+				entry.kind === "record" && entry.recordId === preservedRecord.id
+		);
+		if (rootEntry === undefined || preservedEntry === undefined) {
+			throw new Error("Expected root and preserved sibling entries.");
+		}
+		preservedBranchEntryId = preservedEntry.id;
+		await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "history-navigation-sibling-veto-to-root",
+		});
+		const newBranchRecord = buildUserSessionRecord({
+			agentId: agentId("history-navigation-sibling-veto"),
+			message: createSessionUserMessage("new branch"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("history-navigation-sibling-veto-new-branch"),
+		});
+		await persistence.store.commitSessionRecord({
+			record: newBranchRecord,
+			sessionId,
+		});
+		const beforeVeto = await sdk.readSessionHistoryTreePage(sessionId);
+		const veto = await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: preservedEntry.id,
+			operationId: "history-navigation-sibling-veto-preserved",
+		});
+		const afterVeto = await sdk.readSessionHistoryTreePage(sessionId);
+
+		expect(hookTargets).toContain(preservedEntry.id);
+		expect(veto).toMatchObject({
+			kind: "rejected",
+			code: "plugin_navigation_rejected",
+			reason: "preserved sibling is protected",
+		});
+		expect(afterVeto.activeLeafId).toBe(beforeVeto.activeLeafId);
 		expect(recorder.requests).toEqual([]);
 	} finally {
 		await sdk.dispose();
@@ -867,11 +1632,10 @@ test("public Session SDK refuses fork and export before publishing when history 
 		if (rootEntry === undefined) {
 			throw new Error("Expected the shared root history entry.");
 		}
-		await sdk.navigateSessionHistory(
-			sessionId,
-			rootEntry.id,
-			"multi-branch-export-return-to-root"
-		);
+		await sdk.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "multi-branch-export-return-to-root",
+		});
 		const secondBranchRecord = buildUserSessionRecord({
 			agentId: agentId("multi-branch-export"),
 			message: createSessionUserMessage("second branch"),
@@ -1293,7 +2057,10 @@ test("Session SDK restores Plugin State on the selected branch and revokes stale
 			throw new Error("Expected the saved branch Plugin State entry.");
 		}
 
-		const toRoot = await handle.navigateHistory(null, "history-state-to-root");
+		const toRoot = await handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "history-state-to-root",
+		});
 		expect(toRoot).toMatchObject({ kind: "navigated", activeLeafId: null });
 		expect(navigationReads.at(-1)).toEqual({
 			entryId: null,
@@ -1329,10 +2096,10 @@ test("Session SDK restores Plugin State on the selected branch and revokes stale
 				?.selectedPath
 		).toBe(true);
 
-		const toOldState = await handle.navigateHistory(
-			oldStateEntry.id,
-			"history-state-return-to-preserved-branch"
-		);
+		const toOldState = await handle.navigateHistory({
+			targetEntryId: oldStateEntry.id,
+			operationId: "history-state-return-to-preserved-branch",
+		});
 		expect(toOldState).toMatchObject({
 			kind: "navigated",
 			activeLeafId: oldStateEntry.id,

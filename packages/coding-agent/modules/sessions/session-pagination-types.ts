@@ -5,7 +5,11 @@ import type {
 	SessionSubmissionStatus,
 } from "@wincode/agent-core";
 import type { ModelUsage, ThinkingLevel } from "@wincode/ai";
-import type { CompactionId, SessionId } from "../../shared/identifiers";
+import type {
+	CompactionId,
+	SessionHistoryEntryId,
+	SessionId,
+} from "../../shared/identifiers";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
 import type { SessionCompaction } from "./compaction/types";
 import type { SessionContextEdit } from "./context-edits";
@@ -23,6 +27,11 @@ export type Session = Readonly<{
 export type SessionPageOptions = Readonly<{
 	cursor?: string;
 	limit?: number;
+}>;
+
+export type SessionHistoryNavigationRequest = Readonly<{
+	operationId: string;
+	targetEntryId: SessionHistoryEntryId | null;
 }>;
 
 export type SessionCatalogPage = Readonly<{
@@ -80,9 +89,9 @@ export type SessionHistoryPage = Readonly<{
 
 export type SessionHistoryTreeRecordEntry = Readonly<{
 	createdAt: Date;
-	id: string;
+	id: SessionHistoryEntryId;
 	kind: "record";
-	parentEntryId: string | null;
+	parentEntryId: SessionHistoryEntryId | null;
 	record: SessionRecord;
 	recordId: SessionRecord["id"];
 	selectedPath: boolean;
@@ -93,24 +102,35 @@ export type SessionHistoryTreeRecordEntry = Readonly<{
 
 export type SessionHistoryTreePluginStateEntry = Readonly<{
 	createdAt: Date;
-	id: string;
+	id: SessionHistoryEntryId;
 	key: string;
 	kind: "plugin-state";
 	operation: "delete" | "set";
-	parentEntryId: string | null;
+	parentEntryId: SessionHistoryEntryId | null;
 	pluginId: string;
 	schemaVersion: number;
 	selectedPath: boolean;
 	sequence: number;
 }>;
 
+export type SessionHistoryTreePluginEntry = Readonly<{
+	createdAt: Date;
+	id: SessionHistoryEntryId;
+	kind: "plugin-entry";
+	parentEntryId: SessionHistoryEntryId | null;
+	pluginId: string;
+	selectedPath: boolean;
+	sequence: number;
+	type: string;
+}>;
+
 export type SessionHistoryTreeContextEditEntry = Readonly<{
 	createdAt: Date;
-	id: string;
+	id: SessionHistoryEntryId;
 	kind: "context-edit";
 	operation: "omit" | "replace";
 	operationId: string;
-	parentEntryId: string | null;
+	parentEntryId: SessionHistoryEntryId | null;
 	selectedPath: boolean;
 	sequence: number;
 	targetId: SessionMessageId;
@@ -119,9 +139,9 @@ export type SessionHistoryTreeContextEditEntry = Readonly<{
 export type SessionHistoryTreeCompactionEntry = Readonly<{
 	compactionId: CompactionId;
 	createdAt: Date;
-	id: string;
+	id: SessionHistoryEntryId;
 	kind: "compaction";
-	parentEntryId: string | null;
+	parentEntryId: SessionHistoryEntryId | null;
 	selectedPath: boolean;
 	sequence: number;
 	trigger: SessionCompaction["trigger"];
@@ -130,10 +150,10 @@ export type SessionHistoryTreeCompactionEntry = Readonly<{
 export type SessionHistoryTreeSubmissionStatusEntry = Readonly<{
 	createdAt: Date;
 	failure?: string;
-	id: string;
+	id: SessionHistoryEntryId;
 	kind: "submission-status";
 	messageId: SessionMessageId;
-	parentEntryId: string | null;
+	parentEntryId: SessionHistoryEntryId | null;
 	recordId: SessionRecord["id"];
 	selectedPath: boolean;
 	sequence: number;
@@ -146,10 +166,11 @@ export type SessionHistoryTreeEntry =
 	| SessionHistoryTreeRecordEntry
 	| SessionHistoryTreeContextEditEntry
 	| SessionHistoryTreeCompactionEntry
+	| SessionHistoryTreePluginEntry
 	| SessionHistoryTreeSubmissionStatusEntry;
 
 export type SessionHistoryTreePage = Readonly<{
-	activeLeafId: string | null;
+	activeLeafId: SessionHistoryEntryId | null;
 	historyGeneration: number;
 	entries: SessionHistoryTreeEntry[];
 	nextCursor?: string;
@@ -157,7 +178,7 @@ export type SessionHistoryTreePage = Readonly<{
 }>;
 
 export type SessionHistoryPath = Readonly<{
-	activeLeafId: string | null;
+	activeLeafId: SessionHistoryEntryId | null;
 	compactions: SessionCompaction[];
 	contextEdits: SessionContextEdit[];
 	entries: readonly SessionHistoryTreeEntry[];

@@ -36,6 +36,7 @@ import {
 	isContextOverflowFailure,
 	isProviderReportedContextOverflow,
 } from "../compaction/overflow-recovery";
+import { validateSessionInputContext } from "../continuation-context";
 import type { SessionViewState } from "../hooks/runtime-turn";
 import {
 	createSessionUserMessage,
@@ -563,6 +564,15 @@ const prepareSessionSubmission = async ({
 	const { ports } = deps;
 	try {
 		await ports.assertProviderModelSelection(input);
+		const inputContextValidation = validateSessionInputContext(
+			deps.getContext()
+		);
+		if (inputContextValidation.kind === "rejected") {
+			return {
+				kind: "rejected",
+				reason: inputContextValidation.reason,
+			};
+		}
 		// Settings and the attachment budget are resolved before anything joins a
 		// compaction, so a compaction that starts while they resolve is joined by
 		// the settle that follows rather than raced by this turn.
