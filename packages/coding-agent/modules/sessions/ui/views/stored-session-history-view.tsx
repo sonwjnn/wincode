@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import type { SessionWriterLockOwner } from "@/modules/sessions/storage/session-writer-lock";
+import type { SessionId } from "@/shared/identifiers";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionCompaction } from "../../compaction/types";
 import type { SessionMessage } from "../../message";
@@ -20,6 +21,7 @@ import {
 
 type StoredSessionHistoryViewProps = Readonly<{
 	compactions: readonly SessionCompaction[];
+	sessionId: SessionId;
 	forkProvenance?: SessionForkProvenance;
 	hasMoreHistory: boolean;
 	historyError?: string;
@@ -41,6 +43,7 @@ type StoredSessionHistoryViewProps = Readonly<{
 
 export function StoredSessionHistoryView({
 	compactions,
+	sessionId,
 	forkProvenance,
 	hasMoreHistory,
 	historyError,
@@ -126,6 +129,7 @@ export function StoredSessionHistoryView({
 					<SessionForkProvenanceBanner
 						inheritedUsage={statistics.usage.inherited}
 						provenance={forkProvenance}
+						sessionId={sessionId}
 					/>
 				)}
 				<text fg={colors.textMuted}>

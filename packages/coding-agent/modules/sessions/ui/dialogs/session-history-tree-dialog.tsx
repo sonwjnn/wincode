@@ -1,5 +1,7 @@
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
+import type { SessionRecordId } from "@wincode/agent-core";
+import { getErrorMessage } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionSdk } from "@/modules/sessions/sdk-contract";
@@ -17,6 +19,7 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 
+const DIALOG_CHROME_ROWS = 14;
 const HISTORY_PAGE_SIZE = 40;
 const MAX_TREE_INDENT = 12;
 const MAX_PREVIEW_LENGTH = 4000;
@@ -25,16 +28,23 @@ type SessionHistoryReader = Pick<
 	SessionSdk,
 	"navigateSessionHistory" | "readSessionHistoryTreePage"
 >;
+type HistoryTreeKey = Readonly<{ ctrl: boolean; name: string }>;
 
 type SessionHistoryTreeDialogContentProps = {
+	readonly isRewindDisabled?: boolean;
+	readonly onForkCheckpoint?: (recordId: SessionRecordId) => Promise<SessionId>;
+	readonly onRewindCheckpoint?: (recordId: SessionRecordId) => Promise<void>;
 	readonly sessionId: SessionId;
 	readonly sessionSdk: SessionHistoryReader;
 };
 
+const normalizeHistoryLabel = (value: string): string =>
+	stripControlCharacters(value).replace(/\s+/gu, " ").trim();
+
 const getRecordText = (
 	entry: Extract<SessionHistoryTreeEntry, { kind: "record" }>
 ): string =>
-	stripControlCharacters(
+	normalizeHistoryLabel(
 		entry.record.messages
 			.flatMap((message) =>
 				message.parts.flatMap((part) =>
@@ -42,27 +52,21 @@ const getRecordText = (
 				)
 			)
 			.join(" ")
-	)
-		.replace(/\s+/gu, " ")
-		.trim();
+	);
 
 const getPluginStateEntryTitle = (
 	entry: Extract<SessionHistoryTreeEntry, { kind: "plugin-state" }>
 ): string => {
-	const pluginId = stripControlCharacters(entry.pluginId)
-		.replace(/\s+/gu, " ")
-		.trim();
-	const key = stripControlCharacters(entry.key).replace(/\s+/gu, " ").trim();
+	const pluginId = normalizeHistoryLabel(entry.pluginId);
+	const key = normalizeHistoryLabel(entry.key);
 	return `Plugin State · ${pluginId} / ${key}`;
 };
 
 const getPluginHistoryEntryTitle = (
 	entry: Extract<SessionHistoryTreeEntry, { kind: "plugin-entry" }>
 ): string => {
-	const pluginId = stripControlCharacters(entry.pluginId)
-		.replace(/\s+/gu, " ")
-		.trim();
-	const type = stripControlCharacters(entry.type).replace(/\s+/gu, " ").trim();
+	const pluginId = normalizeHistoryLabel(entry.pluginId);
+	const type = normalizeHistoryLabel(entry.type);
 	return `Plugin Entry · ${pluginId} / ${type}`;
 };
 
@@ -163,6 +167,9 @@ function SessionHistoryEntryPreview({
 }
 
 export function SessionHistoryTreeDialogContent({
+	isRewindDisabled = false,
+	onForkCheckpoint,
+	onRewindCheckpoint,
 	sessionId,
 	sessionSdk,
 }: SessionHistoryTreeDialogContentProps) {
@@ -170,11 +177,6 @@ export function SessionHistoryTreeDialogContent({
 	const { height } = useTerminalDimensions();
 	useDialogEscape();
 	const { colors } = useTheme();
-	// Reserve dialog chrome, then budget two terminal rows per list item.
-	const maxVisibleItems = Math.max(
-		1,
-		Math.min(8, Math.floor((height - 14) / 2))
-	);
 	const [entries, setEntries] = useState<readonly SessionHistoryTreeEntry[]>(
 		[]
 	);
@@ -186,6 +188,25 @@ export function SessionHistoryTreeDialogContent({
 	const nextCursorRef = useRef<string | undefined>(undefined);
 	const loadingMoreRef = useRef(false);
 	const navigationPendingRef = useRef(false);
+	const actionPendingRef = useRef(false);
+	const [forkedSessionId, setForkedSessionId] = useState<SessionId>();
+	// Reserve dialog chrome, action/help rows, the history-behavior note, and
+	// visible status rows before budgeting two terminal rows per history item.
+	const statusRows =
+		(error === undefined ? 0 : 1) + (forkedSessionId === undefined ? 0 : 2);
+	const actionHelpRows =
+		(onForkCheckpoint === undefined ? 0 : 1) +
+		(onRewindCheckpoint === undefined ? 0 : 1) +
+		2;
+	const maxVisibleItems = Math.max(
+		1,
+		Math.min(
+			8,
+			Math.floor(
+				(height - DIALOG_CHROME_ROWS - actionHelpRows - statusRows) / 2
+			)
+		)
+	);
 	const depths = useMemo(() => getEntryDepths(entries), [entries]);
 
 	useEffect(() => {
@@ -301,6 +322,120 @@ export function SessionHistoryTreeDialogContent({
 		},
 		[navigateTo]
 	);
+	const forkSelectedRecord = useCallback(
+		async (entry: SessionHistoryTreeEntry) => {
+			if (entry.kind !== "record") {
+				setError("Fork and Rewind require a Record checkpoint.");
+				return;
+			}
+			if (onForkCheckpoint === undefined) {
+				setError("Fork is unavailable in this Session view.");
+				return;
+			}
+			if (actionPendingRef.current || navigationPendingRef.current) {
+				return;
+			}
+			actionPendingRef.current = true;
+			setError(undefined);
+			setForkedSessionId(undefined);
+			try {
+				setForkedSessionId(await onForkCheckpoint(entry.recordId));
+			} catch (forkError) {
+				setError(getErrorMessage(forkError, "Could not fork this checkpoint."));
+			} finally {
+				actionPendingRef.current = false;
+			}
+		},
+		[onForkCheckpoint]
+	);
+	const rewindSelectedRecord = useCallback(
+		async (entry: SessionHistoryTreeEntry) => {
+			if (entry.kind !== "record") {
+				setError("Fork and Rewind require a Record checkpoint.");
+				return;
+			}
+			if (onRewindCheckpoint === undefined) {
+				setError("Rewind is unavailable in this Session view.");
+				return;
+			}
+			if (isRewindDisabled) {
+				setError(
+					"Rewind is unavailable while the Session is active or compacting."
+				);
+				return;
+			}
+			if (actionPendingRef.current || navigationPendingRef.current) {
+				return;
+			}
+			actionPendingRef.current = true;
+			setError(undefined);
+			try {
+				await onRewindCheckpoint(entry.recordId);
+				dialog.close();
+			} catch (rewindError) {
+				setError(
+					getErrorMessage(rewindError, "Could not rewind this checkpoint.")
+				);
+			} finally {
+				actionPendingRef.current = false;
+			}
+		},
+		[dialog, isRewindDisabled, onRewindCheckpoint]
+	);
+	const handleNavigationKey = (key: HistoryTreeKey): boolean => {
+		if (
+			(navigationPendingRef.current || actionPendingRef.current) &&
+			(key.name === "enter" ||
+				key.name === "return" ||
+				(key.ctrl && key.name === "home"))
+		) {
+			return true;
+		}
+		if (
+			key.ctrl &&
+			key.name === "down" &&
+			nextCursorRef.current !== undefined
+		) {
+			void loadMore();
+			return true;
+		}
+		return false;
+	};
+	const handleEntryKey = (
+		key: HistoryTreeKey,
+		entry: SessionHistoryTreeEntry | undefined
+	): boolean => {
+		if (key.ctrl && key.name === "home") {
+			void navigateTo(null);
+			return true;
+		}
+		if (entry === undefined) {
+			return false;
+		}
+		if (key.name === "p") {
+			openPreview(entry);
+			return true;
+		}
+		if (key.name === "f" && onForkCheckpoint !== undefined) {
+			void forkSelectedRecord(entry);
+			return true;
+		}
+		if (key.name === "r" && onRewindCheckpoint !== undefined) {
+			void rewindSelectedRecord(entry);
+			return true;
+		}
+		return false;
+	};
+	const handleHistoryKey = (
+		key: HistoryTreeKey,
+		entry: SessionHistoryTreeEntry | undefined,
+		isSearching: boolean
+	): boolean => {
+		if (handleNavigationKey(key)) {
+			return true;
+		}
+		return isSearching ? false : handleEntryKey(key, entry);
+	};
 	const currentLeaf = entries.find((entry) => entry.id === activeLeafId);
 	let leafLabel = "Current leaf: empty Session";
 	if (activeLeafId !== null) {
@@ -313,18 +448,46 @@ export function SessionHistoryTreeDialogContent({
 	return (
 		<box flexDirection="column" gap={1}>
 			<text fg={colors.textMuted}>
-				Enter selects a history entry · p previews · Ctrl+Home selects root · L
-				marks the current leaf
+				Enter selects a history entry within this Session · p previews ·
+				Ctrl+Home selects root · L marks the current leaf
+			</text>
+			{onForkCheckpoint === undefined ? null : (
+				<text fg={colors.textMuted}>
+					f forks the selected Record as a new Session.
+				</text>
+			)}
+			{onRewindCheckpoint === undefined ? null : (
+				<text fg={colors.textMuted}>
+					{`r rewinds by forking and opening the new Session${isRewindDisabled ? " (disabled while active)" : ""}.`}
+				</text>
+			)}
+			<text fg={colors.textMuted}>
+				History actions do not roll back workspace files or replay Tool Calls.
 			</text>
 			<text fg={colors.primary}>{leafLabel}</text>
+			{forkedSessionId === undefined ? null : (
+				<text fg={colors.primary} id="history-tree-fork-result">
+					{`Fork created: Session ${forkedSessionId}. Source Session remains open.`}
+				</text>
+			)}
+			{error === undefined ? null : (
+				<text fg={colors.error} id="history-tree-action-error">
+					{error}
+				</text>
+			)}
 			<SearchListDialogWrapper
 				emptyText={
 					loading ? "Loading Session history..." : "No history entries"
 				}
-				error={error}
 				footerHints={
 					<>
 						<DialogFooterHint label="select" shortcut="enter" />
+						{onForkCheckpoint === undefined ? null : (
+							<DialogFooterHint label="fork Record" shortcut="f" />
+						)}
+						{onRewindCheckpoint === undefined ? null : (
+							<DialogFooterHint label="rewind" shortcut="r" />
+						)}
 						<DialogFooterHint label="preview" shortcut="p" />
 						<DialogFooterHint label="root" shortcut="ctrl+home" />
 						{nextCursor === undefined ? null : (
@@ -345,36 +508,7 @@ export function SessionHistoryTreeDialogContent({
 				isItemActive={(entry) => entry.id === activeLeafId}
 				items={entries}
 				maxVisibleItems={maxVisibleItems}
-				onKey={(key, highlightedEntry, isSearching) => {
-					if (
-						navigationPendingRef.current &&
-						(key.name === "enter" ||
-							key.name === "return" ||
-							(key.ctrl && key.name === "home"))
-					) {
-						return true;
-					}
-					if (
-						key.ctrl &&
-						key.name === "down" &&
-						nextCursorRef.current !== undefined
-					) {
-						void loadMore();
-						return true;
-					}
-					if (isSearching) {
-						return false;
-					}
-					if (key.ctrl && key.name === "home") {
-						void navigateTo(null);
-						return true;
-					}
-					if (key.name === "p" && highlightedEntry !== undefined) {
-						openPreview(highlightedEntry);
-						return true;
-					}
-					return false;
-				}}
+				onKey={handleHistoryKey}
 				onSelect={navigateToEntry}
 				placeholder="Search Session history"
 				renderItem={(entry, _isSelected, isActive) => {

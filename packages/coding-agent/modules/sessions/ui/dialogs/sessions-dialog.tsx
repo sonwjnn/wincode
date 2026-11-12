@@ -115,7 +115,7 @@ const getListItemKey = (item: ListItem): string => {
 
 const getListItemSearchText = (item: ListItem): string => {
 	if (item.kind === "session") {
-		return item.session.title;
+		return `${item.session.title} ${item.session.id}`;
 	}
 	if (item.kind === "load-more") {
 		return "Load more sessions";

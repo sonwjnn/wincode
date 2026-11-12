@@ -100,7 +100,7 @@ export type SessionInitialSubmission = {
 type SessionViewProps = {
 	/** The already-open session this view renders and sends through. */
 	host: SessionHost;
-	onOpenSessionHistory?: () => Promise<void> | void;
+	onOpenSessionHistory?: (isRewindDisabled: boolean) => Promise<void> | void;
 	onRewindCheckpoint?: (
 		recordId: SessionRecordId
 	) => Promise<SessionRewindAction>;
@@ -1223,7 +1223,11 @@ export function SessionView({
 					messages={messages}
 					onCompact={executeCompactionCommand}
 					onEmptySubmit={steerQueuedHead}
-					onOpenSessionHistory={onOpenSessionHistory}
+					onOpenSessionHistory={
+						onOpenSessionHistory === undefined
+							? undefined
+							: () => onOpenSessionHistory(isBusy)
+					}
 					onOpenSettings={openSettings}
 					onProviderModelChanged={host.cancelCacheWarming}
 					onRetry={retryMessage}

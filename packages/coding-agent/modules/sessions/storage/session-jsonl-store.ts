@@ -124,6 +124,7 @@ import {
 	selectedSessionHistoryPathFromLog,
 	sessionHistoryEntryIdForOperation,
 	sessionHistoryEntryIdForRecord,
+	sessionHistoryPathToEntryFromLog,
 	sessionLogOperationDigest,
 	sessionProjectionCursorsEqual,
 } from "./session-jsonl-codec";
@@ -2883,17 +2884,6 @@ const buildSessionHistoryTreeEntries = (
 	};
 };
 
-const hasInactiveHistoryEntries = (
-	state: SessionLogState,
-	sessionId: SessionId,
-	snapshotSequence = state.nextSequence - 1
-): boolean =>
-	buildSessionHistoryTreeEntries(
-		state,
-		sessionId,
-		snapshotSequence
-	).entries.some(({ selectedPath }) => !selectedPath);
-
 const pageSessionHistoryTree = (
 	{
 		activeLeafId,
@@ -3909,6 +3899,22 @@ const isSessionBundleBranchUsageSourceEntry = (
 	);
 };
 
+const filterSessionUsageToSelectedPath = (
+	contributions: readonly SessionUsageContribution[],
+	selectedPathRecords: readonly SessionRecord[],
+	selectedPathCompactionIds: ReadonlySet<string>
+): SessionUsageContribution[] => {
+	const selectedPathTurnIds = new Set(
+		selectedPathRecords.map(({ turnId }) => String(turnId))
+	);
+	return contributions.filter(
+		({ compactionId, turnId }) =>
+			(turnId !== undefined && selectedPathTurnIds.has(String(turnId))) ||
+			(compactionId !== undefined &&
+				selectedPathCompactionIds.has(String(compactionId)))
+	);
+};
+
 type SessionBundleBranchCheckpoint = Readonly<{
 	messageId: SessionMessageId;
 	record: SessionRecord;
@@ -3937,9 +3943,6 @@ const createSessionBundleBranchInheritedUsage = (
 	const selectedPathCompactionIds = new Set(
 		historyProjection.sourceCompactionIds.map(String)
 	);
-	const selectedPathTurnIds = new Set(
-		historyProjection.sourceRecords.map(({ turnId }) => turnId)
-	);
 	const usageSourceEntries = sourceState.entries.filter((entry) =>
 		isSessionBundleBranchUsageSourceEntry(
 			entry,
@@ -3952,11 +3955,10 @@ const createSessionBundleBranchInheritedUsage = (
 		historyProjection.sourceRecords,
 		sourceSessionId
 	);
-	const selectedPathUsage = inheritedAtFork.filter(
-		({ compactionId, turnId }) =>
-			(turnId !== undefined && selectedPathTurnIds.has(turnId)) ||
-			(compactionId !== undefined &&
-				selectedPathCompactionIds.has(String(compactionId)))
+	const selectedPathUsage = filterSessionUsageToSelectedPath(
+		inheritedAtFork,
+		historyProjection.sourceRecords,
+		selectedPathCompactionIds
 	);
 	return remapForkUsageTurnIds(selectedPathUsage, identityMap);
 };
@@ -9695,14 +9697,6 @@ export const createSessionJsonlStore = (
 					assertProjectionReady(sourceSessionId);
 					await assertSessionWritable(sourceSessionId);
 					const sourceState = await ensureProjected(sourceSessionId);
-					if (hasInactiveHistoryEntries(sourceState, sourceSessionId)) {
-						throw new SessionForkError(
-							"session_history_branches_unsupported",
-							"Session fork is not supported for a Session with multiple history branches.",
-							sourceSessionId,
-							operationId
-						);
-					}
 					const checkpointEntry = sourceState.entries.find(
 						(entry) =>
 							recordFromSessionLogEntry(entry)?.id === checkpoint.recordId
@@ -9715,9 +9709,54 @@ export const createSessionJsonlStore = (
 							operationId
 						);
 					}
+					const checkpointHistoryEntry = buildSessionHistoryTreeEntries(
+						sourceState,
+						sourceSessionId,
+						sourceState.nextSequence - 1
+					).entries.find(
+						(entry) =>
+							entry.kind === "record" && entry.recordId === checkpoint.recordId
+					);
+					if (checkpointHistoryEntry === undefined) {
+						throw new SessionForkError(
+							"session_checkpoint_invalid",
+							"Checkpoint Record has no history entry in the source Session.",
+							sourceSessionId,
+							operationId
+						);
+					}
+					const sourcePathEntryIds = sessionHistoryPathToEntryFromLog(
+						sourceState,
+						sourceSessionId,
+						checkpointHistoryEntry.id,
+						checkpointEntry.envelope.sequence
+					);
 					const sourcePrefixEntries = sourceState.entries.filter(
-						({ envelope }) =>
-							envelope.sequence <= checkpointEntry.envelope.sequence
+						({ envelope }) => {
+							if (
+								envelope.type === "session.created" ||
+								envelope.type === "session.forked"
+							) {
+								return true;
+							}
+							if (envelope.sequence > checkpointEntry.envelope.sequence) {
+								return false;
+							}
+							if (
+								envelope.type === "session.metadata-updated" ||
+								envelope.type === "usage.committed"
+							) {
+								return true;
+							}
+							return (
+								isSessionHistoryEntryEventType(envelope.type) &&
+								sourcePathEntryIds.has(
+									toSessionHistoryEntryId(
+										String(envelope.payload.historyEntryId)
+									)
+								)
+							);
+						}
 					);
 					const sourceRecords = sourcePrefixEntries.flatMap((entry) => {
 						const record = recordFromSessionLogEntry(entry);
@@ -9751,6 +9790,28 @@ export const createSessionJsonlStore = (
 						entry.envelope.type === "compaction.committed"
 							? [parseSessionCompactionPayload(entry.envelope.payload)]
 							: []
+					);
+					const sourcePathCompactionIds = new Set(
+						sourceCompactions.map(({ id }) => String(id))
+					);
+					const sourcePathEntryIdStrings = new Set(
+						[...sourcePathEntryIds].map(String)
+					);
+					const selectedPathUsageEntries = sourcePrefixEntries.filter((entry) =>
+						isSessionBundleBranchUsageSourceEntry(
+							entry,
+							sourcePathEntryIdStrings,
+							sourcePathCompactionIds
+						)
+					);
+					const inheritedUsage = filterSessionUsageToSelectedPath(
+						inheritedUsageAtFork(
+							selectedPathUsageEntries,
+							sourceRecords,
+							sourceSessionId
+						),
+						sourceRecords,
+						sourcePathCompactionIds
 					);
 					const identityMap = createSessionForkIdentityMap(
 						targetSessionId,
@@ -9869,14 +9930,7 @@ export const createSessionJsonlStore = (
 							sourceSessionId,
 							operationId
 						),
-						inheritedUsage: remapForkUsageTurnIds(
-							inheritedUsageAtFork(
-								sourcePrefixEntries,
-								sourceRecords,
-								sourceSessionId
-							),
-							identityMap
-						),
+						inheritedUsage: remapForkUsageTurnIds(inheritedUsage, identityMap),
 					};
 					const logLines: Uint8Array[] = [];
 					let nextSequence = 0;

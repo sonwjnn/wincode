@@ -172,13 +172,12 @@ const collectSelectedSessionHistoryEntryIds = (
 	return entryIds;
 };
 
-export const selectedSessionHistoryPathFromLog = (
+const sessionHistoryGraphFromLog = (
 	state: SessionLogState,
-	sessionId: SessionId,
-	snapshotSequence = state.nextSequence - 1
+	snapshotSequence: number
 ): Readonly<{
 	activeLeafId: SessionHistoryEntryId | null;
-	entryIds: ReadonlySet<SessionHistoryEntryId>;
+	parents: ReadonlyMap<SessionHistoryEntryId, SessionHistoryEntryId | null>;
 }> => {
 	const parents = new Map<
 		SessionHistoryEntryId,
@@ -210,6 +209,42 @@ export const selectedSessionHistoryPathFromLog = (
 			}
 		}
 	}
+	return { activeLeafId, parents };
+};
+
+export const sessionHistoryPathToEntryFromLog = (
+	state: SessionLogState,
+	sessionId: SessionId,
+	targetEntryId: SessionHistoryEntryId,
+	snapshotSequence = state.nextSequence - 1
+): ReadonlySet<SessionHistoryEntryId> => {
+	const { parents } = sessionHistoryGraphFromLog(state, snapshotSequence);
+	if (!parents.has(targetEntryId)) {
+		throw new SessionLogError(
+			"session_log_corrupt",
+			sessionId,
+			"Session history target references a missing entry."
+		);
+	}
+	return collectSelectedSessionHistoryEntryIds(
+		targetEntryId,
+		parents,
+		sessionId
+	);
+};
+
+export const selectedSessionHistoryPathFromLog = (
+	state: SessionLogState,
+	sessionId: SessionId,
+	snapshotSequence = state.nextSequence - 1
+): Readonly<{
+	activeLeafId: SessionHistoryEntryId | null;
+	entryIds: ReadonlySet<SessionHistoryEntryId>;
+}> => {
+	const { activeLeafId, parents } = sessionHistoryGraphFromLog(
+		state,
+		snapshotSequence
+	);
 	const entryIds = collectSelectedSessionHistoryEntryIds(
 		activeLeafId,
 		parents,

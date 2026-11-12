@@ -102,6 +102,7 @@ test("stored history exposes load-older and refresh actions without editing cont
 				onReselectModel={onReselectModel}
 				onRetry={onRetry}
 				owner={undefined}
+				sessionId={statistics.sessionId}
 				sessionTitle="History title"
 				statistics={statistics}
 			/>
@@ -177,6 +178,7 @@ test("an expired stored-history cursor offers refresh instead of continuation", 
 				onReselectModel={() => true}
 				onRetry={() => true}
 				owner={undefined}
+				sessionId={statistics.sessionId}
 				sessionTitle="History title"
 				statistics={statistics}
 			/>

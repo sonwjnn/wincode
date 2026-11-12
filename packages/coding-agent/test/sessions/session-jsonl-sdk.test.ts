@@ -31,6 +31,7 @@ import { createSessionUserMessage } from "@/modules/sessions/message";
 import { createSessionSdkWithRuntime } from "@/modules/sessions/sdk";
 import type {
 	SessionSdk,
+	SessionSdkForkResult,
 	SessionSdkHandle,
 	SessionSdkSnapshot,
 	SessionSdkSubmissionAdmission,
@@ -1861,7 +1862,10 @@ test("public Session SDK lets a Plugin veto navigation to an inactive sibling be
 	}
 });
 
-const createMultiBranchSessionFixture = async (name: string) => {
+const createMultiBranchSessionFixture = async (
+	name: string,
+	options: Readonly<{ siblingCompactionUsage?: boolean }> = {}
+) => {
 	const databasePath = path.join(root, name, "sessions.sqlite");
 	await fs.mkdir(path.dirname(databasePath), { recursive: true });
 	const persistence = createSessionJsonlTestPersistence(
@@ -1877,7 +1881,9 @@ const createMultiBranchSessionFixture = async (name: string) => {
 		store: persistence.store,
 		workspace,
 	});
-	const { id: sessionId } = await persistence.store.createEmptySession({});
+	const { id: sessionId } = await persistence.store.createEmptySession({
+		model: DEFAULT_PROVIDER_MODEL_SELECTION,
+	});
 	const rootRecord = buildUserSessionRecord({
 		agentId: agentId("build"),
 		message: createSessionUserMessage("shared root"),
@@ -1925,6 +1931,52 @@ const createMultiBranchSessionFixture = async (name: string) => {
 	});
 	expect(rootWrite.kind).toBe("committed");
 	expect(firstBranchWrite.kind).toBe("committed");
+	const siblingCompactionId =
+		options.siblingCompactionUsage === true
+			? compactionId(`${name}-sibling-compaction`)
+			: undefined;
+	if (siblingCompactionId !== undefined) {
+		const rootMessage = rootRecord.messages[0];
+		const firstBranchMessage = firstBranchRecord.messages[0];
+		if (rootMessage === undefined || firstBranchMessage === undefined) {
+			throw new Error("The sibling compaction fixture omitted its Records.");
+		}
+		const siblingUsage = await persistence.store.createSessionUsageEntry({
+			compactionId: siblingCompactionId,
+			costUsd: 0.25,
+			createdAt: new Date("2026-10-31T00:00:00.000Z"),
+			id: sessionUsageEntryId(`${name}-sibling-compaction-usage`),
+			kind: "compaction-summary",
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			sessionId,
+			usage: { inputTokens: 999, outputTokens: 7 },
+		});
+		expect(siblingUsage.writeOutcome).toMatchObject({
+			kind: "committed",
+			projection: "ready",
+		});
+		const siblingCompaction = await persistence.store.appendCompaction({
+			estimatedTokensAfter: 64,
+			firstKeptUiMessageId: firstBranchMessage.id,
+			id: siblingCompactionId,
+			sessionId,
+			summarizationModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+			summarizationUsage: { inputTokens: 999, outputTokens: 7 },
+			summary: {
+				coveredMessageIds: [rootMessage.id],
+				formatVersion: 1,
+				overflowSourceTurnId: rootRecord.turnId,
+				text: "Summary from the first sibling branch.",
+			},
+			throughMessageUiId: rootMessage.id,
+			tokensBefore: 256,
+			trigger: "overflow",
+		});
+		expect(siblingCompaction.writeOutcome).toMatchObject({
+			kind: "committed",
+			projection: "ready",
+		});
+	}
 	const initialTree = await sdk.readSessionHistoryTreePage(sessionId);
 	const rootEntry = initialTree.entries.find(
 		(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
@@ -1955,8 +2007,10 @@ const createMultiBranchSessionFixture = async (name: string) => {
 		recorder,
 		rootRecord,
 		secondBranchRecord,
+		siblingCompactionId,
 		sdk,
 		sessionId,
+		store: persistence.store,
 	};
 };
 
@@ -2189,22 +2243,371 @@ test("branch artifact identity does not conflict with its source Session and ide
 	}
 });
 
-test("public Session SDK still refuses to fork a Session with multiple history branches", async () => {
+test("public Session SDK forks an inactive sibling checkpoint independently of the selected path", async () => {
 	const fixture = await createMultiBranchSessionFixture(
-		"multi-branch-fork-refusal"
+		"multi-branch-fork-selected-path",
+		{ siblingCompactionUsage: true }
 	);
+	let forked: SessionSdkForkResult | undefined;
 	try {
-		await expect(
-			fixture.sdk.forkSession(
-				fixture.sessionId,
-				{ recordId: fixture.secondBranchRecord.id },
-				"multi-branch-fork-refused"
+		const initialTree = await fixture.sdk.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		const firstBranchEntry = initialTree.entries.find(
+			(entry) =>
+				entry.kind === "record" &&
+				entry.recordId === fixture.firstBranchRecord.id
+		);
+		if (firstBranchEntry === undefined) {
+			throw new Error("Expected the first sibling branch entry.");
+		}
+		await fixture.sdk.navigateSessionHistory(fixture.sessionId, {
+			operationId: "multi-branch-fork-select-first-branch",
+			targetEntryId: firstBranchEntry.id,
+		});
+		const sourceTree = await fixture.sdk.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		const inactiveTarget = sourceTree.entries.find(
+			(entry) =>
+				entry.kind === "record" &&
+				entry.recordId === fixture.secondBranchRecord.id
+		);
+		expect(inactiveTarget?.selectedPath).toBe(false);
+
+		forked = await fixture.sdk.forkSession(
+			fixture.sessionId,
+			{ recordId: fixture.secondBranchRecord.id },
+			"multi-branch-fork-selected-path"
+		);
+		const forkedHistory = await fixture.sdk.readSessionHistoryTreePage(
+			forked.id
+		);
+		const forkedRecords = forkedHistory.entries.filter(
+			(entry) => entry.kind === "record"
+		);
+		const forkedText = forkedRecords.flatMap((entry) =>
+			entry.record.messages.flatMap((message) =>
+				message.parts.flatMap((part) =>
+					part.type === "text" ? [part.text] : []
+				)
 			)
-		).rejects.toMatchObject({
-			code: "session_history_branches_unsupported",
-			message: expect.stringContaining("multiple history branches"),
+		);
+		const sourceStatistics = await fixture.sdk.getSessionStatistics(
+			fixture.sessionId
+		);
+		const forkedStatistics = await fixture.sdk.getSessionStatistics(forked.id);
+		const inheritedRecordIds =
+			forkedStatistics.usage.contributions.inherited.flatMap((contribution) =>
+				contribution.identity.kind === "record"
+					? [contribution.identity.recordId]
+					: []
+			);
+
+		expect(forked.id).not.toBe(fixture.sessionId);
+		expect(forkedText).toEqual(["shared root", "second branch answer"]);
+		expect(forkedRecords.every((entry) => entry.selectedPath)).toBe(true);
+		expect(
+			forkedRecords.flatMap((entry) =>
+				entry.record.messages.map((message) => message.id)
+			)
+		).not.toContain(fixture.secondBranchRecord.messages[0]?.id);
+		expect(inheritedRecordIds).toEqual([fixture.secondBranchRecord.id]);
+		expect(forkedStatistics.usage.actual.contributionCount).toBe(0);
+		expect(forkedStatistics.usage.inherited).toMatchObject({
+			contributionCount: 1,
+			inputTokens: 17,
+			outputTokens: 4,
+		});
+		expect(
+			forkedStatistics.usage.contributions.inherited.some(
+				(contribution) =>
+					contribution.compactionId === fixture.siblingCompactionId
+			)
+		).toBe(false);
+		expect(sourceStatistics.usage.actual).toMatchObject({
+			contributionCount: 2,
+			inputTokens: 30,
+			outputTokens: 6,
+		});
+		expect(sourceStatistics.usage.auxiliary).toMatchObject({
+			contributionCount: 1,
+			inputTokens: 999,
+			outputTokens: 7,
+		});
+		expect(sourceStatistics.usage.selectedPath).toMatchObject({
+			contributionCount: 1,
+			inputTokens: 13,
+			outputTokens: 2,
 		});
 	} finally {
+		await forked?.handle.dispose();
+		await fixture.close();
+	}
+});
+
+test("public Session SDK fork remains exportable and continuable after source deletion and GC", async () => {
+	const fixture = await createMultiBranchSessionFixture(
+		"fork-independent-child"
+	);
+	let forked: SessionSdkForkResult | undefined;
+	let childHandle: SessionSdkHandle | undefined;
+	const treeDestination = path.join(
+		workspace,
+		"fork-independent-child-tree.bundle"
+	);
+	const branchDestination = path.join(
+		workspace,
+		"fork-independent-child-branch.bundle"
+	);
+	try {
+		forked = await fixture.sdk.forkSession(
+			fixture.sessionId,
+			{ recordId: fixture.secondBranchRecord.id },
+			"fork-independent-child-operation"
+		);
+		const childId = forked.id;
+		await forked.handle.dispose();
+		forked = undefined;
+
+		const sourceDeletion = await fixture.store.deleteSession(fixture.sessionId);
+		expect(sourceDeletion).toMatchObject({
+			kind: "committed",
+			projection: "ready",
+		});
+		await fixture.store.collectAttachments(0);
+		expect(await fixture.store.getSessionForkProvenance(childId)).toMatchObject(
+			{
+				sourceAvailability: "unavailable",
+				sourceSessionId: fixture.sessionId,
+			}
+		);
+
+		const rebuild = await fixture.store.rebuildProjection(
+			{ kind: "session", sessionId: childId },
+			(operation) => operation()
+		);
+		expect(rebuild.issues).toEqual([]);
+		expect(rebuild.rebuiltSessionIds).toContain(childId);
+
+		const treeExport = await fixture.sdk.exportSessionBundle(
+			childId,
+			treeDestination,
+			{ scope: "tree" }
+		);
+		const branchExport = await fixture.sdk.exportSessionBundle(
+			childId,
+			branchDestination,
+			{ scope: "branch" }
+		);
+		expect(treeExport).toMatchObject({
+			manifest: { scope: "tree" },
+			sessionId: childId,
+			status: "exported",
+		});
+		expect(branchExport).toMatchObject({
+			manifest: {
+				scope: "branch",
+				source: { sourceSessionId: childId },
+			},
+			status: "exported",
+		});
+		expect(branchExport.sessionId).not.toBe(childId);
+		childHandle = await fixture.sdk.openSession(childId, {
+			autoContinue: false,
+		});
+		expect(fixture.recorder.requests).toEqual([]);
+		const turnTerminal = Promise.withResolvers<void>();
+		let terminalEvent: SessionSdkEvent | undefined;
+		const unsubscribe = childHandle.onEvent((event) => {
+			if (isTerminalAgentTurnEvent(event)) {
+				terminalEvent = event;
+				turnTerminal.resolve();
+			}
+		});
+		try {
+			const admission = await childHandle.deliver({
+				idempotencyKey: "fork-independent-child-continue",
+				text: "Continue from the forked checkpoint.",
+			});
+			expect(admission).toMatchObject({
+				disposition: "started",
+				rejected: false,
+			});
+			await turnTerminal.promise;
+			expect(terminalEvent).toMatchObject({ type: "agent-turn-completed" });
+			expect(fixture.recorder.requests).toHaveLength(1);
+			const providerContext = JSON.stringify(fixture.recorder.requests[0]);
+			expect(providerContext).toContain("shared root");
+			expect(providerContext).toContain("second branch answer");
+			expect(providerContext).not.toContain("first branch answer");
+		} finally {
+			unsubscribe();
+		}
+	} finally {
+		await childHandle?.dispose();
+		await forked?.handle.dispose();
+		await fixture.close();
+	}
+});
+
+test("public Session SDK forks Plugin state and entries at the selected Record boundary", async () => {
+	const fixture = await createMultiBranchSessionFixture(
+		"multi-branch-fork-plugin-path"
+	);
+	let forked: SessionSdkForkResult | undefined;
+	const pluginId = "fork_contract";
+	try {
+		let history = await fixture.sdk.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		const firstBranchEntry = history.entries.find(
+			(entry) =>
+				entry.kind === "record" &&
+				entry.recordId === fixture.firstBranchRecord.id
+		);
+		const rootEntry = history.entries.find(
+			(entry) =>
+				entry.kind === "record" && entry.recordId === fixture.rootRecord.id
+		);
+		if (firstBranchEntry === undefined || rootEntry === undefined) {
+			throw new Error("The multi-branch source is missing a Record entry.");
+		}
+
+		await fixture.sdk.navigateSessionHistory(fixture.sessionId, {
+			targetEntryId: firstBranchEntry.id,
+			operationId: "multi-branch-fork-plugin-to-sibling",
+		});
+		history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
+		await fixture.store.appendPluginSessionHistoryEntry(
+			fixture.sessionId,
+			pluginId,
+			{
+				expectedHistoryGeneration: history.historyGeneration,
+				operationId: "multi-branch-fork-sibling-entry",
+				payload: { branch: "sibling" },
+				type: "sibling-note",
+			}
+		);
+		history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
+		await fixture.store.mutatePluginSessionState(fixture.sessionId, pluginId, {
+			expectedHistoryGeneration: history.historyGeneration,
+			key: "snapshot",
+			kind: "set",
+			operationId: "multi-branch-fork-sibling-state",
+			schemaVersion: 2,
+			value: "sibling-state",
+		});
+
+		await fixture.sdk.navigateSessionHistory(fixture.sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "multi-branch-fork-plugin-to-root",
+		});
+		history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
+		await fixture.store.mutatePluginSessionState(fixture.sessionId, pluginId, {
+			expectedHistoryGeneration: history.historyGeneration,
+			key: "snapshot",
+			kind: "set",
+			operationId: "multi-branch-fork-selected-state",
+			schemaVersion: 2,
+			value: "selected-state",
+		});
+		history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
+		await fixture.store.appendPluginSessionHistoryEntry(
+			fixture.sessionId,
+			pluginId,
+			{
+				expectedHistoryGeneration: history.historyGeneration,
+				operationId: "multi-branch-fork-selected-entry",
+				payload: { branch: "selected" },
+				type: "selected-note",
+			}
+		);
+		const checkpoint: SessionRecord = {
+			agentId: agentId("build"),
+			id: sessionRecordId("multi-branch-fork-plugin-checkpoint"),
+			messages: [
+				{
+					id: sessionMessageId("multi-branch-fork-plugin-checkpoint-message"),
+					parts: [{ text: "selected path checkpoint", type: "text" }],
+					role: "assistant",
+				},
+			],
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			outcome: {
+				kind: "assistant",
+				terminal: { finishedAt: 1_800_000_000_002, kind: "completed" },
+			},
+			turnId: fixture.rootRecord.turnId,
+			version: SESSION_RECORD_VERSION,
+		};
+		await fixture.store.commitSessionRecord({
+			record: checkpoint,
+			sessionId: fixture.sessionId,
+		});
+		history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
+		await fixture.store.mutatePluginSessionState(fixture.sessionId, pluginId, {
+			expectedHistoryGeneration: history.historyGeneration,
+			key: "snapshot",
+			kind: "delete",
+			operationId: "multi-branch-fork-post-checkpoint-state",
+			schemaVersion: 2,
+		});
+		history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
+		await fixture.store.appendPluginSessionHistoryEntry(
+			fixture.sessionId,
+			pluginId,
+			{
+				expectedHistoryGeneration: history.historyGeneration,
+				operationId: "multi-branch-fork-post-checkpoint-entry",
+				payload: { branch: "after-checkpoint" },
+				type: "post-checkpoint-note",
+			}
+		);
+
+		forked = await fixture.sdk.forkSession(
+			fixture.sessionId,
+			{ recordId: checkpoint.id },
+			"multi-branch-fork-plugin-selected-path"
+		);
+		const forkedHistory = await fixture.sdk.readSessionHistoryTreePage(
+			forked.id
+		);
+		const forkedRecords = forkedHistory.entries.filter(
+			(entry) => entry.kind === "record"
+		);
+		const pluginEntries = forkedHistory.entries.filter(
+			(entry) => entry.kind === "plugin-entry"
+		);
+		const pluginStateEntries = forkedHistory.entries.filter(
+			(entry) => entry.kind === "plugin-state"
+		);
+
+		expect(
+			forkedRecords.flatMap((entry) =>
+				entry.record.messages.flatMap((message) =>
+					message.parts.flatMap((part) =>
+						part.type === "text" ? [part.text] : []
+					)
+				)
+			)
+		).toEqual(["shared root", "selected path checkpoint"]);
+		expect(pluginEntries.map((entry) => entry.type)).toEqual(["selected-note"]);
+		expect(pluginStateEntries).toMatchObject([
+			{ key: "snapshot", operation: "set", schemaVersion: 2 },
+		]);
+		expect(
+			await fixture.store.getPluginSessionState(forked.id, pluginId, "snapshot")
+		).toEqual({ schemaVersion: 2, value: "selected-state" });
+		expect(
+			await fixture.store.getPluginSessionState(
+				fixture.sessionId,
+				pluginId,
+				"snapshot"
+			)
+		).toBeUndefined();
+	} finally {
+		await forked?.handle.dispose();
 		await fixture.close();
 	}
 });

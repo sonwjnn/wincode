@@ -127,6 +127,25 @@ const historyBranchResponse = (
 	}
 };
 
+const forkedToolPathResponse = (
+	prompt: string,
+	transcript: string
+): FauxResponse | undefined => {
+	if (!prompt.includes("continue forked tool path")) {
+		return;
+	}
+	const forkedToolPath =
+		transcript.includes("tool-roundtrip-ok") &&
+		!transcript.includes("root-branch-only");
+	return completedResponse(
+		fauxText(
+			forkedToolPath
+				? "fork-context-no-tool-replay-ok"
+				: "wrong-forked-tool-context"
+		)
+	);
+};
+
 const historyToolResponse = (
 	prompt: string,
 	request: FauxCall["request"]
@@ -228,6 +247,10 @@ const scriptedResponse = (
 	if (historyResponse !== undefined) {
 		return historyResponse;
 	}
+	const forkedToolResponse = forkedToolPathResponse(prompt, transcript);
+	if (forkedToolResponse !== undefined) {
+		return forkedToolResponse;
+	}
 	const branchResponse = historyBranchResponse(prompt, transcript);
 	if (branchResponse !== undefined) {
 		return branchResponse;
@@ -270,6 +293,16 @@ const createSmokeProvider = (workspace: string): Provider => {
 				path.join(workspace, ".smoke-provider-request-seen"),
 				"request"
 			);
+			const requestCountPath = path.join(
+				workspace,
+				".smoke-provider-request-count"
+			);
+			const previousRequestCount = Number(
+				await Bun.file(requestCountPath)
+					.text()
+					.catch(() => "0")
+			);
+			await Bun.write(requestCountPath, String(previousRequestCount + 1));
 			try {
 				yield* faux.provider.streamChat(request, context);
 			} finally {

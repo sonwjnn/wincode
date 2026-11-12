@@ -52,6 +52,7 @@ import {
 	providerModelSelectionFixture,
 	sessionMessageId,
 	sessionRecordId,
+	sessionUsageEntryId,
 	toolCallId,
 } from "../support/identifiers";
 import { removeTemporaryDirectory } from "../support/temporary-directory";
@@ -1037,11 +1038,30 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 			title: "Metadata at the fork cut",
 		});
 		const sourceCompactionId = compactionId("fork-cut-source-compaction");
+		const sourceCompactionUsage = {
+			inputTokens: 12,
+			outputTokens: 3,
+		};
+		const usageWrite = await persistence.store.createSessionUsageEntry({
+			compactionId: sourceCompactionId,
+			costUsd: 0.25,
+			createdAt: new Date("2026-10-31T00:00:00.000Z"),
+			id: sessionUsageEntryId("fork-cut-source-compaction-usage"),
+			kind: "compaction-summary",
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			sessionId: created.id,
+			usage: sourceCompactionUsage,
+		});
+		expect(usageWrite.writeOutcome).toMatchObject({
+			kind: "committed",
+			projection: "ready",
+		});
 		await persistence.store.appendCompaction({
 			firstKeptUiMessageId: sourceMessageId,
 			id: sourceCompactionId,
 			sessionId: created.id,
 			summarizationModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+			summarizationUsage: sourceCompactionUsage,
 			summary: {
 				coveredMessageIds: [sourceMessageId],
 				formatVersion: 1,
@@ -1118,6 +1138,20 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 			},
 		});
 		expect(compactions[0]?.id).not.toBe(sourceCompactionId);
+		const forkStatistics = await persistence.store.getSessionStatistics(
+			forked.id
+		);
+		expect(forkStatistics.usage.inherited).toMatchObject({
+			contributionCount: 1,
+			inputTokens: 12,
+			outputTokens: 3,
+		});
+		expect(forkStatistics.usage.contributions.inherited[0]?.compactionId).toBe(
+			compactions[0]?.id
+		);
+		expect(
+			forkStatistics.usage.contributions.inherited[0]?.compactionId
+		).not.toBe(sourceCompactionId);
 		const forkSession = (await persistence.store.listSessions()).find(
 			({ id }) => id === forked.id
 		);

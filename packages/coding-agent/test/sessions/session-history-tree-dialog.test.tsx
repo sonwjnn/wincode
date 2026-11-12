@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import type { SessionRecordId } from "@wincode/agent-core";
 import { act, useEffect } from "react";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import type {
@@ -12,7 +13,11 @@ import type {
 } from "@/modules/sessions/session-pagination-types";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import { SessionHistoryTreeDialogContent } from "@/modules/sessions/ui/dialogs/session-history-tree-dialog";
-import { toSessionHistoryEntryId, toSessionId } from "@/shared/identifiers";
+import {
+	type SessionId,
+	toSessionHistoryEntryId,
+	toSessionId,
+} from "@/shared/identifiers";
 import {
 	DialogProvider,
 	useDialog,
@@ -111,7 +116,12 @@ const nextPage: SessionHistoryTreePage = {
 };
 
 const createHistoryTreeDialogHarness = async (
-	pendingNavigation?: Promise<SessionHistoryNavigationOutcome>
+	pendingNavigation?: Promise<SessionHistoryNavigationOutcome>,
+	actions: Readonly<{
+		isRewindDisabled?: boolean;
+		onForkCheckpoint?: (recordId: SessionRecordId) => Promise<SessionId>;
+		onRewindCheckpoint?: (recordId: SessionRecordId) => Promise<void>;
+	}> = {}
 ) => {
 	const reads: Array<{ cursor?: string; limit?: number }> = [];
 	const navigationTargets: Array<string | null> = [];
@@ -150,6 +160,9 @@ const createHistoryTreeDialogHarness = async (
 			open({
 				children: (
 					<SessionHistoryTreeDialogContent
+						isRewindDisabled={actions.isRewindDisabled}
+						onForkCheckpoint={actions.onForkCheckpoint}
+						onRewindCheckpoint={actions.onRewindCheckpoint}
 						sessionId={sessionId}
 						sessionSdk={sessionSdk}
 					/>
@@ -179,9 +192,11 @@ test("History preview neutralizes terminal controls and hides Plugin State paylo
 	const { navigationTargets, setup } = await createHistoryTreeDialogHarness();
 	try {
 		let frame = setup.captureCharFrame();
+		expect(frame.replace(/\s+/gu, " ")).toContain(
+			"History actions do not roll back workspace files or replay Tool Calls."
+		);
 		expect(frame).toContain("Enter selects a history entry");
 		expect(frame).toContain("Current leaf is on a later page");
-		expect(frame).toContain("queue_plugin / queue [31m · set · v1");
 		expect(frame).toContain("A safe text preview [31m");
 		expect(frame).not.toContain("\u001b");
 
@@ -279,6 +294,92 @@ test("Pending navigation ignores repeated selection shortcuts until it settles",
 			kind: "rejected",
 			reason: "history entry unavailable",
 		});
+		act(() => setup.renderer.destroy());
+	}
+});
+
+test("Forking a selected Record creates a child without navigating the source", async () => {
+	const forkedSessionId = toSessionId("history-tree-ui-fork-child");
+	const onForkCheckpoint = mock(
+		async (_recordId: SessionRecordId) => forkedSessionId
+	);
+	const { navigationTargets, setup } = await createHistoryTreeDialogHarness(
+		undefined,
+		{ onForkCheckpoint }
+	);
+	try {
+		await act(async () => {
+			await setup.mockInput.pressKey("f");
+			await Promise.resolve();
+		});
+		await flushTestRenderer(setup, 2);
+
+		const frame = setup.captureCharFrame().replace(/\s+/gu, " ");
+		expect(onForkCheckpoint).toHaveBeenCalledWith(recordEntry.recordId);
+		expect(navigationTargets).toEqual([]);
+		expect(frame).toContain("Fork created: Session history-tree-ui-fork-child");
+		expect(frame).toContain("Source Session remains open.");
+		expect(frame).toContain(
+			"History actions do not roll back workspace files or replay Tool Calls."
+		);
+		expect(frame).toContain("Current leaf is on a later page");
+		expect(frame).toContain(
+			"Enter selects a history entry within this Session"
+		);
+	} finally {
+		act(() => setup.renderer.destroy());
+	}
+});
+
+test("Rewind forks the selected Record and leaves tree navigation to Enter", async () => {
+	const onRewindCheckpoint = mock(
+		async (_recordId: SessionRecordId) => undefined
+	);
+	const { navigationTargets, setup } = await createHistoryTreeDialogHarness(
+		undefined,
+		{ onRewindCheckpoint }
+	);
+	try {
+		expect(setup.captureCharFrame().replace(/\s+/gu, " ")).toContain(
+			"History actions do not roll back workspace files or replay Tool Calls."
+		);
+		await act(async () => {
+			await setup.mockInput.pressKey("r");
+			await Promise.resolve();
+		});
+		await flushTestRenderer(setup, 2);
+
+		expect(onRewindCheckpoint).toHaveBeenCalledWith(recordEntry.recordId);
+		expect(navigationTargets).toEqual([]);
+		expect(setup.captureCharFrame()).not.toContain(
+			"Enter selects a history entry within this Session"
+		);
+	} finally {
+		act(() => setup.renderer.destroy());
+	}
+});
+
+test("Rewind is refused while the source Session is active", async () => {
+	const onRewindCheckpoint = mock(
+		async (_recordId: SessionRecordId) => undefined
+	);
+	const { navigationTargets, setup } = await createHistoryTreeDialogHarness(
+		undefined,
+		{ isRewindDisabled: true, onRewindCheckpoint }
+	);
+	try {
+		await act(() => setup.mockInput.pressKey("r"));
+		await flushTestRenderer(setup, 2);
+
+		expect(onRewindCheckpoint).not.toHaveBeenCalled();
+		expect(navigationTargets).toEqual([]);
+		const frame = setup.captureCharFrame().replace(/\s+/gu, " ");
+		expect(frame).toContain("disabled while active");
+		expect(frame).toContain(
+			"Rewind is unavailable while the Session is active or compacting."
+		);
+		expect(frame).toContain("Search Session history");
+	} finally {
 		act(() => setup.renderer.destroy());
 	}
 });

@@ -11,6 +11,10 @@ const smokeLauncher = path.join(
 	"scripts/test-support/interactive-smoke-launcher.sh"
 );
 const tmuxTimeoutMs = 20_000;
+const currentLeafPattern = /Current leaf: entry \d+/u;
+const forkedSessionPattern = /Fork created: Session ([^ .]+)\./iu;
+const sessionIdentityPattern = /Session ID: ([^ .]+)/u;
+const sourceSessionIdentityPattern = /Forked from Session ([^ ]+)/u;
 
 type TerminalSmokeSession = Readonly<{
 	openHistory: () => Promise<string>;
@@ -382,6 +386,138 @@ test(
 				await sendPrompt("reopen preserved path");
 				await waitForResponse("reopen-preserved-path-ok");
 			}
+		);
+	},
+	{ timeout: 120_000 }
+);
+
+test(
+	"Fork and Rewind from selected history checkpoints preserve the source Session",
+	async () => {
+		await withTerminalSmoke(
+			async ({
+				openHistory,
+				sendCommand,
+				sendKeys,
+				sendPrompt,
+				smokeHome,
+				waitForFrame,
+				waitForResponse,
+			}) => {
+				await sendPrompt("terminal smoke tool");
+				await waitForResponse("tool-roundtrip-ok");
+				await openHistory();
+				await sendKeys("C-Home");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after selecting the root"
+				);
+				await sendPrompt("branch from root");
+				await waitForResponse("root-branch-only");
+
+				await openHistory();
+				await sendKeys("Up");
+				await sendKeys("Up");
+				await sendKeys("p");
+				const toolCheckpointPreview = await waitForFrame(
+					(frame) => frame.includes("History entry 3"),
+					"the inactive sibling Tool Call checkpoint preview"
+				);
+				expect(toolCheckpointPreview).toContain("tool-roundtrip-ok");
+				expect(toolCheckpointPreview).toContain("inactive branch");
+				await sendKeys("Escape");
+				const sourceTreeBeforeFork = await waitForFrame(
+					(frame) =>
+						frame.includes("Enter selects a history entry") &&
+						!frame.includes("History entry "),
+					"the tree after closing the checkpoint preview"
+				);
+				const currentLeaf = (frame: string): string | undefined =>
+					currentLeafPattern.exec(frame)?.[0];
+				const originalLeaf = currentLeaf(sourceTreeBeforeFork);
+				const providerRequestCountPath = path.join(
+					smokeHome,
+					"workspace",
+					".smoke-provider-request-count"
+				);
+				const requestsBeforeFork = Number(
+					await Bun.file(providerRequestCountPath).text()
+				);
+				if (originalLeaf === undefined) {
+					throw new Error("The source history tree omitted its current leaf.");
+				}
+
+				await sendKeys("f");
+				const forkFrame = await waitForFrame(
+					(frame) => frame.includes("Fork created: Session "),
+					"the independent Fork result"
+				);
+				const normalizedForkFrame = forkFrame.replace(/\s+/gu, " ");
+				expect(normalizedForkFrame).toContain("Source Session remains open.");
+				expect(currentLeaf(forkFrame)).toBe(originalLeaf);
+				const independentForkId = forkedSessionPattern.exec(forkFrame)?.[1];
+				if (independentForkId === undefined) {
+					throw new Error(
+						"The independent Fork result omitted its Session ID."
+					);
+				}
+
+				await sendKeys("r");
+				const rewoundFrame = await waitForFrame(
+					(frame) =>
+						frame.includes("Session ID: ") &&
+						frame.includes("Forked from Session "),
+					"the new Rewind Session identity"
+				);
+				const normalizedRewoundFrame = rewoundFrame.replace(/\s+/gu, " ");
+				expect(normalizedRewoundFrame).toContain("terminal smoke tool");
+				expect(normalizedRewoundFrame).toContain("tool-roundtrip-ok");
+				expect(normalizedRewoundFrame).not.toContain("root-branch-only");
+				const childId = sessionIdentityPattern.exec(rewoundFrame)?.[1];
+				const sourceId = sourceSessionIdentityPattern.exec(rewoundFrame)?.[1];
+				if (childId === undefined || sourceId === undefined) {
+					throw new Error("The Rewind Session omitted its fork identity.");
+				}
+				expect(childId).not.toBe(sourceId);
+				expect(childId).not.toBe(independentForkId);
+				expect(Number(await Bun.file(providerRequestCountPath).text())).toBe(
+					requestsBeforeFork
+				);
+				await sendPrompt("continue forked tool path");
+				await waitForResponse("fork-context-no-tool-replay-ok");
+				expect(Number(await Bun.file(providerRequestCountPath).text())).toBe(
+					requestsBeforeFork + 1
+				);
+
+				await sendCommand("/sessions");
+				await waitForFrame(
+					(frame) => frame.includes("Search sessions"),
+					"the Session picker for returning to the source"
+				);
+				await sendKeys(sourceId);
+				await waitForFrame(
+					(frame) => frame.includes("terminal smoke tool"),
+					"the source Session matched by its identity"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Ask anything...") &&
+						frame.includes("root-branch-only") &&
+						!frame.includes("Forked from Session"),
+					"the original Session after returning from its fork"
+				);
+				await openHistory();
+				await sendKeys("branch from root");
+				const sourceTree = await waitForFrame(
+					(frame) => frame.includes("branch from root"),
+					"the original branch after returning from the fork"
+				);
+				expect(currentLeaf(sourceTree)).toBe(originalLeaf);
+			},
+			{ historyEnabled: true }
 		);
 	},
 	{ timeout: 120_000 }
