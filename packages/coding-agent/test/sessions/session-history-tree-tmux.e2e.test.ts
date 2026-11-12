@@ -30,14 +30,16 @@ const quoteShell = (value: string): string =>
 
 const withTerminalSmoke = async (
 	run: (session: TerminalSmokeSession) => Promise<void>,
-	options: Readonly<{ seedInvalidEndpoint?: boolean }> = {}
+	options: Readonly<{
+		historyEnabled?: boolean;
+		seedInvalidEndpoint?: boolean;
+	}> = {}
 ): Promise<void> => {
 	const tmuxSession = `wincode-history-${crypto.randomUUID()}`;
 	const smokeHome = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-history-smoke-")
 	);
 	let sessionCreated = false;
-	let lastFrame = "";
 	const runTmux = async (args: string[]): Promise<string> => {
 		const result = await $`tmux ${args}`.quiet().nothrow();
 		if (result.exitCode !== 0) {
@@ -59,9 +61,9 @@ const withTerminalSmoke = async (
 	): Promise<string> => {
 		const deadline = Date.now() + tmuxTimeoutMs;
 		while (Date.now() < deadline) {
-			lastFrame = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
-			if (predicate(lastFrame)) {
-				return lastFrame;
+			const frame = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
+			if (predicate(frame)) {
+				return frame;
 			}
 			await Bun.sleep(100);
 		}
@@ -135,6 +137,7 @@ const withTerminalSmoke = async (
 			`WINCODE_SMOKE_HOME=${quoteShell(smokeHome)}`,
 			`WINCODE_SMOKE_BUN=${quoteShell(process.execPath)}`,
 			`WINCODE_SMOKE_INVALID_ENDPOINT=${options.seedInvalidEndpoint === true ? "1" : "0"}`,
+			`WINCODE_SMOKE_HISTORY=${options.historyEnabled === true ? "1" : "0"}`,
 			quoteShell(smokeLauncher),
 		].join(" ");
 		await sendKeys(launcherCommand, "Enter");
@@ -152,12 +155,6 @@ const withTerminalSmoke = async (
 			waitForFrame,
 			waitForResponse,
 		});
-	} catch (error) {
-		const framePath = process.env.WINCODE_E2E_FRAME_PATH;
-		if (framePath && lastFrame.length > 0) {
-			await Bun.write(framePath, lastFrame);
-		}
-		throw error;
 	} finally {
 		if (sessionCreated) {
 			await runTmux(["kill-session", "-t", tmuxSession]).catch(() => undefined);
@@ -532,6 +529,110 @@ test(
 				).toBe(false);
 			},
 			{ seedInvalidEndpoint: true }
+		);
+	},
+	{ timeout: 120_000 }
+);
+
+test(
+	"Plugin custom entries stay opaque in the tree and restore the selected branch interactively",
+	async () => {
+		await withTerminalSmoke(
+			async ({
+				openHistory,
+				sendKeys,
+				sendPrompt,
+				smokeHome,
+				waitForFrame,
+				waitForResponse,
+			}) => {
+				await sendPrompt("terminal smoke history add A");
+				await waitForResponse("history-event-added:A");
+				const firstTree = await openHistory();
+				expect(firstTree).toContain(
+					"Plugin Entry · interactive_smoke / smoke-item-A"
+				);
+				await sendKeys("smoke-item-A");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Plugin Entry · interactive_smoke / smoke-item-A"),
+					"the filtered branch A custom entry"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after selecting the branch A event"
+				);
+				await openHistory();
+				await sendKeys("p");
+				const preview = await waitForFrame(
+					(frame) =>
+						frame.includes("Plugin history payload is intentionally hidden"),
+					"the opaque Plugin event preview"
+				);
+				expect(preview).not.toContain("smoke-private-history-payload");
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Enter selects a history entry") &&
+						!frame.includes("Plugin history payload is intentionally hidden"),
+					"the tree after closing the Plugin event preview"
+				);
+				await sendKeys("C-Home");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after selecting the root"
+				);
+
+				await sendPrompt("terminal smoke history add B");
+				await waitForResponse("history-event-added:B");
+				await openHistory();
+				await sendKeys("smoke-item-A");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Plugin Entry · interactive_smoke / smoke-item-A"),
+					"the filtered branch A custom entry"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after selecting branch A"
+				);
+				await sendPrompt("terminal smoke history list");
+				await waitForResponse("history-state:A");
+
+				await openHistory();
+				await sendKeys("smoke-item-B");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Plugin Entry · interactive_smoke / smoke-item-B"),
+					"the filtered branch B custom entry"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after selecting branch B"
+				);
+				await sendPrompt("terminal smoke history list");
+				await waitForResponse("history-state:B");
+				expect(
+					await Bun.file(
+						path.join(smokeHome, "workspace", ".smoke-history-action-count")
+					).text()
+				).toBe("2");
+
+				await sendPrompt("terminal smoke history context probe");
+				await waitForResponse("history-context-clean");
+			},
+			{ historyEnabled: true }
 		);
 	},
 	{ timeout: 120_000 }

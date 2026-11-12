@@ -311,6 +311,7 @@ export type PluginToolContext = PluginSessionContext &
 
 export type PluginCommandContext = Readonly<{
 	argument: string;
+	sessionHistory?: PluginSessionHistory;
 	sessionId?: string;
 	sessionState?: PluginSessionState;
 	workspace: string;

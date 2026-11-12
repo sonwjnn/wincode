@@ -4,7 +4,10 @@ import {
 	createPluginRuntime,
 	type LoadedPlugin,
 } from "@/modules/plugins/runtime";
+import type { PluginSessionHistoryPersistence } from "@/modules/sessions/session-plugin-history";
+import { toSessionHistoryEntryId } from "@/shared/identifiers";
 import { createEmptyPluginRuntime } from "../support/plugin-runtime";
+import { successfulSessionWriteOutcome } from "../support/session-write-store";
 
 const pluginSource = "/plugins/jira.ts";
 const workspace = "/workspace";
@@ -180,6 +183,77 @@ test("a scoped Plugin registration rejects duplicate model-visible names", async
 				sourcePath: pluginSource,
 			}),
 		]);
+	} finally {
+		await runtime.shutdown();
+	}
+});
+
+test("Session-bound Plugin commands receive a fresh History capability after Navigation", async () => {
+	const appendGenerations: number[] = [];
+	const operationId = "command-plugin-history-append";
+	const historyPersistence: PluginSessionHistoryPersistence = {
+		append: async (_pluginId, input) => {
+			appendGenerations.push(input.expectedHistoryGeneration);
+			return {
+				entryId: toSessionHistoryEntryId("command-plugin-history-entry"),
+				writeOutcome: successfulSessionWriteOutcome(input.operationId),
+			};
+		},
+		read: async () => ({ entries: [], readPoint: "command-history-snapshot" }),
+	};
+	const runtime = createPluginRuntime(
+		[
+			{
+				commands: [
+					{
+						description: "Append a test history event.",
+						handler: async ({ sessionHistory }) => {
+							if (sessionHistory === undefined) {
+								throw new Error("Missing Session History capability.");
+							}
+							return sessionHistory.append(
+								"command-event",
+								{ schemaVersion: 1 },
+								operationId
+							);
+						},
+						name: "append_history",
+						pluginId: "history_command",
+						sourcePath: pluginSource,
+						value: "/append_history",
+					},
+				],
+				id: "history_command",
+				sourcePath: pluginSource,
+				tools: [],
+				workspace,
+			},
+		],
+		[]
+	);
+	const context = { sessionId: "command-history-session", workspace };
+	try {
+		await runtime.startSession(context, undefined, historyPersistence);
+		const firstEntryId = await runtime.executeCommand(
+			"history_command",
+			"append_history",
+			{ argument: "", ...context }
+		);
+		await runtime.notifySessionHistoryNavigated?.({
+			...context,
+			fromEntryId: null,
+			historyGeneration: 41,
+			operationId: "command-history-navigation",
+			toEntryId: null,
+		});
+		const retryEntryId = await runtime.executeCommand(
+			"history_command",
+			"append_history",
+			{ argument: "", ...context }
+		);
+
+		expect(retryEntryId).toBe(firstEntryId);
+		expect(appendGenerations).toEqual([0, 41]);
 	} finally {
 		await runtime.shutdown();
 	}

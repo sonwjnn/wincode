@@ -311,6 +311,172 @@ test("the file-loaded checklist example restores saved items without replaying a
 	}
 });
 
+test("the event-backed checklist example restores the Selected Path after branching and reopening", async () => {
+	const databasePath = await databasePathFor("checklist-history-example");
+	const model = providerModelSelectionFixture("openai/gpt-5.6-luna");
+	const recorder = createFakeProviderRecorder();
+	const toolOutputs: unknown[] = [];
+	const toolFailures: string[] = [];
+	const availableTools = new Set<string>();
+	let addToolCalls = 0;
+	recorder.stepScript = async function* (request) {
+		for (const tool of request.tools ?? []) {
+			availableTools.add(tool.name);
+		}
+		const lastMessage = request.messages.at(-1);
+		if (lastMessage?.role === "tool") {
+			for (const part of lastMessage.content) {
+				if (part.type === "tool-result") {
+					toolOutputs.push(part.output);
+				} else if (part.type === "tool-failure") {
+					toolFailures.push(part.errorText);
+				}
+			}
+			yield { type: "finish" };
+			return;
+		}
+		const prompt =
+			request.messages
+				.findLast((message) => message.role === "user")
+				?.content.filter((part) => part.type === "text")
+				.map((part) => part.text)
+				.join("\\n") ?? "";
+		if (prompt.includes("Add branch A")) {
+			addToolCalls += 1;
+			yield {
+				input: { item: "A" },
+				toolCallId: toolCallId("history-add-A"),
+				toolName: "plugin_checklist_history_add_item",
+				type: "tool-call",
+			};
+		} else if (prompt.includes("Add branch B")) {
+			addToolCalls += 1;
+			yield {
+				input: { item: "B" },
+				toolCallId: toolCallId("history-add-B"),
+				toolName: "plugin_checklist_history_add_item",
+				type: "tool-call",
+			};
+		} else if (prompt.includes("Read the selected checklist")) {
+			yield {
+				input: {},
+				toolCallId: toolCallId("history-list"),
+				toolName: "plugin_checklist_history_list_items",
+				type: "tool-call",
+			};
+		}
+		yield { type: "finish" };
+	};
+	const exampleWorkspace = path.resolve(import.meta.dir, "../..");
+	const options = {
+		createProviderCollection: () => createFakeProviderCollection(recorder),
+		cwd: exampleWorkspace,
+		databasePath,
+		model,
+		pluginPaths: [
+			path.join(exampleWorkspace, "examples/checklist-history-plugin.ts"),
+		],
+		projectTrust: "trust" as const,
+		workspace: exampleWorkspace,
+	};
+	let sdk = await createSessionSdkWithRuntime(options);
+	let handle: SessionSdkHandle | undefined;
+	const runTurn = async (text: string): Promise<void> => {
+		if (handle === undefined) {
+			throw new Error("Checklist history Session is not open.");
+		}
+		const terminal = Promise.withResolvers<SessionSdkEvent>();
+		const unsubscribe = handle.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed" ||
+				event.type === "agent-turn-cancelled"
+			) {
+				terminal.resolve(event);
+			}
+		});
+		try {
+			expect((await handle.prompt({ text })).rejected).toBe(false);
+			expect((await terminal.promise).type).toBe("agent-turn-completed");
+			const idle = Promise.withResolvers<void>();
+			const unsubscribeIdle = handle.subscribe((snapshot) => {
+				if (!snapshot.turnActive) {
+					idle.resolve();
+				}
+			});
+			try {
+				await idle.promise;
+			} finally {
+				unsubscribeIdle();
+			}
+		} finally {
+			unsubscribe();
+		}
+	};
+	try {
+		const sessionId = await sdk.createEmptySession({ model });
+		handle = await sdk.openSession(sessionId, { autoContinue: false });
+		await runTurn("Add branch A.");
+		expect(availableTools).toContain("plugin_checklist_history_add_item");
+		expect(addToolCalls).toBe(1);
+		expect(toolFailures).toEqual([]);
+		const branchA = (
+			await sdk.readSessionHistoryTreePage(sessionId)
+		).entries.find(
+			(entry) =>
+				entry.kind === "plugin-entry" && entry.pluginId === "checklist_history"
+		);
+		expect(branchA).toBeDefined();
+		if (branchA === undefined) {
+			throw new Error("Checklist event was not added to Session history.");
+		}
+
+		await handle.navigateHistory({
+			operationId: "checklist-history-select-root",
+			targetEntryId: null,
+		});
+		await runTurn("Add branch B.");
+		const navigationToA = await handle.navigateHistory({
+			operationId: "checklist-history-select-A",
+			targetEntryId: branchA.id,
+		});
+		expect(navigationToA).toMatchObject({
+			kind: "navigated",
+			activeLeafId: branchA.id,
+		});
+		const selectedA = await sdk.readSessionHistoryTreePage(sessionId);
+		expect(selectedA.activeLeafId).toBe(branchA.id);
+		expect(
+			selectedA.entries.find(
+				(entry) => entry.kind === "plugin-entry" && entry.type === "item-added"
+			)?.selectedPath
+		).toBe(true);
+		await runTurn("Read the selected checklist after switching branches.");
+		expect(toolOutputs.at(-1)).toMatchObject({ items: ["A"] });
+		expect(addToolCalls).toBe(2);
+
+		await handle.dispose();
+		handle = undefined;
+		await sdk.dispose();
+		sdk = await createSessionSdkWithRuntime(options);
+		handle = await sdk.openSession(sessionId, { autoContinue: false });
+		await runTurn("Read the selected checklist after reopening.");
+		expect(toolOutputs.at(-1)).toMatchObject({ items: ["A"] });
+		expect(addToolCalls).toBe(2);
+		const tree = await sdk.readSessionHistoryTreePage(sessionId);
+		expect(
+			tree.entries.filter(
+				(entry) =>
+					entry.kind === "plugin-entry" &&
+					entry.pluginId === "checklist_history"
+			)
+		).toHaveLength(2);
+	} finally {
+		await handle?.dispose();
+		await sdk.dispose();
+	}
+});
+
 test("the checklist example rejects invalid restored items without resetting saved state", async () => {
 	const databasePath = await databasePathFor("checklist-invalid-restore");
 	const model = providerModelSelectionFixture("openai/gpt-5.6-luna");

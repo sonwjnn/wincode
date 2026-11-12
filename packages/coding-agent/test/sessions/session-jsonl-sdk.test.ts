@@ -15,6 +15,7 @@ import {
 import {
 	createSessionSdk,
 	type PluginFactory,
+	type PluginSessionContext,
 	type PluginSessionState,
 	type SessionSdkEvent,
 } from "@wincode/coding-agent";
@@ -217,6 +218,12 @@ const createPluginSessionHistoryFixture = async (
 	name: string,
 	options: Readonly<{
 		onBeforeHistoryNavigation?: () => void;
+		onPluginSessionHistoryNavigated?: (
+			context: PluginSessionContext
+		) => void | Promise<void>;
+		onPluginSessionStart?: (
+			context: PluginSessionContext
+		) => void | Promise<void>;
 		testObserver?: SessionJsonlStoreTestObserver;
 	}> = {}
 ) => {
@@ -248,11 +255,13 @@ const createPluginSessionHistoryFixture = async (
 	};
 	const factory: PluginFactory = (api) => {
 		const plugin = api.definePlugin({ id: "history_entries" });
-		plugin.onSessionStart(({ sessionId, ...context }) => {
-			captureHistory("history_entries", sessionId, context);
+		plugin.onSessionStart(async (context) => {
+			captureHistory("history_entries", context.sessionId, context);
+			await options.onPluginSessionStart?.(context);
 		});
-		plugin.onSessionHistoryNavigated(({ sessionId, ...context }) => {
-			captureHistory("history_entries", sessionId, context);
+		plugin.onSessionHistoryNavigated(async (context) => {
+			captureHistory("history_entries", context.sessionId, context);
+			await options.onPluginSessionHistoryNavigated?.(context);
 		});
 	};
 	const observerFactory: PluginFactory = (api) => {
@@ -286,11 +295,19 @@ const createPluginSessionHistoryFixture = async (
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 	});
 	const handle = await sdk.openSession(sessionId, { autoContinue: false });
+	const handles: SessionSdkHandle[] = [handle];
 	return {
 		close: async () => {
-			await handle.dispose();
+			await Promise.all(handles.map((openedHandle) => openedHandle.dispose()));
 			await sdk.dispose();
 			persistence.close();
+		},
+		openSession: async () => {
+			const openedHandle = await sdk.openSession(sessionId, {
+				autoContinue: false,
+			});
+			handles.push(openedHandle);
+			return openedHandle;
 		},
 		getHistory: (pluginId = "history_entries"): TestPluginSessionHistory => {
 			const history = histories.get(pluginId);
@@ -398,6 +415,264 @@ test("Plugin Session History operation IDs replay identical entries and reject c
 				error: { code: "session_operation_conflict" },
 			},
 		});
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("Plugin Session History rejects invalid JSON and oversized event data before commit", async () => {
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-custom-history-resource-limits"
+	);
+	try {
+		const history = fixture.getHistory();
+		await expect(
+			history.append(
+				"item-added",
+				{ invalid: undefined },
+				"plugin-history-invalid-json"
+			)
+		).rejects.toThrow("strict JSON values");
+		await expect(
+			history.append(
+				"é".repeat(65),
+				{ item: "too-long-type" },
+				"plugin-history-long-type"
+			)
+		).rejects.toThrow("no larger than 128 UTF-8 bytes");
+		await expect(
+			history.append(
+				"item-added",
+				{ item: "x".repeat(64 * 1024) },
+				"plugin-history-oversized-payload"
+			)
+		).rejects.toThrow("no larger than 65536 UTF-8 bytes");
+		expect((await history.read({ limit: 20 })).entries).toEqual([]);
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("a Plugin history retry after Navigation reuses its entry without moving the Active Leaf", async () => {
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-custom-history-retry-after-navigation"
+	);
+	try {
+		const operationId = "plugin-history-retry-after-navigation";
+		const originalId = await fixture
+			.getHistory()
+			.append("item-added", { itemId: "A" }, operationId);
+		await fixture.handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "plugin-history-retry-after-navigation-root",
+		});
+
+		const retryId = await fixture
+			.getHistory()
+			.append("item-added", { itemId: "A" }, operationId);
+		const tree = await fixture.sdk.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		expect(retryId).toBe(originalId);
+		expect(tree.activeLeafId).toBeNull();
+		expect(
+			tree.entries.filter((entry) => entry.kind === "plugin-entry")
+		).toHaveLength(1);
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("a Plugin reducer restores only compatible events on the Selected Path after Navigation and rebuild", async () => {
+	type ReducedHistory = Readonly<{
+		incompatibleEntries: number;
+		items: readonly string[];
+		readPoints: readonly string[];
+	}>;
+	const states = new Map<string, ReducedHistory>();
+	const restoreKinds: string[] = [];
+	const reduceSelectedPath = async (
+		history: TestPluginSessionHistory
+	): Promise<ReducedHistory> => {
+		const items: string[] = [];
+		const readPoints: string[] = [];
+		let incompatibleEntries = 0;
+		let cursor: string | undefined;
+		while (true) {
+			const page = await history.read(
+				cursor === undefined ? { limit: 1 } : { cursor, limit: 1 }
+			);
+			readPoints.push(page.readPoint);
+			for (const entry of page.entries) {
+				if (entry.type !== "item-added") {
+					continue;
+				}
+				const payload = entry.payload;
+				if (
+					typeof payload !== "object" ||
+					payload === null ||
+					Array.isArray(payload)
+				) {
+					incompatibleEntries += 1;
+					continue;
+				}
+				const event = payload as Record<string, unknown>;
+				if (event.schemaVersion !== 1 || typeof event.item !== "string") {
+					incompatibleEntries += 1;
+					continue;
+				}
+				items.push(event.item);
+			}
+			if (page.nextCursor === undefined) {
+				break;
+			}
+			cursor = page.nextCursor;
+		}
+		return { incompatibleEntries, items, readPoints };
+	};
+	const restore = async (
+		kind: string,
+		context: PluginSessionContext
+	): Promise<void> => {
+		if (!isTestPluginSessionHistory(context.sessionHistory)) {
+			throw new Error("Missing Plugin Session History capability.");
+		}
+		states.set(
+			context.sessionId,
+			await reduceSelectedPath(context.sessionHistory)
+		);
+		restoreKinds.push(kind);
+	};
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-custom-history-reducer-restore",
+		{
+			onPluginSessionHistoryNavigated: (context) =>
+				restore("navigation", context),
+			onPluginSessionStart: (context) => restore("start", context),
+		}
+	);
+	try {
+		const appendEvent = async (payload: unknown, operationId: string) => {
+			const history = fixture.getHistory();
+			const id = toSessionHistoryEntryId(
+				await history.append("item-added", payload, operationId)
+			);
+			states.set(fixture.sessionId, await reduceSelectedPath(history));
+			return id;
+		};
+		const itemAId = await appendEvent(
+			{ item: "private-history-only-value", schemaVersion: 1 },
+			"plugin-history-reducer-item-A"
+		);
+		const incompatibleId = await appendEvent(
+			{ item: "must-not-be-applied", schemaVersion: 2 },
+			"plugin-history-reducer-incompatible-A"
+		);
+		await fixture.handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "plugin-history-reducer-branch-at-root",
+		});
+		const itemBId = await appendEvent(
+			{ item: "B", schemaVersion: 1 },
+			"plugin-history-reducer-item-B"
+		);
+		expect(states.get(fixture.sessionId)).toMatchObject({
+			incompatibleEntries: 0,
+			items: ["B"],
+		});
+
+		await fixture.handle.navigateHistory({
+			targetEntryId: incompatibleId,
+			operationId: "plugin-history-reducer-select-branch-A",
+		});
+		const restoredBranchA = states.get(fixture.sessionId);
+		expect(restoredBranchA).toMatchObject({
+			incompatibleEntries: 1,
+			items: ["private-history-only-value"],
+		});
+		expect(new Set(restoredBranchA?.readPoints).size).toBe(1);
+
+		const retryId = await fixture
+			.getHistory()
+			.append(
+				"item-added",
+				{ item: "private-history-only-value", schemaVersion: 1 },
+				"plugin-history-reducer-item-A"
+			);
+		expect(retryId).toBe(itemAId);
+		await expect(
+			fixture
+				.getHistory()
+				.append(
+					"item-added",
+					{ item: "changed", schemaVersion: 1 },
+					"plugin-history-reducer-item-A"
+				)
+		).rejects.toMatchObject({
+			code: "plugin_session_history_write_failed",
+			writeOutcome: {
+				kind: "not-committed",
+				error: { code: "session_operation_conflict" },
+			},
+		});
+		const beforeReopen = await fixture.store.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		expect(beforeReopen.activeLeafId).toBe(incompatibleId);
+		expect(
+			beforeReopen.entries.filter((entry) => entry.kind === "plugin-entry")
+		).toHaveLength(3);
+
+		await fixture.handle.dispose();
+		const rebuild = await fixture.store.rebuildProjection(
+			{ kind: "all" },
+			(operation) => operation()
+		);
+		expect(rebuild.issues).toEqual([]);
+		const reopenedHandle = await fixture.openSession();
+		expect(restoreKinds.at(-1)).toBe("start");
+		expect(states.get(fixture.sessionId)).toMatchObject({
+			incompatibleEntries: 1,
+			items: ["private-history-only-value"],
+		});
+		const reopenedHistory = await fixture.getHistory().read({ limit: 10 });
+		expect(reopenedHistory.entries.map((entry) => entry.id)).toEqual([
+			itemAId,
+			incompatibleId,
+		]);
+		const afterReopen = await fixture.store.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		expect(afterReopen.activeLeafId).toBe(incompatibleId);
+		expect(
+			afterReopen.entries.filter((entry) => entry.kind === "plugin-entry")
+		).toHaveLength(3);
+		expect(
+			afterReopen.entries.find((entry) => entry.id === itemBId)?.selectedPath
+		).toBe(false);
+
+		fixture.recorder.stepScript = async function* () {
+			yield { delta: "provider-isolated", type: "text-delta" };
+			yield { type: "finish" };
+		};
+		const turnCompleted = Promise.withResolvers<void>();
+		const unsubscribe = reopenedHandle.onEvent((event) => {
+			if (isTerminalAgentTurnEvent(event)) {
+				turnCompleted.resolve();
+			}
+		});
+		try {
+			const admission = await reopenedHandle.prompt({
+				text: "Check whether the Provider receives ordinary session context.",
+			});
+			expect(admission.rejected).toBe(false);
+			await turnCompleted.promise;
+		} finally {
+			unsubscribe();
+		}
+		expect(JSON.stringify(fixture.recorder.requests)).not.toContain(
+			"private-history-only-value"
+		);
 	} finally {
 		await fixture.close();
 	}
