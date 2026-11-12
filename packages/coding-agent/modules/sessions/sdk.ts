@@ -1649,6 +1649,7 @@ const createSessionSdkInternal = async (
 			}
 			return await exportSessionBundleOperation({
 				destination,
+				scope: exportOptions?.scope ?? "tree",
 				sessionId,
 				sourceWorkspacePath: workspace,
 				...omitUndefined({ signal: exportOptions?.signal }),
@@ -1891,6 +1892,7 @@ export const createSessionSdkOperations = (
 		exportSessionBundle: (sessionId, destination, exportOptions) =>
 			exportSessionBundleOperation({
 				destination,
+				scope: exportOptions?.scope ?? "tree",
 				sessionId,
 				sourceWorkspacePath:
 					hostRuntimeOptions.workspace ??

@@ -66,7 +66,10 @@ export type {
 } from "../usage/session-statistics";
 
 import type { SessionContextEdit } from "../context-edits";
-import type { SessionBundleImportResult } from "../session-bundle-contract";
+import type {
+	SessionBundleExportScope,
+	SessionBundleImportResult,
+} from "../session-bundle-contract";
 import type {
 	PluginSessionHistoryAppendInput,
 	PluginSessionHistoryAppendResult,
@@ -308,7 +311,11 @@ export type SessionProjectionStore = {
 	withSessionBundleExport?: <Result>(
 		sessionId: SessionId,
 		operation: (source: PreparedSessionBundleExport) => Promise<Result>,
-		options: Readonly<{ existingHostWriter: boolean; signal?: AbortSignal }>
+		options: Readonly<{
+			existingHostWriter: boolean;
+			scope: SessionBundleExportScope;
+			signal?: AbortSignal;
+		}>
 	) => Promise<Result>;
 	withSessionBundleImport?: (
 		bundlePath: string,

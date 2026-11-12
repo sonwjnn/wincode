@@ -43,7 +43,8 @@ test("the Session picker asks for a destination before exporting the selected Se
 		await flushTestRenderer(setup, 2);
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("Export candidate");
-		expect(frame).toContain("local bundle directory");
+		expect(frame).toContain("Whole tree keeps the Session identity");
+		expect(frame).toContain("Selected Path");
 		expect(frame).toContain("./session-bundle");
 		expect(frame).toContain("export");
 	} finally {

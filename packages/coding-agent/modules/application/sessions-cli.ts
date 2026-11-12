@@ -4,6 +4,7 @@ import { getInteractiveSessionHostManager } from "@/modules/sessions/host/sessio
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionBundleExportResult,
+	SessionBundleExportScope,
 	SessionBundleImportResult,
 } from "@/modules/sessions/session-bundle-contract";
 import {
@@ -49,7 +50,7 @@ const HELP_TEXT = [
 	"  wincode sessions history <session-id> [--cursor <cursor>] [--limit <limit>] [--json]",
 	"  wincode sessions stats <session-id> [--turn-id <turn-id>] [--read-point <token>] [--json]",
 	"  wincode sessions fork <session-id> <record-id> <operation-id> [--json]",
-	"  wincode sessions export <session-id> <directory> [--json]",
+	"  wincode sessions export <session-id> <directory> [--scope <tree|branch>] [--json]",
 	"  wincode sessions import <directory> [--json]",
 	"  wincode sessions verify <session-id> [--json]",
 	"  wincode sessions rebuild <session-id|--all> [--json]",
@@ -59,13 +60,14 @@ const HELP_TEXT = [
 	"  history <session-id>       Read one snapshot page of stored Session history",
 	"  stats <session-id>         Read persisted Session or Agent Turn statistics",
 	"  fork <session-id> <record-id> <operation-id> Fork at a validated checkpoint; does not switch the active Session",
-	"  export <session-id> <dir>  Export an idle Session to a bundle directory",
+	"  export <session-id> <dir>  Export all history or only the Selected Path (default: tree)",
 	"  import <dir>               Import a bundle into the current workspace",
 	"  verify <session-id>        Validate the authoritative Session JSONL log",
 	"  rebuild <session-id>       Rebuild one Session projection from its log",
 	"  rebuild --all              Rebuild projections from published Session logs",
 	"",
 	"Options:",
+	"  --scope <tree|branch>      Export all branches or one standalone Selected Path (default: tree)",
 	"  --json                     Emit one JSON result",
 	"  -h, --help                 Show this help",
 ].join("\n");
@@ -141,6 +143,7 @@ type ParsedSessionsCommand =
 			json: boolean;
 			kind: "export";
 			destination: string;
+			scope: SessionBundleExportScope;
 			sessionId: string;
 	  }>
 	| Readonly<{ bundlePath: string; json: boolean; kind: "import" }>
@@ -523,8 +526,31 @@ const parseForkCommand = (
 };
 
 type BundleCommandArguments =
-	| Readonly<{ json: boolean; positionals: string[] }>
+	| Readonly<{
+			json: boolean;
+			positionals: string[];
+			scope?: SessionBundleExportScope;
+	  }>
 	| Readonly<{ json: boolean; message: string }>;
+
+type ParsedBundleScopeOption =
+	| Readonly<{ nextIndex: number; scope: SessionBundleExportScope }>
+	| Readonly<{ message: string }>;
+
+const parseBundleScopeOption = (
+	args: readonly string[],
+	index: number,
+	currentScope: SessionBundleExportScope | undefined
+): ParsedBundleScopeOption => {
+	if (currentScope !== undefined) {
+		return { message: "The --scope option may be specified only once." };
+	}
+	const value = args[index + 1];
+	if (value !== "tree" && value !== "branch") {
+		return { message: "The --scope option requires 'tree' or 'branch'." };
+	}
+	return { nextIndex: index + 1, scope: value };
+};
 
 const parseBundleCommandArguments = (
 	args: readonly string[],
@@ -532,11 +558,24 @@ const parseBundleCommandArguments = (
 	jsonWasRequested: boolean
 ): BundleCommandArguments => {
 	let json = false;
+	let scope: SessionBundleExportScope | undefined;
 	const positionals: string[] = [];
 	for (let index = 1; index < args.length; index += 1) {
 		const argument = args[index];
 		if (argument === "--json" && !json) {
 			json = true;
+			continue;
+		}
+		if (command === "export" && argument === "--scope") {
+			const parsedScope = parseBundleScopeOption(args, index, scope);
+			if ("message" in parsedScope) {
+				return {
+					json: json || jsonWasRequested,
+					message: parsedScope.message,
+				};
+			}
+			scope = parsedScope.scope;
+			index = parsedScope.nextIndex;
 			continue;
 		}
 		if (argument !== undefined && !argument.startsWith("-")) {
@@ -548,7 +587,11 @@ const parseBundleCommandArguments = (
 			message: `Unknown or repeated Sessions ${command} option '${argument}'.`,
 		};
 	}
-	return { json: json || jsonWasRequested, positionals };
+	return {
+		json: json || jsonWasRequested,
+		positionals,
+		...omitUndefined({ scope }),
+	};
 };
 
 const parseExportCommand = (
@@ -583,7 +626,13 @@ const parseExportCommand = (
 			message: "The export command requires a destination directory.",
 		};
 	}
-	return { destination, json, kind: "export", sessionId };
+	return {
+		destination,
+		json,
+		kind: "export",
+		scope: parsed.scope ?? "tree",
+		sessionId,
+	};
 };
 
 const parseImportCommand = (
@@ -1101,7 +1150,7 @@ const writeSessionBundleExport = (
 	} else {
 		outputLine(
 			io.stdout,
-			`Exported Session ${sanitizeText(result.sessionId)} to ${sanitizeText(result.destination)}.`
+			`Exported ${result.manifest.scope} Session bundle ${sanitizeText(result.sessionId)} to ${sanitizeText(result.destination)}.`
 		);
 	}
 	return 0;
@@ -1170,6 +1219,7 @@ const runSessionBundleExportCommand = async (
 		return writeSessionBundleExport(
 			await exportSessionBundle({
 				destination: command.destination,
+				scope: command.scope,
 				sessionId: toSessionId(command.sessionId),
 				sourceWorkspacePath: process.cwd(),
 			}),

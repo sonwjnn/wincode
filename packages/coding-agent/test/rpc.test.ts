@@ -39,6 +39,7 @@ import type {
 	SessionHistoryNavigationOutcome,
 	SessionHistoryNavigationRequest,
 } from "../modules/sessions/sdk-contract";
+import type { SessionBundleExportScope } from "../modules/sessions/session-bundle-contract";
 import { SessionBundleImportError } from "../modules/sessions/session-bundle-import";
 import { SessionLogError } from "../modules/sessions/storage/session-jsonl-codec";
 import { SessionPaginationError } from "../modules/sessions/storage/session-pagination";
@@ -595,6 +596,11 @@ test("RPC Session read methods forward snapshot read points and reject unknown s
 						destination: "bundle",
 						sessionId: "../invalid",
 					}),
+					request("bad-export-scope", "session/exportBundle", {
+						destination: "bundle",
+						scope: "partial",
+						sessionId: "rpc-page-session",
+					}),
 					request("bad-import", "session/importBundle", {}),
 					request("shutdown", "server/shutdown", {}),
 				].join("\n")}\n`
@@ -664,17 +670,36 @@ test("RPC Session read methods forward snapshot read points and reject unknown s
 	expect(responses[7]).toMatchObject({
 		error: {
 			code: -32_602,
+			message: "scope must be 'tree' or 'branch'.",
+		},
+		id: "bad-export-scope",
+	});
+	expect(responses[8]).toMatchObject({
+		error: {
+			code: -32_602,
 			message: "bundlePath must be a non-empty directory path.",
 		},
 		id: "bad-import",
 	});
 });
 
-test("RPC Session export routes through the shared operation and preserves its typed error", async () => {
+test("RPC Session export passes branch scope through the shared operation", async () => {
 	const manager = createSessionHostManager();
 	const capabilities = {
 		getSessionHostManager: () => manager,
 	} as SessionCapabilities;
+	const exportedSessionId = sessionId("rpc-export-session");
+	let requestedScope: SessionBundleExportScope | undefined;
+	const withSessionBundleExport: NonNullable<
+		SessionStore["withSessionBundleExport"]
+	> = async (_sessionId, _operation, options) => {
+		requestedScope = options.scope;
+		throw new SessionLogError(
+			"session_not_found",
+			exportedSessionId,
+			"Session not found."
+		);
+	};
 	const request = (
 		id: string,
 		method: string,
@@ -686,7 +711,7 @@ test("RPC Session export routes through the shared operation and preserves its t
 		composeServices: async () => ({
 			capabilities,
 			shutdown: () => manager.shutdownAll(),
-			store: fromPartial<SessionStore>({}),
+			store: fromPartial<SessionStore>({ withSessionBundleExport }),
 			workspace: process.cwd(),
 			workspaceId: "workspace-export-test",
 		}),
@@ -701,6 +726,7 @@ test("RPC Session export routes through the shared operation and preserves its t
 					}),
 					request("export", "session/exportBundle", {
 						destination: path.join(process.cwd(), "rpc-export-test"),
+						scope: "branch",
 						sessionId: "rpc-export-session",
 					}),
 					request("shutdown", "server/shutdown", {}),
@@ -716,10 +742,11 @@ test("RPC Session export routes through the shared operation and preserves its t
 
 	expect(exitCode).toBe(0);
 	expect(stderr.frames).toEqual([]);
+	expect(requestedScope).toBe("branch");
 	expect(responses[1]).toMatchObject({
 		error: {
 			code: -32_000,
-			data: { code: "session_export_unavailable" },
+			data: { code: "session_not_found", sessionId: exportedSessionId },
 		},
 		id: "export",
 	});
