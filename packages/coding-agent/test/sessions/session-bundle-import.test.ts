@@ -42,6 +42,7 @@ import {
 	decodeSessionLog,
 	encodeSessionLogLine,
 	type SessionLogEnvelope,
+	sessionHistoryEntryIdForOperation,
 } from "@/modules/sessions/storage/session-jsonl-codec";
 import {
 	createSessionJsonlStore,
@@ -175,9 +176,20 @@ const appendBundleSubmissionStatus = async (
 	if (previousStatus?.envelope.type !== "submission.status-updated") {
 		throw new Error("The bundle has no Submission status to extend.");
 	}
+	const operationId = "invalid-submission-status-transition";
+	const historyEntryId = sessionHistoryEntryIdForOperation(
+		sessionId,
+		operationId
+	);
 	const nextStatus = createSessionLogEvent({
-		operationId: "invalid-submission-status-transition",
-		payload: { ...previousStatus.envelope.payload, status },
+		operationId,
+		payload: {
+			...previousStatus.envelope.payload,
+			activeLeafId: historyEntryId,
+			historyEntryId,
+			parentEntryId: previousStatus.envelope.payload.activeLeafId,
+			status,
+		},
 		previousHash: state.lastHash,
 		sequence: state.nextSequence,
 		sessionId,

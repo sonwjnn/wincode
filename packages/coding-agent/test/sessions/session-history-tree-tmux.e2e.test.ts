@@ -1,16 +1,41 @@
 import { expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
+import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
 const smokeLauncher = path.join(
 	repositoryRoot,
 	"scripts/test-support/interactive-smoke-launcher.sh"
 );
-const tmuxTimeoutMs = 15_000;
+const tmuxTimeoutMs = 20_000;
 
-test("tmux /history previews, cancels, and reopens at the same leaf", async () => {
+type TerminalSmokeSession = Readonly<{
+	openHistory: () => Promise<string>;
+	sendCommand: (command: string) => Promise<void>;
+	sendKeys: (...keys: string[]) => Promise<void>;
+	sendPrompt: (text: string) => Promise<void>;
+	smokeHome: string;
+	waitForFrame: (
+		predicate: (frame: string) => boolean,
+		description: string
+	) => Promise<string>;
+	waitForResponse: (response: string) => Promise<string>;
+}>;
+
+const quoteShell = (value: string): string =>
+	`'${value.replaceAll("'", "'\\''")}'`;
+
+const withTerminalSmoke = async (
+	run: (session: TerminalSmokeSession) => Promise<void>,
+	options: Readonly<{ seedInvalidEndpoint?: boolean }> = {}
+): Promise<void> => {
 	const tmuxSession = `wincode-history-${crypto.randomUUID()}`;
+	const smokeHome = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-history-smoke-")
+	);
 	let sessionCreated = false;
 	let lastFrame = "";
 	const runTmux = async (args: string[]): Promise<string> => {
@@ -21,6 +46,12 @@ test("tmux /history previews, cancels, and reopens at the same leaf", async () =
 			);
 		}
 		return result.text();
+	};
+	const sendKeys = async (...keys: string[]): Promise<void> => {
+		await runTmux(["send-keys", "-t", tmuxSession, ...keys]);
+	};
+	const sendPrompt = async (text: string): Promise<void> => {
+		await sendKeys(text, "Enter");
 	};
 	const waitForFrame = async (
 		predicate: (frame: string) => boolean,
@@ -36,6 +67,54 @@ test("tmux /history previews, cancels, and reopens at the same leaf", async () =
 		}
 		throw new Error(`Timed out waiting for ${description}.`);
 	};
+	const sendCommand = async (command: string): Promise<void> => {
+		const descriptions: Readonly<Record<string, string>> = {
+			"/agents": "Switch agents",
+			"/history": "Browse the current Session history tree",
+			"/new": "Start a new session",
+			"/sessions": "Browse past sessions",
+			"/smoke-invalid-continue": "Exercise continuation rejection",
+		};
+		const description = descriptions[command];
+		if (description === undefined) {
+			throw new Error(`No smoke command description for ${command}.`);
+		}
+		await sendKeys(command);
+		await waitForFrame(
+			(frame) => frame.includes(description),
+			`the ${command} command suggestion`
+		);
+		await sendKeys("Tab");
+	};
+	const waitForResponse = async (response: string): Promise<string> =>
+		await waitForFrame(
+			(frame) => frame.includes(response) && !frame.includes("Working..."),
+			`Provider response ${response}`
+		);
+	const selectSmokeAgent = async (): Promise<void> => {
+		await sendCommand("/agents");
+		await waitForFrame(
+			(frame) =>
+				frame.includes("Search agents") && frame.includes("Terminal Smoke"),
+			"the Terminal Smoke Agent picker"
+		);
+		await sendKeys("Enter");
+		await waitForFrame(
+			(frame) =>
+				frame.includes("Ask anything...") &&
+				frame.includes("terminal-smoke/fake"),
+			"the selected fake Provider"
+		);
+	};
+	const openHistory = async (): Promise<string> => {
+		await sendCommand("/history");
+		return await waitForFrame(
+			(frame) =>
+				frame.includes("Enter selects a history entry") &&
+				!frame.includes("Loading Session history..."),
+			"the history tree"
+		);
+	};
 
 	try {
 		await runTmux([
@@ -44,68 +123,35 @@ test("tmux /history previews, cancels, and reopens at the same leaf", async () =
 			"-s",
 			tmuxSession,
 			"-x",
-			"64",
+			"80",
 			"-y",
-			"18",
+			"24",
 			"-c",
 			repositoryRoot,
+			"bash",
 		]);
 		sessionCreated = true;
-		await runTmux(["send-keys", "-t", tmuxSession, smokeLauncher, "Enter"]);
+		const launcherCommand = [
+			`WINCODE_SMOKE_HOME=${quoteShell(smokeHome)}`,
+			`WINCODE_SMOKE_BUN=${quoteShell(process.execPath)}`,
+			`WINCODE_SMOKE_INVALID_ENDPOINT=${options.seedInvalidEndpoint === true ? "1" : "0"}`,
+			quoteShell(smokeLauncher),
+		].join(" ");
+		await sendKeys(launcherCommand, "Enter");
 		await waitForFrame(
 			(frame) => frame.includes("Ask anything..."),
 			"the composer"
 		);
-
-		await runTmux([
-			"send-keys",
-			"-t",
-			tmuxSession,
-			"terminal smoke stream",
-			"Enter",
-		]);
-		await waitForFrame(
-			(frame) => frame.includes("smoke-stream-two"),
-			"the fake Provider's completed response"
-		);
-		await runTmux(["send-keys", "-t", tmuxSession, "/history"]);
-		await runTmux(["send-keys", "-t", tmuxSession, "Enter"]);
-		const treeFrame = await waitForFrame(
-			(frame) => frame.includes("Current leaf: entry 1"),
-			"the history tree and current leaf"
-		);
-		expect(treeFrame).toContain("Read only");
-		expect(treeFrame).toContain("L Record · user · terminal smoke stream");
-
-		await runTmux(["send-keys", "-t", tmuxSession, "Enter"]);
-		const previewFrame = await waitForFrame(
-			(frame) => frame.includes("History entry 1"),
-			"the selected entry preview"
-		);
-		expect(previewFrame).toContain("terminal smoke stream");
-
-		await runTmux(["send-keys", "-t", tmuxSession, "Escape"]);
-		await waitForFrame(
-			(frame) => frame.includes("Search Session history"),
-			"the tree after cancelling its preview"
-		);
-		await runTmux(["send-keys", "-t", tmuxSession, "Escape"]);
-		await waitForFrame(
-			(frame) =>
-				!frame.includes("Search Session history") &&
-				frame.includes("Ask anything..."),
-			"the composer after cancelling the read-only tree"
-		);
-
-		await runTmux(["send-keys", "-t", tmuxSession, "/history"]);
-		await runTmux(["send-keys", "-t", tmuxSession, "Enter"]);
-		const reopenedFrame = await waitForFrame(
-			(frame) => frame.includes("Current leaf: entry 1"),
-			"the reopened history tree"
-		);
-		expect(reopenedFrame).toContain("L Record · user · terminal smoke stream");
-		await runTmux(["send-keys", "-t", tmuxSession, "Escape"]);
-		await runTmux(["send-keys", "-t", tmuxSession, "/exit", "Enter"]);
+		await selectSmokeAgent();
+		await run({
+			openHistory,
+			sendCommand,
+			sendKeys,
+			sendPrompt,
+			smokeHome,
+			waitForFrame,
+			waitForResponse,
+		});
 	} catch (error) {
 		const framePath = process.env.WINCODE_E2E_FRAME_PATH;
 		if (framePath && lastFrame.length > 0) {
@@ -116,5 +162,467 @@ test("tmux /history previews, cancels, and reopens at the same leaf", async () =
 		if (sessionCreated) {
 			await runTmux(["kill-session", "-t", tmuxSession]).catch(() => undefined);
 		}
+		await removeTemporaryDirectory(smokeHome);
 	}
-});
+};
+
+test(
+	"Escape cancels the active turn and recalls its queued Submission",
+	async () => {
+		await withTerminalSmoke(
+			async ({
+				sendPrompt,
+				sendKeys,
+				smokeHome,
+				waitForFrame,
+				waitForResponse,
+			}) => {
+				await sendPrompt("terminal smoke cancel");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("cancel-pending") && frame.includes("Working..."),
+					"the fake Provider's cancellable response"
+				);
+				await sendPrompt("terminal smoke after cancel");
+				await waitForFrame(
+					(frame) => frame.includes("1 waiting"),
+					"a queued Submission while the Provider is active"
+				);
+				await sendKeys("Escape");
+				await Bun.sleep(100);
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("terminal smoke after cancel") &&
+						!frame.includes("Working..."),
+					"the cancelled turn and recalled queued Submission"
+				);
+				await sendKeys("Enter");
+				await waitForResponse("after-cancel-ok");
+				expect(
+					await Bun.file(
+						path.join(smokeHome, "workspace", ".smoke-cancelled")
+					).exists()
+				).toBe(true);
+			}
+		);
+	},
+	{ timeout: 120_000 }
+);
+
+test(
+	"Active and queued work reject history navigation without changing the branch",
+	async () => {
+		await withTerminalSmoke(
+			async ({ openHistory, sendKeys, sendPrompt, waitForFrame }) => {
+				await sendPrompt("terminal smoke cancel");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("cancel-pending") && frame.includes("Working..."),
+					"the fake Provider's cancellable response"
+				);
+				await openHistory();
+				await sendKeys("Enter");
+				let refusalFrame = await waitForFrame(
+					(frame) => frame.includes("Cannot navigate Session history"),
+					"history navigation refusal during an active turn"
+				);
+				expect(refusalFrame).toContain("Cannot navigate Session history");
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) => !frame.includes("Enter selects a history entry"),
+					"the composer after closing the history tree"
+				);
+
+				await sendPrompt("terminal smoke after cancel");
+				await waitForFrame(
+					(frame) => frame.includes("1 waiting"),
+					"a queued Submission while the Provider is active"
+				);
+				await openHistory();
+				await sendKeys("C-Home");
+				refusalFrame = await waitForFrame(
+					(frame) => frame.includes("Cannot navigate Session history"),
+					"history navigation refusal while a Submission is queued"
+				);
+				expect(refusalFrame).toContain("Current leaf:");
+			}
+		);
+	},
+	{ timeout: 120_000 }
+);
+
+test(
+	"History navigation preserves a sibling branch across Session switch and reopen",
+	async () => {
+		await withTerminalSmoke(
+			async ({
+				openHistory,
+				sendCommand,
+				sendKeys,
+				sendPrompt,
+				waitForFrame,
+				waitForResponse,
+			}) => {
+				await sendPrompt("terminal smoke stream");
+				await waitForResponse("smoke-stream-two");
+
+				const treeFrame = await openHistory();
+				expect(treeFrame).toContain("Current leaf: entry 2");
+				expect(treeFrame).toContain("Record · user · terminal smoke stream");
+				expect(treeFrame).toContain("L Record · assistant ·");
+				await sendKeys("Up");
+				await sendKeys("p");
+				const previewFrame = await waitForFrame(
+					(frame) => frame.includes("History entry 1"),
+					"the original User entry preview"
+				);
+				expect(previewFrame).toContain("terminal smoke stream");
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Enter selects a history entry") &&
+						!frame.includes("History entry 1"),
+					"the tree after closing its preview"
+				);
+				await sendKeys("C-Home");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after selecting the root"
+				);
+
+				await sendPrompt("branch from root");
+				await waitForResponse("root-branch-only");
+				const branchedFrame = await openHistory();
+				expect(branchedFrame).toContain("Record · user · branch from root");
+				expect(branchedFrame).toContain("Current leaf:");
+				await sendKeys("Up");
+				await sendKeys("Up");
+				await sendKeys("p");
+				const preservedPreview = await waitForFrame(
+					(frame) => frame.includes("History entry 2"),
+					"the preserved sibling branch preview"
+				);
+				expect(preservedPreview).toContain("smoke-stream-two");
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Enter selects a history entry") &&
+						!frame.includes("History entry 2"),
+					"the tree after closing the sibling preview"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after returning to the preserved branch"
+				);
+
+				await sendPrompt("continue preserved path");
+				await waitForResponse("preserved-path-ok");
+				await sendCommand("/new");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Ask anything...") &&
+						!frame.includes("preserved-path-ok"),
+					"a second Session before switching back"
+				);
+				await sendCommand("/agents");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Search agents") && frame.includes("Terminal Smoke"),
+					"the Terminal Smoke Agent picker for the second Session"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Ask anything...") &&
+						frame.includes("terminal-smoke/fake"),
+					"the fake Provider on the second Session"
+				);
+				await sendPrompt("secondary smoke session");
+				await waitForResponse("smoke-stream-two");
+				for (let step = 0; step < 16; step += 1) {
+					await sendKeys("BSpace");
+				}
+				await waitForFrame(
+					(frame) => !frame.includes("/new"),
+					"the cleared new-session command draft"
+				);
+
+				await sendCommand("/sessions");
+				const sessionsFrame = await waitForFrame(
+					(frame) =>
+						frame.includes("Search sessions") &&
+						frame.includes("terminal smoke stream") &&
+						frame.includes("secondary smoke session"),
+					"both stored Sessions before switching"
+				);
+				expect(sessionsFrame).toContain("terminal smoke stream");
+				await sendKeys("terminal smoke stream");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Sessions") &&
+						frame.includes("terminal smoke stream"),
+					"the branched Session search result"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) => frame.includes("preserved-path-ok"),
+					"the reopened Session's selected-path transcript"
+				);
+				for (let step = 0; step < 16; step += 1) {
+					await sendKeys("BSpace");
+				}
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("/new") && frame.includes("Ask anything..."),
+					"the cleared command draft after reopening"
+				);
+				await sendPrompt("reopen preserved path");
+				await waitForResponse("reopen-preserved-path-ok");
+			}
+		);
+	},
+	{ timeout: 120_000 }
+);
+
+test(
+	"Selecting a non-root ancestor continues with only that ancestor's context",
+	async () => {
+		await withTerminalSmoke(
+			async ({
+				openHistory,
+				sendKeys,
+				sendPrompt,
+				waitForFrame,
+				waitForResponse,
+			}) => {
+				await sendPrompt("ancestor source turn");
+				await waitForResponse("smoke-stream-two");
+				await sendPrompt("turn excluded from selected ancestor");
+				await waitForResponse("excluded-turn-response");
+
+				const treeFrame = await openHistory();
+				expect(treeFrame).toContain("Current leaf: entry 4");
+				await sendKeys("Up");
+				await sendKeys("Up");
+				await sendKeys("p");
+				const ancestorPreview = await waitForFrame(
+					(frame) => frame.includes("History entry 2"),
+					"the non-root ancestor preview"
+				);
+				expect(ancestorPreview).toContain("smoke-stream-two");
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Enter selects a history entry") &&
+						!frame.includes("History entry 2"),
+					"the tree after closing its ancestor preview"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after selecting a non-root ancestor"
+				);
+
+				await sendPrompt("continue from non-root ancestor");
+				await waitForResponse("ancestor-path-only");
+				await openHistory();
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("ancestor-path-only"),
+					"the composer after continuing on the ancestor branch"
+				);
+			}
+		);
+	},
+	{ timeout: 120_000 }
+);
+
+test(
+	"Continue at a non-terminal history endpoint is rejected before a Provider request",
+	async () => {
+		await withTerminalSmoke(
+			async ({
+				openHistory,
+				sendCommand,
+				sendKeys,
+				smokeHome,
+				waitForFrame,
+			}) => {
+				await sendCommand("/sessions");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Search sessions") &&
+						frame.includes("Invalid endpoint smoke fixture"),
+					"the seeded non-terminal history Session"
+				);
+				await sendKeys("Invalid endpoint smoke fixture");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Sessions") &&
+						frame.includes("Invalid endpoint smoke fixture"),
+					"the filtered invalid-endpoint Session"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("non-terminal assistant checkpoint") &&
+						!frame.includes("Search sessions"),
+					"the Session ending at a non-terminal checkpoint"
+				);
+				for (let step = 0; step < 16; step += 1) {
+					await sendKeys("BSpace");
+				}
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("/sessions") && frame.includes("Ask anything..."),
+					"the cleared composer in the selected Session"
+				);
+
+				const treeFrame = await openHistory();
+				expect(treeFrame).toContain("Current leaf: entry ");
+				expect(treeFrame).toContain(
+					"L Record · assistant · non-terminal assistant checkpoint"
+				);
+				await sendKeys("p");
+				const previewFrame = await waitForFrame(
+					(frame) => frame.includes("History entry "),
+					"the non-terminal checkpoint preview"
+				);
+				expect(previewFrame).toContain("non-terminal assistant checkpoint");
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Enter selects a history entry") &&
+						!frame.includes("History entry "),
+					"the history tree after closing its preview"
+				);
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after previewing the invalid endpoint"
+				);
+
+				await sendCommand("/smoke-invalid-continue");
+				await sendKeys("Enter");
+				const rejectionFrame = await waitForFrame(
+					(frame) =>
+						frame.includes("Invalid continuation endpoint rejected") &&
+						frame.includes("completed Tool Call"),
+					"the visible continuation rejection"
+				);
+				expect(rejectionFrame.replace(/\s+/g, " ")).toContain(
+					"Agent Session can only continue"
+				);
+				expect(
+					await Bun.file(
+						path.join(smokeHome, "workspace", ".smoke-provider-request-seen")
+					).exists()
+				).toBe(false);
+			},
+			{ seedInvalidEndpoint: true }
+		);
+	},
+	{ timeout: 120_000 }
+);
+
+test(
+	"Selecting an inactive branch reports the committed Plugin restore failure",
+	async () => {
+		await withTerminalSmoke(
+			async ({
+				openHistory,
+				sendKeys,
+				sendPrompt,
+				waitForFrame,
+				waitForResponse,
+			}) => {
+				await sendPrompt("terminal smoke stream");
+				await waitForResponse("smoke-stream-two");
+				await openHistory();
+				await sendKeys("C-Home");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after selecting the root"
+				);
+
+				await sendPrompt("branch from root");
+				await waitForResponse("root-branch-only");
+				await openHistory();
+				await sendKeys("Up");
+				await sendKeys("Up");
+				await sendKeys("p");
+				const preservedPreview = await waitForFrame(
+					(frame) => frame.includes("History entry 2"),
+					"the preserved branch endpoint preview"
+				);
+				expect(preservedPreview).toContain("smoke-stream-two");
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Enter selects a history entry") &&
+						!frame.includes("History entry 2"),
+					"the tree before selecting the preserved branch"
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						!frame.includes("Enter selects a history entry") &&
+						frame.includes("Ask anything..."),
+					"the composer after returning to the preserved branch"
+				);
+				await sendPrompt("continue preserved path");
+				await waitForResponse("preserved-path-ok");
+
+				await openHistory();
+				let branchPreview = "";
+				for (let attempt = 0; attempt < 12; attempt += 1) {
+					await sendKeys("p");
+					branchPreview = await waitForFrame(
+						(frame) => frame.includes("History entry "),
+						"the selected history entry preview"
+					);
+					if (branchPreview.includes("root-branch-only")) {
+						break;
+					}
+					await sendKeys("Escape");
+					await waitForFrame(
+						(frame) =>
+							frame.includes("Enter selects a history entry") &&
+							!frame.includes("History entry "),
+						"the tree before inspecting the next history entry"
+					);
+					await sendKeys("Up");
+				}
+				expect(branchPreview).toContain("root-branch-only");
+				await sendKeys("Escape");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Enter selects a history entry") &&
+						!frame.includes("History entry "),
+					"the tree before restoring the inactive branch"
+				);
+				await sendKeys("Enter");
+				const restoreFailureFrame = await waitForFrame(
+					(frame) => frame.includes("smoke-history-restore-failed"),
+					"the committed-blocked restore failure UI"
+				);
+				expect(restoreFailureFrame).toContain("Current leaf:");
+			}
+		);
+	},
+	{ timeout: 120_000 }
+);

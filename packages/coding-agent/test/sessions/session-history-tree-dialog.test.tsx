@@ -1,14 +1,18 @@
 import { expect, mock, test } from "bun:test";
 import { act, useEffect } from "react";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
-import type { SessionSdk } from "@/modules/sessions/sdk-contract";
+import type {
+	SessionHistoryNavigationOutcome,
+	SessionHistoryNavigationRequest,
+	SessionSdk,
+} from "@/modules/sessions/sdk-contract";
 import type {
 	SessionHistoryTreeEntry,
 	SessionHistoryTreePage,
 } from "@/modules/sessions/session-pagination-types";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import { SessionHistoryTreeDialogContent } from "@/modules/sessions/ui/dialogs/session-history-tree-dialog";
-import { toSessionId } from "@/shared/identifiers";
+import { toSessionHistoryEntryId, toSessionId } from "@/shared/identifiers";
 import {
 	DialogProvider,
 	useDialog,
@@ -34,7 +38,7 @@ const record = buildUserSessionRecord({
 });
 const recordEntry: SessionHistoryTreeEntry = {
 	createdAt,
-	id: "entry-history-ui-record",
+	id: toSessionHistoryEntryId("entry-history-ui-record"),
 	kind: "record",
 	parentEntryId: null,
 	record,
@@ -44,11 +48,11 @@ const recordEntry: SessionHistoryTreeEntry = {
 };
 const pluginStateEntry = {
 	createdAt,
-	id: "entry-history-ui-plugin-state",
+	id: toSessionHistoryEntryId("entry-history-ui-plugin-state"),
 	key: "queue \u001b[31m",
 	kind: "plugin-state",
 	operation: "set",
-	parentEntryId: "entry-history-ui-record",
+	parentEntryId: recordEntry.id,
 	pluginId: "queue_plugin",
 	schemaVersion: 1,
 	selectedPath: true,
@@ -73,12 +77,14 @@ const laterEntries: SessionHistoryTreeEntry[] = Array.from(
 		});
 		return {
 			createdAt,
-			id: `entry-history-ui-later-record-${index}`,
+			id: toSessionHistoryEntryId(`entry-history-ui-later-record-${index}`),
 			kind: "record",
 			parentEntryId:
 				index === 0
-					? "entry-history-ui-plugin-state"
-					: `entry-history-ui-later-record-${index - 1}`,
+					? pluginStateEntry.id
+					: toSessionHistoryEntryId(
+							`entry-history-ui-later-record-${index - 1}`
+						),
 			record: laterRecord,
 			recordId: laterRecord.id,
 			selectedPath: true,
@@ -92,18 +98,35 @@ if (laterEntry === undefined) {
 }
 const page: SessionHistoryTreePage = {
 	activeLeafId: laterEntry.id,
+	historyGeneration: 0,
 	entries,
 	nextCursor: "history-tree-ui-next-page",
 	readPoint: "history-tree-ui-read-point",
 };
 const nextPage: SessionHistoryTreePage = {
 	activeLeafId: laterEntry.id,
+	historyGeneration: 0,
 	entries: laterEntries,
 	readPoint: page.readPoint,
 };
 
-test("history previews neutralize terminal controls, hide Plugin State payloads, and cancel without changing the leaf", async () => {
+const createHistoryTreeDialogHarness = async (
+	pendingNavigation?: Promise<SessionHistoryNavigationOutcome>
+) => {
 	const reads: Array<{ cursor?: string; limit?: number }> = [];
+	const navigationTargets: Array<string | null> = [];
+	const navigateSessionHistory = mock(
+		async (_sessionId: string, request: SessionHistoryNavigationRequest) => {
+			const targetEntryId = request.targetEntryId;
+			navigationTargets.push(targetEntryId);
+			if (pendingNavigation !== undefined) {
+				return pendingNavigation;
+			}
+			return targetEntryId === null
+				? { kind: "unchanged" as const, activeLeafId: null }
+				: { kind: "rejected" as const, reason: "history entry unavailable" };
+		}
+	);
 	const readSessionHistoryTreePage = mock(
 		async (
 			_sessionId: string,
@@ -113,7 +136,11 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 			return options?.cursor === undefined ? page : nextPage;
 		}
 	);
-	const sessionSdk: Pick<SessionSdk, "readSessionHistoryTreePage"> = {
+	const sessionSdk: Pick<
+		SessionSdk,
+		"navigateSessionHistory" | "readSessionHistoryTreePage"
+	> = {
+		navigateSessionHistory,
 		readSessionHistoryTreePage,
 	};
 
@@ -144,18 +171,22 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 		</ThemeProvider>,
 		{ height: 18, kittyKeyboard: true, width: 64 }
 	);
+	await flushTestRenderer(setup, 2);
+	return { navigationTargets, reads, setup, readSessionHistoryTreePage };
+};
 
+test("History preview neutralizes terminal controls and hides Plugin State payloads", async () => {
+	const { navigationTargets, setup } = await createHistoryTreeDialogHarness();
 	try {
-		await flushTestRenderer(setup, 2);
 		let frame = setup.captureCharFrame();
-		expect(frame).toContain("Read only");
+		expect(frame).toContain("Enter selects a history entry");
 		expect(frame).toContain("Current leaf is on a later page");
 		expect(frame).toContain("queue_plugin / queue [31m · set · v1");
 		expect(frame).toContain("A safe text preview [31m");
 		expect(frame).not.toContain("\u001b");
 
 		await act(() => setup.mockInput.pressArrow("down"));
-		await act(() => setup.mockInput.pressEnter());
+		await act(() => setup.mockInput.pressKey("p"));
 		await flushTestRenderer(setup, 2);
 		frame = setup.captureCharFrame();
 		expect(frame).toContain("Plugin State payload is intentionally hidden");
@@ -168,7 +199,7 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 		expect(setup.captureCharFrame()).toContain("Search Session history");
 
 		await act(() => setup.mockInput.pressArrow("up"));
-		await act(() => setup.mockInput.pressEnter());
+		await act(() => setup.mockInput.pressKey("p"));
 		await flushTestRenderer(setup, 2);
 		frame = setup.captureCharFrame();
 		expect(frame).toContain("A safe text preview [31m");
@@ -176,13 +207,20 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 		await act(() => setup.mockInput.pressEscape());
 		await flushTestRenderer(setup, 2);
 		expect(setup.captureCharFrame()).toContain("Search Session history");
+		expect(navigationTargets).toEqual([]);
+	} finally {
+		act(() => setup.renderer.destroy());
+	}
+});
 
-		await act(() => {
-			setup.mockInput.pressArrow("down", { ctrl: true });
-		});
+test("Rejected history selection reports the error and keeps the tree open", async () => {
+	const { navigationTargets, reads, setup, readSessionHistoryTreePage } =
+		await createHistoryTreeDialogHarness();
+	try {
+		await act(() => setup.mockInput.pressArrow("down", { ctrl: true }));
 		await flushTestRenderer(setup, 2);
 		expect(reads).toHaveLength(2);
-		frame = setup.captureCharFrame();
+		let frame = setup.captureCharFrame();
 		expect(frame).toContain("Current leaf: entry 15");
 		for (
 			let attempt = 0;
@@ -194,15 +232,65 @@ test("history previews neutralize terminal controls, hide Plugin State payloads,
 			frame = setup.captureCharFrame();
 		}
 		expect(frame).toContain("L Record · user · later entry 11");
-		await act(() => setup.mockInput.pressEscape());
+		for (let attempt = 0; attempt < 13; attempt += 1) {
+			await act(() => setup.mockInput.pressArrow("up"));
+		}
+		await act(() => setup.mockInput.pressEnter());
 		await flushTestRenderer(setup, 2);
-		expect(setup.captureCharFrame()).not.toContain("Search Session history");
+		expect(setup.captureCharFrame()).toContain("history entry unavailable");
+		expect(setup.captureCharFrame()).toContain("Search Session history");
+		expect(navigationTargets).toEqual([recordEntry.id]);
 		expect(readSessionHistoryTreePage).toHaveBeenCalledTimes(2);
 		expect(reads).toEqual([
 			{ limit: 40 },
 			{ cursor: "history-tree-ui-next-page", limit: 40 },
 		]);
-		expect(page.activeLeafId).toBe(laterEntry.id);
+	} finally {
+		act(() => setup.renderer.destroy());
+	}
+});
+
+test("Pending navigation ignores repeated selection shortcuts until it settles", async () => {
+	const pendingNavigation =
+		Promise.withResolvers<SessionHistoryNavigationOutcome>();
+	const { navigationTargets, setup } = await createHistoryTreeDialogHarness(
+		pendingNavigation.promise
+	);
+	try {
+		await act(() => setup.mockInput.pressEnter());
+		await flushTestRenderer(setup);
+		expect(navigationTargets).toEqual([recordEntry.id]);
+
+		await act(() => setup.mockInput.pressEnter());
+		await act(() => setup.mockInput.pressKey("HOME", { ctrl: true }));
+		await flushTestRenderer(setup);
+		expect(navigationTargets).toEqual([recordEntry.id]);
+
+		pendingNavigation.resolve({
+			kind: "rejected",
+			reason: "history entry unavailable",
+		});
+		await flushTestRenderer(setup, 2);
+		await act(() => setup.mockInput.pressKey("HOME", { ctrl: true }));
+		await flushTestRenderer(setup, 2);
+		expect(navigationTargets).toEqual([recordEntry.id, null]);
+	} finally {
+		pendingNavigation.resolve({
+			kind: "rejected",
+			reason: "history entry unavailable",
+		});
+		act(() => setup.renderer.destroy());
+	}
+});
+
+test("Ctrl+Home selects the history root and returns to the composer", async () => {
+	const { navigationTargets, setup } = await createHistoryTreeDialogHarness();
+	try {
+		await act(() => setup.mockInput.pressKey("HOME", { ctrl: true }));
+		await flushTestRenderer(setup, 2);
+		const frame = setup.captureCharFrame();
+		expect(frame).not.toContain("Search Session history");
+		expect(navigationTargets).toEqual([null]);
 	} finally {
 		act(() => setup.renderer.destroy());
 	}

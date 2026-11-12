@@ -6,6 +6,11 @@ import {
 } from "@wincode/utils";
 import { isValidSessionLogIdentifier } from "../sessions/session-log-identifiers";
 import {
+	copyPluginSessionHistoryPayload,
+	type PluginSessionHistoryPersistence,
+	validatePluginSessionHistoryType,
+} from "../sessions/session-plugin-history";
+import {
 	type PluginSessionStateMutation,
 	type PluginSessionStatePersistence,
 	serializePluginSessionStateValue,
@@ -25,6 +30,8 @@ import type {
 	PluginBeforeAgentTurnHook,
 	PluginBeforeCompactionHook,
 	PluginBeforeCompactionResult,
+	PluginBeforeSessionHistoryNavigationContext,
+	PluginBeforeSessionHistoryNavigationHook,
 	PluginCommandContext,
 	PluginCommandHandler,
 	PluginCommandRegistration,
@@ -41,6 +48,10 @@ import type {
 	PluginProviderRegistration,
 	PluginRegistrationAPI,
 	PluginSessionContext,
+	PluginSessionHistory,
+	PluginSessionHistoryNavigatedHook,
+	PluginSessionHistoryNavigationContext,
+	PluginSessionHistoryReader,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginSessionState,
@@ -51,6 +62,7 @@ import type {
 	PluginToolRegistrationAPI,
 } from "./public";
 import {
+	PluginSessionHistoryWriteError,
 	PluginSessionStateVersionError,
 	PluginSessionStateWriteError,
 } from "./public";
@@ -114,6 +126,8 @@ export type LoadedPlugin = Readonly<{
 	sourceIdentity?: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onBeforeCompaction?: PluginBeforeCompactionHook;
+	onBeforeSessionHistoryNavigation?: PluginBeforeSessionHistoryNavigationHook;
+	onSessionHistoryNavigated?: PluginSessionHistoryNavigatedHook;
 	onCompactionCompleted?: PluginCompactionCompletedHook;
 	onCompactionFailed?: PluginCompactionFailedHook;
 	onStart?: PluginProcessStartHook;
@@ -181,6 +195,12 @@ export type PluginRuntime = Readonly<{
 	runBeforeCompactionHooks: (
 		context: PluginCompactionContext
 	) => Promise<{ cancel?: string; summary?: string } | undefined>;
+	runBeforeSessionHistoryNavigation?: (
+		context: PluginSessionHistoryNavigationContext
+	) => Promise<string | undefined>;
+	notifySessionHistoryNavigated?: (
+		context: PluginSessionHistoryNavigationContext
+	) => Promise<void>;
 	/** Reports a committed compaction; a hook failure cannot undo it. */
 	notifyCompactionCompleted: (
 		context: PluginCompactionCompletedContext
@@ -192,7 +212,8 @@ export type PluginRuntime = Readonly<{
 	shutdown: () => Promise<void>;
 	startSession: (
 		context: PluginSessionContext,
-		persistence?: PluginSessionStatePersistence
+		persistence?: PluginSessionStatePersistence,
+		historyPersistence?: PluginSessionHistoryPersistence
 	) => Promise<void>;
 	stopSession: (context: PluginSessionContext) => Promise<void>;
 }>;
@@ -208,8 +229,10 @@ type SessionPluginState = {
 	context: PluginSessionContext;
 	closed: boolean;
 	disabled: Set<string>;
+	generation: number;
 	maskedTools: Set<string>;
 	persistence?: PluginSessionStatePersistence;
+	historyPersistence?: PluginSessionHistoryPersistence;
 	started: Set<string>;
 	startPromise: Promise<void>;
 	storageError?: Error;
@@ -528,6 +551,21 @@ export const createPluginRuntime = (
 			}
 		}
 	};
+	const assertPluginSessionCapabilityActive = (
+		state: SessionPluginState,
+		generation: number,
+		capability: "State" | "History"
+	): void => {
+		if (
+			state.closed ||
+			state.generation !== generation ||
+			sessionStates.get(state.context.sessionId) !== state
+		) {
+			throw new Error(
+				`Plugin Session ${capability} capability is no longer active.`
+			);
+		}
+	};
 	const pluginSessionStateFor = (
 		plugin: LoadedPlugin,
 		state: SessionPluginState | undefined
@@ -541,14 +579,9 @@ export const createPluginRuntime = (
 			return;
 		}
 		validatePluginSessionStateSchemaVersion(schemaVersion);
-		const assertActive = (): void => {
-			if (
-				state.closed ||
-				sessionStates.get(state.context.sessionId) !== state
-			) {
-				throw new Error("Plugin Session State capability is no longer active.");
-			}
-		};
+		const generation = state.generation;
+		const assertActive = (): void =>
+			assertPluginSessionCapabilityActive(state, generation, "State");
 		const writeErrorFor = (
 			writeOutcome: SessionWriteOutcome
 		): PluginSessionStateWriteError => {
@@ -602,6 +635,7 @@ export const createPluginRuntime = (
 					kind: "set",
 					operationId,
 					schemaVersion,
+					expectedHistoryGeneration: generation,
 					value: copiedValue,
 				};
 				const result = await persistence.mutate(plugin.id, mutation);
@@ -627,6 +661,7 @@ export const createPluginRuntime = (
 					kind: "delete",
 					operationId,
 					schemaVersion,
+					expectedHistoryGeneration: generation,
 				};
 				const result = await persistence.mutate(plugin.id, mutation);
 				assertActive();
@@ -642,17 +677,80 @@ export const createPluginRuntime = (
 			},
 		});
 	};
+	const pluginSessionHistoryFor = (
+		plugin: LoadedPlugin,
+		state: SessionPluginState | undefined
+	): PluginSessionHistory | undefined => {
+		if (state?.historyPersistence === undefined) {
+			return;
+		}
+		const persistence = state.historyPersistence;
+		const generation = state.generation;
+		const assertActive = (): void =>
+			assertPluginSessionCapabilityActive(state, generation, "History");
+		const writeErrorFor = (writeOutcome: SessionWriteOutcome): Error => {
+			const error = new PluginSessionHistoryWriteError(writeOutcome);
+			if (
+				writeOutcome.kind === "indeterminate" ||
+				(writeOutcome.kind === "committed" &&
+					writeOutcome.projection === "blocked")
+			) {
+				state.storageError ??=
+					persistence.reportWriteOutcome?.(writeOutcome) ?? error;
+				return new PluginSessionHistoryWriteError(
+					writeOutcome,
+					state.storageError
+				);
+			}
+			return error;
+		};
+		return Object.freeze({
+			append: async (type, value, operationId) => {
+				validatePluginSessionHistoryType(type);
+				if (!isValidSessionLogIdentifier(operationId)) {
+					throw new Error("Plugin Session History operation ID is invalid.");
+				}
+				const payload = copyPluginSessionHistoryPayload(value);
+				assertActive();
+				const result = await persistence.append(plugin.id, {
+					expectedHistoryGeneration: generation,
+					operationId,
+					payload,
+					type,
+				});
+				assertActive();
+				if (
+					result.writeOutcome.kind !== "committed" ||
+					result.writeOutcome.projection !== "ready"
+				) {
+					throw writeErrorFor(result.writeOutcome);
+				}
+				return result.entryId;
+			},
+			read: async (options) => {
+				assertActive();
+				const page = await persistence.read(plugin.id, options);
+				assertActive();
+				return structuredClone(page);
+			},
+		});
+	};
 	const contextForPlugin = <Context extends PluginSessionContext>(
 		plugin: LoadedPlugin,
 		state: SessionPluginState | undefined,
 		context: Context
 	): Context => {
-		const { sessionState: _ignored, ...base } = context;
+		const {
+			sessionHistory: _ignoredHistory,
+			sessionState: _ignoredState,
+			...base
+		} = context;
+		const sessionHistory = pluginSessionHistoryFor(plugin, state);
 		const sessionState =
 			state === undefined ? undefined : pluginSessionStateFor(plugin, state);
 		return Object.freeze({
 			...base,
-			...omitUndefined({ sessionState }),
+			...omitUndefined({ sessionHistory, sessionState }),
 		}) as Context;
 	};
 	const initializePluginSession = async (
@@ -709,7 +807,8 @@ export const createPluginRuntime = (
 	};
 	const startSession = async (
 		context: PluginSessionContext,
-		persistence?: PluginSessionStatePersistence
+		persistence?: PluginSessionStatePersistence,
+		historyPersistence?: PluginSessionHistoryPersistence
 	): Promise<void> => {
 		const existing = sessionStates.get(context.sessionId);
 		if (existing !== undefined) {
@@ -722,7 +821,8 @@ export const createPluginRuntime = (
 			context,
 			closed: false,
 			disabled: new Set(),
-			...omitUndefined({ persistence }),
+			generation: persistence?.getHistoryGeneration() ?? 0,
+			...omitUndefined({ historyPersistence, persistence }),
 			maskedTools: new Set(),
 			started: new Set(),
 			startPromise: deferred.promise,
@@ -968,11 +1068,106 @@ export const createPluginRuntime = (
 			}
 		}
 	};
+	const beforeNavigationContextForPlugin = (
+		plugin: LoadedPlugin,
+		state: SessionPluginState,
+		context: PluginSessionHistoryNavigationContext
+	): PluginBeforeSessionHistoryNavigationContext => {
+		const pluginContext = contextForPlugin(plugin, state, context);
+		const sessionHistory = pluginContext.sessionHistory;
+		const sessionState = pluginContext.sessionState;
+		return Object.freeze({
+			...pluginContext,
+			...(sessionHistory === undefined
+				? {}
+				: {
+						sessionHistory: Object.freeze({
+							read: sessionHistory.read,
+						}) satisfies PluginSessionHistoryReader,
+					}),
+			...(sessionState === undefined
+				? {}
+				: { sessionState: Object.freeze({ read: sessionState.read }) }),
+		});
+	};
+	const runBeforeSessionHistoryNavigation = async (
+		context: PluginSessionHistoryNavigationContext
+	): Promise<string | undefined> => {
+		const state = sessionStates.get(context.sessionId);
+		if (state === undefined) {
+			return;
+		}
+		await state.startPromise;
+		for (const plugin of plugins) {
+			if (
+				plugin.onBeforeSessionHistoryNavigation === undefined ||
+				!isEnabledForSession(plugin, context.sessionId)
+			) {
+				continue;
+			}
+			try {
+				const decision = await plugin.onBeforeSessionHistoryNavigation(
+					beforeNavigationContextForPlugin(plugin, state, context)
+				);
+				if (decision?.cancel !== undefined) {
+					return decision.cancel;
+				}
+			} catch (error) {
+				await logPluginFailure(
+					"Plugin pre-navigation hook failed",
+					plugin,
+					"session-history-navigation-before",
+					error
+				);
+				throw error;
+			}
+		}
+	};
+	const notifySessionHistoryNavigated = async (
+		context: PluginSessionHistoryNavigationContext
+	): Promise<void> => {
+		const state = sessionStates.get(context.sessionId);
+		if (state === undefined) {
+			return;
+		}
+		await state.startPromise;
+		state.context = context;
+		state.generation = context.historyGeneration;
+		let failure: Error | undefined;
+		for (const plugin of plugins) {
+			if (
+				plugin.onSessionHistoryNavigated === undefined ||
+				!isEnabledForSession(plugin, context.sessionId)
+			) {
+				continue;
+			}
+			try {
+				await plugin.onSessionHistoryNavigated(
+					contextForPlugin(plugin, state, context)
+				);
+			} catch (error) {
+				await logPluginFailure(
+					"Plugin post-navigation hook failed",
+					plugin,
+					"session-history-navigation-after",
+					error
+				);
+				failure ??=
+					error instanceof Error
+						? error
+						: new Error(`Plugin '${plugin.id}' post-navigation hook failed.`);
+			}
+		}
+		if (failure !== undefined) {
+			throw failure;
+		}
+	};
 
 	return Object.freeze({
 		get diagnostics() {
 			return Object.freeze([...diagnostics]);
 		},
+
 		bindPromptSelectionTarget: promptSelectionBridge.bindPromptSelectionTarget,
 		disablePlugin(pluginId, message) {
 			const plugin = plugins.find(({ id }) => id === pluginId);
@@ -1171,6 +1366,8 @@ export const createPluginRuntime = (
 		},
 		resolveToolsForTurn,
 		runBeforeCompactionHooks,
+		runBeforeSessionHistoryNavigation,
+		notifySessionHistoryNavigated,
 		notifyCompactionCompleted: (context) =>
 			notifyCompactionHooks("completed", context),
 		notifyCompactionFailed: (context) =>

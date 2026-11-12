@@ -40,6 +40,7 @@ import {
 } from "@/modules/providers/provider-model-selection";
 import type { SessionSdkPluginProviderSource } from "./plugin-provider-source";
 import {
+	type SessionHistoryNavigationOutcome,
 	type SessionRuntimeOptions,
 	type SessionSdk,
 	type SessionSdkCapabilityCeiling,
@@ -719,6 +720,7 @@ const handleFor = (
 	host: SessionHost,
 	sessionId: SessionId,
 	defaults: SessionSdkSelectionDefaults,
+	fallbackDefaults: SessionSdkSelectionDefaults,
 	pluginRuntime: PluginRuntime | undefined,
 	selectedSources: readonly SessionSdkPluginProviderSource[] | undefined,
 	getPluginProviderSources:
@@ -1017,6 +1019,57 @@ const handleFor = (
 					await host.editContext(edit);
 				});
 		},
+		navigateHistory: async (request) => {
+			if (disposed) {
+				return {
+					kind: "rejected",
+					reason: "Session handle is disposed.",
+				};
+			}
+			try {
+				const outcome = await capabilities
+					.getSessionHostManager()
+					.withIdleForSessionNavigation(
+						sessionId,
+						request,
+						async (idleHost) => {
+							if (idleHost !== host) {
+								return {
+									kind: "rejected",
+									reason: "Session Host is no longer open.",
+								} satisfies SessionHistoryNavigationOutcome;
+							}
+							return await host.navigateHistory(request);
+						}
+					);
+				if (outcome.kind === "navigated" || outcome.kind === "unchanged") {
+					const selection = host.getSelection();
+					if (selection === null) {
+						currentDefaults = fallbackDefaults;
+					} else {
+						currentDefaults = {
+							agent: selection.agent ?? fallbackDefaults.agent,
+							model: selection.model,
+							...omitUndefined({
+								thinkingLevel:
+									selection.thinkingLevel ?? fallbackDefaults.thinkingLevel,
+							}),
+						};
+					}
+				}
+				return outcome;
+			} catch (error) {
+				const code =
+					typeof error === "object" && error !== null
+						? Reflect.get(error, "code")
+						: undefined;
+				return {
+					kind: "rejected",
+					reason: getErrorMessage(error, "Session history navigation failed."),
+					...(typeof code === "string" ? { code } : {}),
+				};
+			}
+		},
 		fork: async (checkpoint, operationId) => {
 			if (disposed) {
 				throw new Error("Session handle is disposed.");
@@ -1215,10 +1268,13 @@ const createSessionSdkInternal = async (
 				throw new Error("Session SDK is disposed.");
 			}
 			const sessionId = toSessionId(id);
-			const stored = await assembly.store.getSession(sessionId);
-			const records = await assembly.store.listSessionRecords(sessionId);
+			const [stored, historyPath] = await Promise.all([
+				assembly.store.getSession(sessionId),
+				assembly.store.readSessionHistoryPath(sessionId),
+			]);
+			const selectedPathRecords = historyPath.records;
 			const priorSelection = nextChatSelection({
-				messages: records.flatMap((record) =>
+				messages: selectedPathRecords.flatMap((record) =>
 					projectSessionMessageRecords(record.messages, record)
 				),
 			});
@@ -1228,7 +1284,7 @@ const createSessionSdkInternal = async (
 				false;
 			assertImportedSessionAgentIsAvailable(
 				assembly.capabilities.getRegistry(),
-				priorSelection?.persistedAgent ?? records.at(-1)?.agentId,
+				priorSelection?.persistedAgent ?? selectedPathRecords.at(-1)?.agentId,
 				isImportedSession
 			);
 			const hasStoredProviderModelSelection =
@@ -1279,6 +1335,7 @@ const createSessionSdkInternal = async (
 				host,
 				sessionId,
 				defaults,
+				fallbackSelection,
 				pluginRuntime,
 				inheritedPluginProviderSources,
 				getPluginProviderSources,
@@ -1547,6 +1604,20 @@ const createSessionSdkInternal = async (
 				toSessionId(sessionId),
 				pageOptions
 			),
+		navigateSessionHistory: async (sessionId, request) => {
+			if (disposed) {
+				throw new Error("Session SDK is disposed.");
+			}
+			const handle = await openSession(sessionId, {
+				autoContinue: false,
+				view: true,
+			});
+			try {
+				return await handle.navigateHistory(request);
+			} finally {
+				await handle.dispose();
+			}
+		},
 		getSessionStatistics: (sessionId, statisticsOptions) =>
 			assembly.store.getSessionStatistics(
 				toSessionId(sessionId),
@@ -1748,6 +1819,8 @@ export const createSessionSdkOperations = (
 			return Object.freeze({
 				continue: () => withOperation(handle.continue),
 				editContext: (edit) => withOperation(() => handle.editContext(edit)),
+				navigateHistory: (request) =>
+					withOperation(() => handle.navigateHistory(request)),
 				fork: (checkpoint, operationId) =>
 					withOperation(async () => {
 						const result = await handle.fork(checkpoint, operationId);
@@ -1793,6 +1866,11 @@ export const createSessionSdkOperations = (
 			store.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
 		readSessionHistoryTreePage: (sessionId, pageOptions) =>
 			store.readSessionHistoryTreePage(toSessionId(sessionId), pageOptions),
+		navigateSessionHistory: (sessionId, request) =>
+			withSessionRuntime(
+				(sdk) => sdk.navigateSessionHistory(sessionId, request),
+				{ sessionId }
+			),
 		getSessionStatistics: (sessionId, statisticsOptions) =>
 			store.getSessionStatistics(toSessionId(sessionId), statisticsOptions),
 		forkSession: async (sourceSessionId, checkpoint, operationId) => {

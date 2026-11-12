@@ -24,7 +24,6 @@ import {
 } from "@/shared/identifiers";
 import type { SessionCompaction } from "../compaction/types";
 import { assertCompactionMessageReferences } from "../compaction/validation";
-import { sessionContextEditSchema } from "../context-edits";
 import { withSubmissionStatus } from "../message";
 import type { SessionDatabase } from "./client";
 import type { SerializedJson } from "./schema";
@@ -47,6 +46,7 @@ import {
 } from "./schema";
 import {
 	parseSessionCompactionPayload,
+	parseSessionContextEditPayload,
 	parseSessionForkedPayload,
 	type SessionCompactionPayload,
 	type SessionJsonlProjection,
@@ -958,7 +958,7 @@ export const createSessionJsonlProjection = (
 
 				const projectContextEdit = (entry: SessionLogEntry): void => {
 					assertSessionBinding();
-					const edit = sessionContextEditSchema.parse(entry.envelope.payload);
+					const edit = parseSessionContextEditPayload(entry.envelope.payload);
 					tx.insert(sessionContextEdit)
 						.values({
 							operationId: edit.operationId,
@@ -1119,7 +1119,11 @@ export const createSessionJsonlProjection = (
 					const envelope = entry.envelope;
 					switch (envelope.type) {
 						case "session.header":
+						case "session.history-navigated":
+							assertSessionBinding();
+							break;
 						case "session.activation-confirmed":
+						case "plugin.entry-appended":
 						case "plugin.state-replaced":
 						case "plugin.state-deleted":
 							break;

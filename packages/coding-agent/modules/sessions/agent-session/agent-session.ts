@@ -98,7 +98,7 @@ type AgentSessionOperationState = {
 	readonly continuationInputs: WeakSet<SessionSendInput>;
 	readonly durableWrites: Set<Promise<void>>;
 	readonly durableWriteFailures: unknown[];
-	readonly transcriptOrder: SessionTranscriptOrder;
+	transcriptOrder: SessionTranscriptOrder;
 	recordCommitTail: Promise<void>;
 	/** Reopen after projection recovery so compaction/context state is reloaded. */
 	projectionBlocked: boolean;
@@ -555,6 +555,9 @@ export class AgentSessionImpl implements AgentSession {
 		ports,
 		sessionId,
 	}: AgentSessionConstructionOptions) {
+		let selectedAgent = initialAgent;
+		let selectedSessionModel = initialSessionModel;
+		let selectedSessionThinkingLevel = initialSessionThinkingLevel;
 		if (!Number.isInteger(deadlineMs) || deadlineMs < 0) {
 			throw new Error("Session send deadline must be a non-negative integer.");
 		}
@@ -1799,7 +1802,7 @@ export class AgentSessionImpl implements AgentSession {
 			  }
 			| { kind: "rejected"; reason: string } => {
 			const agent =
-				lastMessage.metadata?.agent ?? anchor.metadata?.agent ?? initialAgent;
+				lastMessage.metadata?.agent ?? anchor.metadata?.agent ?? selectedAgent;
 			if (isUndefined(agent)) {
 				return {
 					kind: "rejected",
@@ -1809,7 +1812,7 @@ export class AgentSessionImpl implements AgentSession {
 			const model =
 				lastMessage.metadata?.model ??
 				anchor.metadata?.model ??
-				initialSessionModel;
+				selectedSessionModel;
 			if (isUndefined(model)) {
 				return {
 					kind: "rejected",
@@ -1819,7 +1822,7 @@ export class AgentSessionImpl implements AgentSession {
 			const turnId = createAgentTurnId();
 			const sessionSelection = {
 				thinkingLevel:
-					initialSessionThinkingLevel ?? anchor.metadata?.thinkingLevel,
+					selectedSessionThinkingLevel ?? anchor.metadata?.thinkingLevel,
 			};
 			let messageThinkingLevel = sessionSelection.thinkingLevel;
 			if (anchor.metadata?.thinkingLevel !== undefined) {
@@ -1832,7 +1835,7 @@ export class AgentSessionImpl implements AgentSession {
 				agent,
 				messageId: anchor.id,
 				model,
-				sessionModel: initialSessionModel ?? anchor.metadata?.model ?? model,
+				sessionModel: selectedSessionModel ?? anchor.metadata?.model ?? model,
 				turnId,
 				...omitUndefined({
 					sessionThinkingLevel: sessionSelection.thinkingLevel,
@@ -2016,6 +2019,40 @@ export class AgentSessionImpl implements AgentSession {
 			endExecution,
 			hasPendingWork,
 			replaceContext: applyContext,
+			replaceHistory: ({
+				context,
+				compactions,
+				selection,
+				steeringMessages,
+				transcript,
+			}) => {
+				if (hasPendingWork()) {
+					throw new Error(
+						"Cannot replace Session history while work is active or pending."
+					);
+				}
+				sessionState.recovery.epoch = nextRecoveryEpoch();
+				selectedAgent = selection.agent;
+				selectedSessionModel = selection.model;
+				selectedSessionThinkingLevel = selection.thinkingLevel;
+				sessionState.transcriptOrder = createSessionTranscriptOrder(transcript);
+				sessionState.steeringLane.pendingSteering.clear();
+				sessionState.steeringLane.retryingSteering.clear();
+				sessionState.steeringLane.pendingSteeringStarts.clear();
+				sessionState.compaction.retryStatus = undefined;
+				sessionState.projectionBlocked = false;
+				sessionState.storageUncertain = false;
+				publish({
+					compactionError: null,
+					compactionRetryStatus: undefined,
+					compactions: [...compactions],
+					context: [...context],
+					error: null,
+					projectionBlocked: false,
+					steeringMessages: [...steeringMessages],
+					transcript: [...transcript],
+				});
+			},
 			reportStorageError: (error) => {
 				if (isStorageBlockedWrite(error)) {
 					sessionState.projectionBlocked = true;
@@ -2024,6 +2061,11 @@ export class AgentSessionImpl implements AgentSession {
 				}
 				publish({ error, projectionBlocked: sessionState.projectionBlocked });
 			},
+			blockExecution: (error) => {
+				sessionState.projectionBlocked = true;
+				publish({ error, projectionBlocked: true });
+			},
+
 			setExecutionViewState,
 			shutdown,
 		};

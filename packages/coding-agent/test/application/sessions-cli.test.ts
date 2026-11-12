@@ -663,10 +663,18 @@ test("Sessions stats forwards the captured point and keeps unknown cost distinct
 				unknownCostCount: 1,
 			},
 			auxiliary: emptyTotals,
+			selectedPath: {
+				...emptyTotals,
+				contributionCount: 1,
+				inputTokens: 120,
+				outputTokens: 25,
+				unknownCostCount: 1,
+			},
 			contributions: {
 				actual: [],
 				auxiliary: [],
 				inherited: [],
+				selectedPath: [],
 			},
 			inherited: {
 				...emptyTotals,
@@ -740,6 +748,12 @@ test("Sessions stats forwards the captured point and keeps unknown cost distinct
 	expect(text.stdout).toContain("Read point: captured-history-token");
 	expect(text.stdout).toContain(
 		"Inherited usage: 900 input / 80 output tokens; fixture-provider/fixture-model: 0.12 USD (historical source spend, not new Session spend)"
+	);
+	expect(text.stdout).toContain(
+		"Selected-path usage: 120 input / 25 output tokens; 1 cost unknown"
+	);
+	expect(text.stdout).toContain(
+		"Whole Session actual usage: 120 input / 25 output tokens; 1 cost unknown"
 	);
 	expect(text.stdout).toContain("1 cost unknown");
 	expect(text.stdout).not.toContain("0 USD");

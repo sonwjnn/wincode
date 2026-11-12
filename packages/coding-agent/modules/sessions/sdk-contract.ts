@@ -5,7 +5,10 @@ import type {
 	SubmissionId,
 } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
-import type { SessionId } from "../../shared/identifiers";
+import type {
+	SessionHistoryEntryId,
+	SessionId,
+} from "../../shared/identifiers";
 import type { PluginFactory } from "../plugins/public";
 import type { ProviderModelSelection } from "../providers/provider-model-selection";
 import type { SessionContextEdit } from "./context-edits";
@@ -18,6 +21,7 @@ import type {
 import type { SessionSdkEvent } from "./session-events";
 import type {
 	SessionCatalogPage,
+	SessionHistoryNavigationRequest,
 	SessionHistoryPage,
 	SessionHistoryTreePage,
 	SessionPageOptions,
@@ -49,6 +53,7 @@ export type {
 export type {
 	Session,
 	SessionCatalogPage,
+	SessionHistoryNavigationRequest,
 	SessionHistoryPage,
 	SessionHistoryTreeEntry,
 	SessionHistoryTreePage,
@@ -168,6 +173,37 @@ export type SessionSdkContinuationOutcome =
 			readonly turnId?: AgentTurnId;
 	  };
 
+export type SessionHistoryNavigationOutcome =
+	| {
+			readonly kind: "navigated";
+			readonly activeLeafId: SessionHistoryEntryId | null;
+			readonly writeOutcome: SessionWriteReceipt;
+	  }
+	| {
+			readonly kind: "unchanged";
+			readonly activeLeafId: SessionHistoryEntryId | null;
+	  }
+	| {
+			readonly kind: "rejected";
+			readonly reason: string;
+			readonly code?: string;
+			readonly writeOutcome?: SessionWriteOutcome;
+	  }
+	| {
+			readonly kind: "committed-blocked";
+			readonly activeLeafId: SessionHistoryEntryId | null;
+			readonly reason: string;
+			readonly writeOutcome?: SessionWriteReceipt;
+	  }
+	| {
+			readonly kind: "indeterminate";
+			readonly reason: string;
+			readonly writeOutcome: Extract<
+				SessionWriteOutcome,
+				{ kind: "indeterminate" }
+			>;
+	  };
+
 export type SessionSdkInterruptResult = Readonly<{
 	kind: "turn" | "compaction" | "none";
 	recalled: readonly object[];
@@ -187,6 +223,10 @@ export type SessionSdkSnapshot = Readonly<{
 export type SessionSdkHandle = Readonly<{
 	/** Appends an idle-only context edit without changing the original transcript. */
 	editContext: (edit: SessionContextEdit) => Promise<void>;
+	/** Selects any existing history entry (or the root) as the active leaf while idle. */
+	navigateHistory: (
+		request: SessionHistoryNavigationRequest
+	) => Promise<SessionHistoryNavigationOutcome>;
 	continue: () => Promise<SessionSdkContinuationOutcome>;
 	fork: (
 		checkpoint: SessionForkCheckpoint,
@@ -233,6 +273,10 @@ export type SessionSdk = Readonly<{
 		sessionId: SessionId | string,
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryTreePage>;
+	navigateSessionHistory: (
+		sessionId: SessionId | string,
+		request: SessionHistoryNavigationRequest
+	) => Promise<SessionHistoryNavigationOutcome>;
 	getSessionStatistics: (
 		sessionId: SessionId | string,
 		options?: SessionStatisticsOptions
@@ -278,6 +322,7 @@ export type SessionSdkOperations = Pick<
 	| "listSessionsPage"
 	| "readSessionHistoryPage"
 	| "readSessionHistoryTreePage"
+	| "navigateSessionHistory"
 	| "getSessionStatistics"
 	| "forkSession"
 	| "exportSessionBundle"

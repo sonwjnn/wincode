@@ -12,6 +12,8 @@ export type ContinuationContextMessages =
 	  }>
 	| Readonly<{ kind: "rejected"; reason: string }>;
 
+const incompleteToolCallReason = "Incomplete Tool Calls cannot be continued.";
+
 const isCompleteToolCall = (part: SessionToolPart): boolean =>
 	part.state === "output-denied" ||
 	(part.state === "output-available" && "output" in part) ||
@@ -20,6 +22,17 @@ const isCompleteToolCall = (part: SessionToolPart): boolean =>
 		part.errorText.length > 0);
 
 /** Validates the only context cuts from which generic continuation is safe. */
+export const validateSessionInputContext = (
+	context: readonly SessionMessage[]
+):
+	| Readonly<{ kind: "ready" }>
+	| Readonly<{ kind: "rejected"; reason: string }> =>
+	context.some(({ parts }) =>
+		parts.some((part) => isSessionToolPart(part) && !isCompleteToolCall(part))
+	)
+		? { kind: "rejected", reason: incompleteToolCallReason }
+		: { kind: "ready" };
+
 export const findContinuationContextMessages = (
 	context: readonly SessionMessage[],
 	options: Readonly<{ terminalAssistantMessageId?: SessionMessage["id"] }> = {}
@@ -31,14 +44,9 @@ export const findContinuationContextMessages = (
 			reason: "The Agent Session has no context to continue.",
 		};
 	}
-	const hasIncompleteToolCall = context.some(({ parts }) =>
-		parts.some((part) => isSessionToolPart(part) && !isCompleteToolCall(part))
-	);
-	if (hasIncompleteToolCall) {
-		return {
-			kind: "rejected",
-			reason: "Incomplete Tool Calls cannot be continued.",
-		};
+	const inputContextValidation = validateSessionInputContext(context);
+	if (inputContextValidation.kind === "rejected") {
+		return inputContextValidation;
 	}
 	const toolParts = lastMessage.parts.filter(isSessionToolPart);
 	const completeToolCall =

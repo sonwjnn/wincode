@@ -27,7 +27,9 @@ import {
 import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import { createSkillSnapshot } from "@/modules/skills";
 import {
+	isValidSessionHistoryEntryId,
 	isValidSessionId,
+	type SessionHistoryEntryId,
 	type SessionId,
 	toSessionId,
 } from "@/shared/identifiers";
@@ -347,6 +349,7 @@ export const createRpcRequestHandler = (
 					submissionEvents: true,
 					sessionCatalogPagination: true,
 					sessionHistoryPagination: true,
+					sessionHistoryNavigation: true,
 					sessionStatistics: true,
 					sessionBundleExport: true,
 					sessionBundleImport: true,
@@ -411,6 +414,70 @@ export const createRpcRequestHandler = (
 				if (paginationError !== undefined) {
 					throw paginationError;
 				}
+				const writerError = mapSessionWriterError(error, sessionId);
+				if (writerError !== undefined) {
+					throw writerError;
+				}
+				throw error;
+			}
+		}
+		if (request.method === "session/navigateHistory") {
+			const assembly = state.assembly;
+			if (assembly?.store === undefined) {
+				throw appError("not_initialized", "Session storage is unavailable.");
+			}
+			const params = paramsOf(request);
+			const sessionIdValue = stringValue(params.sessionId);
+			const operationId = stringValue(params.operationId);
+			const targetValue = params.targetEntryId;
+			let targetEntryId: SessionHistoryEntryId | null | undefined;
+			if (targetValue === null) {
+				targetEntryId = null;
+			} else if (
+				typeof targetValue === "string" &&
+				isValidSessionHistoryEntryId(targetValue)
+			) {
+				targetEntryId = targetValue;
+			} else {
+				targetEntryId = undefined;
+			}
+			if (sessionIdValue === undefined || !isValidSessionId(sessionIdValue)) {
+				throw rpcInvalidParams("sessionId must be a valid Session ID.");
+			}
+			if (operationId === undefined || operationId.length === 0) {
+				throw rpcInvalidParams("operationId must be a non-empty string.");
+			}
+			if (targetEntryId === undefined) {
+				throw rpcInvalidParams(
+					"targetEntryId must be a history entry ID or null."
+				);
+			}
+			const sessionId = toSessionId(sessionIdValue);
+			if (state.boundSessionId !== sessionId) {
+				throw appError(
+					"session_not_open",
+					"Open the target Session before navigating its history.",
+					{ sessionId }
+				);
+			}
+			const activeHost = requireBound();
+			try {
+				const outcome = await assembly.capabilities
+					.getSessionHostManager()
+					.withIdleForSessionNavigation(
+						sessionId,
+						{ operationId, targetEntryId },
+						async (idleHost) =>
+							idleHost === activeHost
+								? idleHost.navigateHistory({ operationId, targetEntryId })
+								: {
+										kind: "rejected",
+										code: "session_host_changed",
+										reason: "Session Host is no longer open.",
+									}
+					);
+				return success(request.id, outcome);
+			} catch (error) {
 				const writerError = mapSessionWriterError(error, sessionId);
 				if (writerError !== undefined) {
 					throw writerError;

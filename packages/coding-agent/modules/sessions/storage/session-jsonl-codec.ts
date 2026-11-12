@@ -14,6 +14,11 @@ import { assertCompactionMessageReferences } from "@/modules/sessions/compaction
 import { sessionContextEditSchema } from "@/modules/sessions/context-edits";
 import { SESSION_LOG_IDENTIFIER_PATTERN } from "@/modules/sessions/session-log-identifiers";
 import {
+	serializePluginSessionHistoryPayload,
+	validatePluginSessionHistoryPluginId,
+	validatePluginSessionHistoryType,
+} from "@/modules/sessions/session-plugin-history";
+import {
 	type PluginSessionStateJsonValue,
 	serializePluginSessionStateValue,
 	validatePluginSessionStateKey,
@@ -21,25 +26,29 @@ import {
 	validatePluginSessionStateSchemaVersion,
 } from "@/modules/sessions/session-plugin-state";
 import { editModeSchema } from "@/modules/tools/versioned/contracts";
-import type {
-	CompactionId,
-	SessionId,
-	WorkspaceId,
+import {
+	type CompactionId,
+	type SessionHistoryEntryId,
+	type SessionId,
+	toSessionHistoryEntryId,
+	type WorkspaceId,
 } from "@/shared/identifiers";
 import { getSessionRecordValidationError } from "./session-record";
 
-export const SESSION_LOG_FORMAT_VERSION = 3;
+export const SESSION_LOG_FORMAT_VERSION = 5;
 export const SESSION_LOG_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 
 export const SESSION_LOG_EVENT_TYPES = [
 	"session.header",
 	"session.created",
 	"session.metadata-updated",
+	"session.history-navigated",
 	"record.committed",
 	"context.edited",
 	"submission.status-updated",
 	"compaction.committed",
 	"usage.committed",
+	"plugin.entry-appended",
 	"plugin.state-replaced",
 	"plugin.state-deleted",
 	"session.activation-confirmed",
@@ -48,6 +57,28 @@ export const SESSION_LOG_EVENT_TYPES = [
 ] as const;
 
 export type SessionLogEventType = (typeof SESSION_LOG_EVENT_TYPES)[number];
+
+export const SESSION_HISTORY_ENTRY_EVENT_TYPES = [
+	"record.committed",
+	"plugin.entry-appended",
+	"plugin.state-replaced",
+	"plugin.state-deleted",
+	"context.edited",
+	"submission.status-updated",
+	"compaction.committed",
+] as const satisfies readonly SessionLogEventType[];
+
+export type SessionHistoryEntryEventType =
+	(typeof SESSION_HISTORY_ENTRY_EVENT_TYPES)[number];
+
+const sessionHistoryEntryEventTypeSet = new Set<string>(
+	SESSION_HISTORY_ENTRY_EVENT_TYPES
+);
+
+export const isSessionHistoryEntryEventType = (
+	type: unknown
+): type is SessionHistoryEntryEventType =>
+	typeof type === "string" && sessionHistoryEntryEventTypeSet.has(type);
 
 export type SessionLogEnvelope = Readonly<{
 	entryHash: string;
@@ -227,6 +258,13 @@ const metadataUpdatedPayloadSchema = z
 	.strict()
 	.refine((payload) => Object.keys(payload).length > 0);
 
+const historyNavigatedPayloadSchema = z
+	.object({
+		activeLeafId: safeIdentifierSchema.nullable(),
+		previousActiveLeafId: safeIdentifierSchema.nullable(),
+	})
+	.strict();
+
 const historyEntryFieldsSchema = {
 	activeLeafId: safeIdentifierSchema,
 	historyEntryId: safeIdentifierSchema,
@@ -247,19 +285,43 @@ const recordCommittedPayloadSchema = z
 			payload.parentEntryId !== payload.historyEntryId
 	);
 
+const contextEditedPayloadSchema = sessionContextEditSchema
+	.extend(historyEntryFieldsSchema)
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
+
 const submissionStatusPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		failure: z.string().optional(),
 		messageId: safeIdentifierSchema,
 		recordId: safeIdentifierSchema,
 		status: z.enum(["failed", "pending", "processed", "processing"]),
 		submissionId: safeIdentifierSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 export type SessionSubmissionStatusPayload = z.infer<
 	typeof submissionStatusPayloadSchema
 >;
+
+export const parseSessionContextEditPayload = (value: unknown) => {
+	const payload = contextEditedPayloadSchema.parse(value);
+	return {
+		operationId: payload.operationId,
+		replacement: payload.replacement,
+		targetId: payload.targetId,
+	};
+};
 
 export const parseSessionSubmissionStatusPayload = (
 	value: unknown
@@ -289,6 +351,7 @@ const compactionSummarySchema = z
 
 const compactionPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		completedAt: z.string().datetime(),
 		createdAt: z.string().datetime(),
 		estimatedTokensAfter: z.number().int().nonnegative(),
@@ -306,7 +369,12 @@ const compactionPayloadSchema = z
 		trigger: z.enum(["manual", "threshold", "overflow"]),
 		throughMessageUiId: safeIdentifierSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 export type SessionCompactionPayload = z.infer<typeof compactionPayloadSchema>;
 
@@ -340,6 +408,7 @@ const inheritedUsageIdentitySchema = z.discriminatedUnion("kind", [
 
 const inheritedUsageContributionSchema = z
 	.object({
+		compactionId: safeIdentifierSchema.optional(),
 		cost: z
 			.object({ amount: z.number().finite().nonnegative(), unit: z.string() })
 			.strict()
@@ -494,6 +563,39 @@ export type PluginSessionStateDeletedPayload = Readonly<{
 	schemaVersion: number;
 }>;
 
+const pluginSessionHistoryEntryPayloadSchema = z
+	.object({
+		...historyEntryFieldsSchema,
+		entryType: z.string(),
+		payload: z.unknown(),
+		pluginId: safeIdentifierSchema,
+	})
+	.strict()
+	.superRefine((payload, context) => {
+		try {
+			validatePluginSessionHistoryPluginId(payload.pluginId);
+			validatePluginSessionHistoryType(payload.entryType);
+			serializePluginSessionHistoryPayload(payload.payload);
+		} catch (error) {
+			context.addIssue({
+				code: "custom",
+				message:
+					error instanceof Error
+						? error.message
+						: "Plugin Session History payload is invalid.",
+			});
+		}
+	})
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
+
+export type PluginSessionHistoryEntryPayload = z.infer<
+	typeof pluginSessionHistoryEntryPayloadSchema
+>;
+
 const usageCommittedPayloadSchema = z
 	.object({
 		compactionId: safeIdentifierSchema.nullable().optional(),
@@ -517,11 +619,13 @@ const eventPayloadSchemas: Readonly<
 > = {
 	"session.created": createdPayloadSchema,
 	"session.metadata-updated": metadataUpdatedPayloadSchema,
+	"session.history-navigated": historyNavigatedPayloadSchema,
 	"record.committed": recordCommittedPayloadSchema,
-	"context.edited": sessionContextEditSchema,
+	"context.edited": contextEditedPayloadSchema,
 	"submission.status-updated": submissionStatusPayloadSchema,
 	"compaction.committed": compactionPayloadSchema,
 	"usage.committed": usageCommittedPayloadSchema,
+	"plugin.entry-appended": pluginSessionHistoryEntryPayloadSchema,
 	"plugin.state-replaced": pluginSessionStateReplacedPayloadSchema,
 	"plugin.state-deleted": pluginSessionStateDeletedPayloadSchema,
 	"session.activation-confirmed": z
@@ -578,12 +682,16 @@ const sha256 = (value: string | Uint8Array): string =>
 export const sessionHistoryEntryIdForRecord = (
 	sessionId: SessionId,
 	recordId: string
-): string => `entry-${sha256(`${sessionId}\0${recordId}`)}`;
+): SessionHistoryEntryId =>
+	toSessionHistoryEntryId(`entry-${sha256(`${sessionId}\0${recordId}`)}`);
 
 export const sessionHistoryEntryIdForOperation = (
 	sessionId: SessionId,
 	operationId: string
-): string => `entry-${sha256(`${sessionId}\0operation\0${operationId}`)}`;
+): SessionHistoryEntryId =>
+	toSessionHistoryEntryId(
+		`entry-${sha256(`${sessionId}\0operation\0${operationId}`)}`
+	);
 
 const semanticOperationDigest = (
 	type: SessionLogEventType,
@@ -1275,11 +1383,22 @@ const validateSessionHistoryEntryReference = (
 		validateInitialHistoryEntryReference(entry, sessionId, state);
 		return;
 	}
-	if (
-		entry.envelope.type === "record.committed" ||
-		entry.envelope.type === "plugin.state-replaced" ||
-		entry.envelope.type === "plugin.state-deleted"
-	) {
+	if (entry.envelope.type === "session.history-navigated") {
+		const payload = historyNavigatedPayloadSchema.parse(entry.envelope.payload);
+		const targetExists =
+			payload.activeLeafId === null ||
+			state.historyEntryParents.has(payload.activeLeafId);
+		if (payload.previousActiveLeafId !== state.activeLeafId || !targetExists) {
+			rejectInvalidSessionLogReference(
+				entry,
+				sessionId,
+				"Session history navigation must select an existing entry or the root."
+			);
+		}
+		state.activeLeafId = payload.activeLeafId;
+		return;
+	}
+	if (isSessionHistoryEntryEventType(entry.envelope.type)) {
 		validateAppendedHistoryEntryReference(entry, sessionId, state);
 	}
 };
@@ -1291,7 +1410,7 @@ const validateOperationalReferences = (
 ): void => {
 	switch (entry.envelope.type) {
 		case "context.edited": {
-			const edit = sessionContextEditSchema.parse(entry.envelope.payload);
+			const edit = parseSessionContextEditPayload(entry.envelope.payload);
 			if (
 				edit.operationId !== entry.envelope.operationId ||
 				!state.messageIds.has(edit.targetId)

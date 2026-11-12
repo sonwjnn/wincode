@@ -145,7 +145,13 @@ const historyEntryPayload = (
 			...payload,
 		};
 	}
-	if (type === "plugin.state-replaced" || type === "plugin.state-deleted") {
+	if (
+		type === "plugin.state-replaced" ||
+		type === "plugin.state-deleted" ||
+		type === "context.edited" ||
+		type === "submission.status-updated" ||
+		type === "compaction.committed"
+	) {
 		const historyEntryId = sessionHistoryEntryIdForOperation(
 			sessionId,
 			operationId

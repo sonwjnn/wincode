@@ -3,6 +3,7 @@ import {
 	isError,
 	isFiniteNonNegativeNumber,
 	isNonEmptyString,
+	isNonEmptyStringWithinUtf8ByteLimit,
 	isNonNegativeInteger,
 	isPositiveInteger,
 	isPositiveSafeInteger,
@@ -22,6 +23,13 @@ describe("runtime scalar predicates", () => {
 		expect(isNonEmptyString(" ")).toBe(true);
 		expect(isNonEmptyString("")).toBe(false);
 		expect(isNonEmptyString(null)).toBe(false);
+	});
+
+	test("UTF-8 string limits count encoded bytes, not UTF-16 code units", () => {
+		expect(isNonEmptyStringWithinUtf8ByteLimit("a", 1)).toBe(true);
+		expect(isNonEmptyStringWithinUtf8ByteLimit("é", 2)).toBe(true);
+		expect(isNonEmptyStringWithinUtf8ByteLimit("é", 1)).toBe(false);
+		expect(isNonEmptyStringWithinUtf8ByteLimit("", 1)).toBe(false);
 	});
 
 	test("accepts strings including empty strings", () => {
