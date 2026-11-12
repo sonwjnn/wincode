@@ -105,6 +105,10 @@ const executePluginToolHandler = async (
 	signal?: AbortSignal
 ): Promise<ToolCallOutput> => {
 	try {
+		const sessionHistory = context.pluginRuntime?.getSessionHistoryForPlugin(
+			tool.pluginId,
+			context.sessionId ?? ""
+		);
 		const sessionState = context.pluginRuntime?.getSessionStateForPlugin(
 			tool.pluginId,
 			context.sessionId ?? ""
@@ -112,7 +116,7 @@ const executePluginToolHandler = async (
 		const result = await tool.handler(input, {
 			agentId,
 			sessionId: context.sessionId ?? "",
-			...omitUndefined({ sessionState }),
+			...omitUndefined({ sessionHistory, sessionState }),
 			signal: signal ?? context.signal ?? new AbortController().signal,
 			toolCallId,
 			registerBackgroundWork: (work) =>

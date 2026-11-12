@@ -163,6 +163,52 @@ Values must be strict JSON and no larger than 64 KiB; keys are non-empty and at 
 
 Session Bundles retain these entries. A Session Fork inherits only the effective state in the JSONL prefix ending at its selected Session Record: a state event appended after that Record is excluded, even if it was written during the same Agent Turn. Replacement and deletion append entries; they do not erase old payloads from the log, so this capability is not for secrets and deletion is not secure erasure. Plugin state never enters Session Context automatically and does not imply replay, task ownership transfer, or availability of external resources.
 
+## Plugin Session History
+
+Use `sessionHistory` for Plugin-owned events whose meaning depends on the Session branch. It is available in Session lifecycle hooks, pre-Agent-Turn and compaction hooks, Plugin Tool contexts, and Plugin Command contexts when a Session is loaded. `onBeforeSessionHistoryNavigation` receives a read-only reader; `onSessionHistoryNavigated` receives the new capability after the durable path change. Factory/process contexts and commands without a loaded Session do not receive it.
+
+```ts
+const checklist = api.definePlugin({ id: "checklist_history" });
+
+checklist.onSessionStart(async ({ sessionId, sessionHistory }) => {
+  if (sessionHistory === undefined) return;
+  // Reduce the Selected Path to restore this Session's in-memory projection.
+});
+
+checklist.onSessionHistoryNavigated(async ({ sessionId, sessionHistory }) => {
+  if (sessionHistory === undefined) return;
+  // Rebuild the projection from the newly Selected Path; do not replay actions.
+});
+
+checklist.registerTool({
+  name: "add_item",
+  description: "Add an item to this Session's checklist.",
+  inputSchema: z.object({ item: z.string() }),
+  handler: async ({ item }, { sessionHistory, toolCallId }) => {
+    if (sessionHistory === undefined) {
+      return { type: "failure", errorText: "No Session is active." };
+    }
+    const operationId = new Bun.CryptoHasher("sha256")
+      .update(toolCallId)
+      .digest("hex");
+    await sessionHistory.append(
+      "item-added",
+      { schemaVersion: 1, item },
+      `checklist-add-${operationId}`,
+    );
+    return { type: "success", output: { recorded: true } };
+  },
+});
+```
+
+`read({ cursor, limit })` returns only this Plugin's events on the Selected Path. Pages default to 50 entries, with a maximum of 200, and include an opaque `readPoint`; keep following `nextCursor` to read that same snapshot. The Session tree reader is separate: use `sessionSdk.readSessionHistoryTreePage` only when the Plugin explicitly needs tree metadata. Tree entries show the Plugin Identifier and event type, never the payload. Custom events are not added to Provider context automatically.
+
+`append(type, payload, operationId)` attaches one entry to the current Active Leaf and advances it as one durable history write. Event types must be non-empty and no more than 128 UTF-8 bytes. Payloads must be strict JSON and no more than 64 KiB serialized; the event type and payload schema version belong to the Plugin. Use a version field in payloads and leave unknown versions unapplied while preserving their original entries. Operation IDs follow the same 512-character ASCII format as Plugin Session State: retry with the same ID and identical event; reusing an ID with different content conflicts. A capability from before Navigation is stale; use the refreshed capability from `onSessionHistoryNavigated` or the next `onSessionStart`.
+
+A failed append throws `PluginSessionHistoryWriteError`, whose `writeOutcome` distinguishes a write that did not commit from an indeterminate or committed-but-blocked write. Do not retry uncertain work with a new ID; keep the Session blocked until storage reconciliation. Validation errors occur before persistence. Events remain opaque and preserved when the Plugin is absent or disabled, and are retained in Session Bundles and Fork history. They are not secure-erasure storage. `sessionHistory` event history and `sessionState` snapshots are separate capabilities and may coexist.
+
+For a complete example with pagination, schema validation, selected-branch restoration, and idempotent Tool writes, see [the event-backed checklist Plugin](../../examples/checklist-history-plugin.ts). Enable it explicitly with `wincode --plugin packages/coding-agent/examples/checklist-history-plugin.ts` from the repository root.
+
 ## Compaction hooks
 
 Compaction runs under Session Host authority. Plugins observe it through three bounded hooks:

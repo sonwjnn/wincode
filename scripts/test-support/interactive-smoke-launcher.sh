@@ -98,6 +98,7 @@ env -i \
   XDG_CACHE_HOME="$TEST_HOME/cache" \
   NODE_ENV=test \
   WINCODE_TEST_SESSION_INDEX_DIR="$TEST_HOME/session-indexes" \
+  WINCODE_SMOKE_HISTORY="${WINCODE_SMOKE_HISTORY:-0}" \
   TMPDIR="$TEST_HOME/tmp" \
   "${COMMAND[@]}" \
   --trust-project \

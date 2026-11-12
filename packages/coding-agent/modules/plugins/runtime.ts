@@ -167,6 +167,10 @@ export type PluginRuntime = Readonly<{
 		pluginId: string,
 		name: string
 	) => Resource | undefined;
+	getSessionHistoryForPlugin: (
+		pluginId: string,
+		sessionId: string
+	) => PluginSessionHistory | undefined;
 	getSessionStateForPlugin: (
 		pluginId: string,
 		sessionId: string
@@ -1196,16 +1200,26 @@ export const createPluginRuntime = (
 				if (command.handler === undefined) {
 					throw new Error("Plugin command is a Status Panel command.");
 				}
-				const sessionState =
+				const state =
 					context.sessionId === undefined
 						? undefined
-						: pluginSessionStateFor(
-								plugin,
-								sessionStates.get(context.sessionId)
-							);
+						: sessionStates.get(context.sessionId);
+				const sessionHistory =
+					state === undefined
+						? undefined
+						: pluginSessionHistoryFor(plugin, state);
+				const sessionState =
+					state === undefined
+						? undefined
+						: pluginSessionStateFor(plugin, state);
+				const {
+					sessionHistory: _ignoredHistory,
+					sessionState: _ignoredState,
+					...base
+				} = context;
 				const pluginContext = Object.freeze({
-					...context,
-					...omitUndefined({ sessionState }),
+					...base,
+					...omitUndefined({ sessionHistory, sessionState }),
 				});
 				const result = await command.handler(pluginContext);
 				if (typeof result !== "string") {
@@ -1258,6 +1272,18 @@ export const createPluginRuntime = (
 				.find((plugin) => plugin.id === pluginId)
 				?.resources?.find((candidate) => candidate.name === name)?.value;
 			return resource as Resource | undefined;
+		},
+		getSessionHistoryForPlugin(pluginId, sessionId) {
+			const plugin = plugins.find((candidate) => candidate.id === pluginId);
+			const state = sessionStates.get(sessionId);
+			if (
+				plugin === undefined ||
+				state === undefined ||
+				!isEnabledForSession(plugin, sessionId)
+			) {
+				return;
+			}
+			return pluginSessionHistoryFor(plugin, state);
 		},
 		getSessionStateForPlugin(pluginId, sessionId) {
 			const plugin = plugins.find((candidate) => candidate.id === pluginId);
