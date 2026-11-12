@@ -28,6 +28,7 @@ import {
 import { editModeSchema } from "@/modules/tools/versioned/contracts";
 import {
 	type CompactionId,
+	isValidSessionId,
 	type SessionHistoryEntryId,
 	type SessionId,
 	toSessionHistoryEntryId,
@@ -105,6 +106,117 @@ export type SessionLogState = Readonly<{
 	nextSequence: number;
 	lastHash: string;
 }>;
+
+const sessionHistoryActiveLeafFromPayload = (
+	payload: Readonly<Record<string, unknown>>
+): SessionHistoryEntryId | null => {
+	if (payload.activeLeafId === null) {
+		return null;
+	}
+	return toSessionHistoryEntryId(String(payload.activeLeafId));
+};
+
+type SessionHistoryParent = Readonly<{
+	activeLeafId: SessionHistoryEntryId;
+	entryId: SessionHistoryEntryId;
+	parentEntryId: SessionHistoryEntryId | null;
+}>;
+
+const sessionHistoryParentFromEnvelope = (
+	envelope: SessionLogEnvelope
+): SessionHistoryParent | undefined => {
+	if (!isSessionHistoryEntryEventType(envelope.type)) {
+		return;
+	}
+	const parentEntryId =
+		envelope.payload.parentEntryId === null
+			? null
+			: toSessionHistoryEntryId(String(envelope.payload.parentEntryId));
+	return {
+		activeLeafId: toSessionHistoryEntryId(
+			String(envelope.payload.activeLeafId)
+		),
+		entryId: toSessionHistoryEntryId(String(envelope.payload.historyEntryId)),
+		parentEntryId,
+	};
+};
+
+const collectSelectedSessionHistoryEntryIds = (
+	activeLeafId: SessionHistoryEntryId | null,
+	parents: ReadonlyMap<SessionHistoryEntryId, SessionHistoryEntryId | null>,
+	sessionId: SessionId
+): ReadonlySet<SessionHistoryEntryId> => {
+	const entryIds = new Set<SessionHistoryEntryId>();
+	const visited = new Set<SessionHistoryEntryId>();
+	let currentEntryId = activeLeafId;
+	while (currentEntryId !== null) {
+		if (visited.has(currentEntryId)) {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				sessionId,
+				"Session history tree contains a parent cycle."
+			);
+		}
+		visited.add(currentEntryId);
+		const parentEntryId = parents.get(currentEntryId);
+		if (parentEntryId === undefined) {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				sessionId,
+				"Session Active Leaf references a missing history entry."
+			);
+		}
+		entryIds.add(currentEntryId);
+		currentEntryId = parentEntryId;
+	}
+	return entryIds;
+};
+
+export const selectedSessionHistoryPathFromLog = (
+	state: SessionLogState,
+	sessionId: SessionId,
+	snapshotSequence = state.nextSequence - 1
+): Readonly<{
+	activeLeafId: SessionHistoryEntryId | null;
+	entryIds: ReadonlySet<SessionHistoryEntryId>;
+}> => {
+	const parents = new Map<
+		SessionHistoryEntryId,
+		SessionHistoryEntryId | null
+	>();
+	let activeLeafId: SessionHistoryEntryId | null = null;
+	for (const { envelope } of state.entries) {
+		if (envelope.sequence > snapshotSequence) {
+			break;
+		}
+		switch (envelope.type) {
+			case "session.created": {
+				const initialHistoryEntryId = envelope.payload.initialHistoryEntryId;
+				if (typeof initialHistoryEntryId === "string") {
+					parents.set(toSessionHistoryEntryId(initialHistoryEntryId), null);
+				}
+				activeLeafId = sessionHistoryActiveLeafFromPayload(envelope.payload);
+				continue;
+			}
+			case "session.history-navigated":
+				activeLeafId = sessionHistoryActiveLeafFromPayload(envelope.payload);
+				continue;
+			default: {
+				const parent = sessionHistoryParentFromEnvelope(envelope);
+				if (parent !== undefined) {
+					parents.set(parent.entryId, parent.parentEntryId);
+					activeLeafId = parent.activeLeafId;
+				}
+			}
+		}
+	}
+	const entryIds = collectSelectedSessionHistoryEntryIds(
+		activeLeafId,
+		parents,
+		sessionId
+	);
+	return { activeLeafId, entryIds };
+};
 
 export type SessionProjectionCursor = Readonly<{
 	generation: number;
@@ -211,6 +323,22 @@ const safeIdentifierSchema = z
 	.max(512)
 	.regex(SESSION_LOG_IDENTIFIER_PATTERN);
 
+const sessionBundleBranchProvenanceSchema = z
+	.object({
+		activeLeafId: safeIdentifierSchema.nullable(),
+		sourceSessionId: safeIdentifierSchema.refine(isValidSessionId),
+	})
+	.strict();
+
+export type SessionBundleBranchProvenance = z.infer<
+	typeof sessionBundleBranchProvenanceSchema
+>;
+
+export const parseSessionBundleBranchProvenance = (
+	value: unknown
+): SessionBundleBranchProvenance =>
+	sessionBundleBranchProvenanceSchema.parse(value);
+
 const envelopeSchema = z
 	.object({
 		entryHash: z.string().regex(SESSION_LOG_HASH_PATTERN),
@@ -228,6 +356,7 @@ const envelopeSchema = z
 const createdPayloadSchema = z
 	.object({
 		activeLeafId: safeIdentifierSchema.nullable(),
+		bundleProvenance: sessionBundleBranchProvenanceSchema.optional(),
 		createdAt: z.string().datetime(),
 		editMode: editModeSchema,
 		initialHistoryEntryId: safeIdentifierSchema.optional(),

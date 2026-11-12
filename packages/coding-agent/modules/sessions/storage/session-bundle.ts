@@ -14,6 +14,7 @@ import { MAX_ATTACHMENT_BYTES } from "../attachment-reference";
 import type {
 	SessionBundleAttachment,
 	SessionBundleCut,
+	SessionBundleExportScope,
 	SessionBundleFile,
 	SessionBundleManifest,
 } from "../session-bundle-contract";
@@ -26,9 +27,13 @@ import {
 } from "./attachment-store";
 import {
 	decodeSessionLog,
+	isSessionHistoryEntryEventType,
+	parseSessionBundleBranchProvenance,
+	parseSessionForkedPayload,
 	SESSION_LOG_HASH_PATTERN,
 	SessionLogError,
 	type SessionLogState,
+	selectedSessionHistoryPathFromLog,
 } from "./session-jsonl-codec";
 import {
 	createAtomicPathPublisher,
@@ -41,7 +46,7 @@ import {
 } from "./session-storage-durability";
 
 export const SESSION_BUNDLE_FORMAT = "wincode-session-bundle" as const;
-export const SESSION_BUNDLE_VERSION = 1 as const;
+export const SESSION_BUNDLE_VERSION = 2 as const;
 export const SESSION_BUNDLE_MANIFEST_PATH = "manifest.json" as const;
 export const SESSION_BUNDLE_LOG_PATH = "session.jsonl" as const;
 export const SESSION_BUNDLE_IMPORT_RESOURCE_BUDGETS = Object.freeze({
@@ -162,6 +167,7 @@ const sessionBundleManifestSchema = z
 			})
 			.strict(),
 		format: z.literal(SESSION_BUNDLE_FORMAT),
+		scope: z.enum(["tree", "branch"]),
 		session: z
 			.object({
 				id: z.string().refine(isValidSessionId),
@@ -172,13 +178,42 @@ const sessionBundleManifestSchema = z
 			path: z.literal(SESSION_BUNDLE_LOG_PATH),
 		}),
 		source: z
-			.object({ workspacePath: z.string().min(1).max(4096).optional() })
+			.object({
+				activeLeafId: z
+					.string()
+					.refine(isValidSessionLogIdentifier)
+					.nullable()
+					.optional(),
+				sourceSessionId: z.string().refine(isValidSessionId).optional(),
+				workspacePath: z.string().min(1).max(4096).optional(),
+			})
 			.strict()
 			.optional(),
 		version: z.literal(SESSION_BUNDLE_VERSION),
 	})
 	.strict()
 	.superRefine((manifest, context) => {
+		const hasSourceSession = manifest.source?.sourceSessionId !== undefined;
+		const hasSourceLeaf = manifest.source?.activeLeafId !== undefined;
+		const hasBranchProvenance = hasSourceSession && hasSourceLeaf;
+		if (
+			manifest.scope === "branch" &&
+			(!hasBranchProvenance ||
+				manifest.source?.sourceSessionId === manifest.session.id)
+		) {
+			context.addIssue({
+				code: "custom",
+				message: "Branch bundles require distinct source Session provenance.",
+				path: ["source"],
+			});
+		}
+		if (manifest.scope === "tree" && (hasSourceSession || hasSourceLeaf)) {
+			context.addIssue({
+				code: "custom",
+				message: "Whole-tree bundles cannot declare branch provenance.",
+				path: ["source"],
+			});
+		}
 		if (
 			manifest.attachments.length >
 			SESSION_BUNDLE_IMPORT_RESOURCE_BUDGETS.maxAttachments
@@ -249,6 +284,11 @@ const sessionBundleManifestSchema = z
 export type PreparedSessionBundleExport = Readonly<{
 	attachments: readonly AttachmentReference[];
 	cut: SessionBundleCut;
+	scope: SessionBundleExportScope;
+	source?: Readonly<{
+		activeLeafId: string | null;
+		sourceSessionId: string;
+	}>;
 	logBytes: Uint8Array;
 	logId: string;
 	resolveAttachment?: (
@@ -658,6 +698,66 @@ const parseManifestFile = (bytes: Uint8Array): SessionBundleManifest => {
 	}
 };
 
+const assertBranchBundleLogMatchesManifest = (
+	manifest: SessionBundleManifest,
+	state: SessionLogState,
+	sessionId: SessionId
+): void => {
+	const selectedPath = selectedSessionHistoryPathFromLog(state, sessionId);
+	const historyEntryCount = state.entries.reduce(
+		(count, { envelope }) =>
+			count +
+			(envelope.type === "session.created"
+				? Number(typeof envelope.payload.initialHistoryEntryId === "string")
+				: Number(isSessionHistoryEntryEventType(envelope.type))),
+		0
+	);
+	if (selectedPath.entryIds.size !== historyEntryCount) {
+		throw new SessionBundleValidationError(
+			"Branch bundles must contain only the Selected Path."
+		);
+	}
+	const declaredSourceSessionId = manifest.source?.sourceSessionId;
+	const declaredSourceActiveLeafId = manifest.source?.activeLeafId;
+	const creationEntry = state.entries.find(
+		({ envelope }) => envelope.type === "session.created"
+	);
+	if (
+		declaredSourceSessionId === undefined ||
+		declaredSourceActiveLeafId === undefined ||
+		creationEntry?.envelope.type !== "session.created" ||
+		creationEntry.envelope.payload.bundleProvenance === undefined
+	) {
+		throw new SessionBundleValidationError(
+			"Branch bundle log is missing source provenance."
+		);
+	}
+	const provenance = parseSessionBundleBranchProvenance(
+		creationEntry.envelope.payload.bundleProvenance
+	);
+	if (
+		provenance.sourceSessionId !== declaredSourceSessionId ||
+		provenance.activeLeafId !== declaredSourceActiveLeafId
+	) {
+		throw new SessionBundleValidationError(
+			"Branch bundle provenance does not match its authoritative Session log."
+		);
+	}
+	const forkEntry = state.entries.find(
+		({ envelope }) => envelope.type === "session.forked"
+	);
+	if (forkEntry?.envelope.type === "session.forked") {
+		const forkProvenance = parseSessionForkedPayload(
+			forkEntry.envelope.payload
+		);
+		if (forkProvenance.sourceSessionId !== provenance.sourceSessionId) {
+			throw new SessionBundleValidationError(
+				"Branch fork provenance does not match its creation provenance."
+			);
+		}
+	}
+};
+
 const prepareSessionBundleDirectoryContents = async (
 	bundlePath: string
 ): Promise<PreparedSessionBundleImport> => {
@@ -695,6 +795,9 @@ const prepareSessionBundleDirectoryContents = async (
 	}
 	const sessionId = toSessionId(manifest.session.id);
 	const { attachments, state } = validateSessionBundleLog(sessionId, logBytes);
+	if (manifest.scope === "branch") {
+		assertBranchBundleLogMatchesManifest(manifest, state, sessionId);
+	}
 	if (
 		state.logId !== manifest.session.logId ||
 		state.nextSequence - 1 !== manifest.cut.sequence ||
@@ -952,18 +1055,23 @@ export const publishSessionBundleDirectory = async (
 			stagingPath,
 			options.signal
 		);
+		const manifestSource =
+			source.source === undefined && options.sourceWorkspacePath === undefined
+				? undefined
+				: {
+						...source.source,
+						...omitUndefined({
+							workspacePath: options.sourceWorkspacePath,
+						}),
+					};
 		const manifest = parseSessionBundleManifest({
 			attachments: attachmentEntries,
 			cut: source.cut,
 			format: SESSION_BUNDLE_FORMAT,
+			scope: source.scope,
 			session: { id: source.sessionId, logId: source.logId },
 			sessionFile,
-			...omitUndefined({
-				source:
-					options.sourceWorkspacePath === undefined
-						? undefined
-						: { workspacePath: options.sourceWorkspacePath },
-			}),
+			...omitUndefined({ source: manifestSource }),
 			version: SESSION_BUNDLE_VERSION,
 		});
 		throwIfAborted(options.signal, "Session bundle export was cancelled.");

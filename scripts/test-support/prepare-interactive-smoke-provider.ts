@@ -10,13 +10,6 @@ import {
 	pluginProviderStorageId,
 } from "../../packages/coding-agent/modules/providers/provider-stores";
 import { createSessionUserMessage } from "../../packages/coding-agent/modules/sessions/message";
-import { createDatabase } from "../../packages/coding-agent/modules/sessions/storage/client";
-import { createDrizzleSessionStore } from "../../packages/coding-agent/modules/sessions/storage/drizzle-session-store";
-import {
-	resolveLocalSessionLogRoot,
-	resolveLocalSessionProjectionPath,
-} from "../../packages/coding-agent/modules/sessions/storage/path";
-import { createSessionJsonlStore } from "../../packages/coding-agent/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "../../packages/coding-agent/modules/sessions/storage/session-record";
 import { resolveUserDataDir } from "../../packages/coding-agent/shared/paths/user-data-dir";
 import {
@@ -26,6 +19,7 @@ import {
 	sessionMessageId,
 	sessionRecordId,
 } from "../../packages/coding-agent/test/support/identifiers";
+import { openInteractiveSmokeSessionStore } from "./interactive-smoke-session-store";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../..");
 const pluginPath = path.join(
@@ -53,18 +47,11 @@ if (process.env.WINCODE_SMOKE_INVALID_ENDPOINT === "1") {
 		providerId: "terminal-smoke",
 	};
 	const smokeAgent = agentId("terminal-smoke");
-	const operational = createDatabase();
-	const databasePath = operational.sqlite.filename;
-	const projection = createDatabase(
-		resolveLocalSessionProjectionPath(databasePath)
-	);
-	const logRoot = resolveLocalSessionLogRoot(databasePath);
-	const projectionStore = createDrizzleSessionStore(projection.db, {
-		operationalDatabase: operational.db,
-		sessionLogRoot: logRoot,
-		workspaceRoot: process.env.WINCODE_SMOKE_WORKSPACE,
-	});
-	const store = createSessionJsonlStore(projectionStore, logRoot);
+	const workspaceRoot = process.env.WINCODE_SMOKE_WORKSPACE;
+	if (workspaceRoot === undefined) {
+		throw new Error("WINCODE_SMOKE_WORKSPACE is required for session seeding.");
+	}
+	const { close, store } = openInteractiveSmokeSessionStore(workspaceRoot);
 	try {
 		const { id: sessionId, writeOutcome: creation } =
 			await store.createEmptySession({ model: providerModel });
@@ -119,7 +106,117 @@ if (process.env.WINCODE_SMOKE_INVALID_ENDPOINT === "1") {
 			title: "Invalid endpoint smoke fixture",
 		});
 	} finally {
-		projection.sqlite.close();
-		operational.sqlite.close();
+		close();
+	}
+}
+
+if (process.env.WINCODE_SMOKE_BRANCH_EXPORT === "1") {
+	const providerModel: ProviderModelSelection = {
+		modelId: modelId("fake"),
+		pluginProviderSource: {
+			pluginId: "interactive_smoke",
+			sourceIdentity: pluginSourceIdentity(pluginPath),
+		},
+		providerId: "terminal-smoke",
+	};
+	const smokeAgent = agentId("terminal-smoke");
+	const workspaceRoot = process.env.WINCODE_SMOKE_WORKSPACE;
+	if (workspaceRoot === undefined) {
+		throw new Error("WINCODE_SMOKE_WORKSPACE is required for session seeding.");
+	}
+	const { close, store } = openInteractiveSmokeSessionStore(workspaceRoot);
+	try {
+		const { id: sessionId, writeOutcome: creation } =
+			await store.createEmptySession({ model: providerModel });
+		if (creation.kind !== "committed") {
+			throw new Error("Could not create the branch-export smoke Session.");
+		}
+		const rootMessage = createSessionUserMessage("branch smoke shared root", {
+			agent: smokeAgent,
+			model: providerModel,
+		});
+		const rootRecord = buildUserSessionRecord({
+			agentId: smokeAgent,
+			message: rootMessage,
+			model: providerModel,
+			turnId: agentTurnId("smoke-branch-export-turn"),
+		});
+		const rootWrite = await store.commitSessionRecord({
+			record: rootRecord,
+			sessionId,
+		});
+		if (rootWrite.kind !== "committed") {
+			throw new Error("Could not write the branch-export smoke root.");
+		}
+		const createAssistantRecord = (
+			id: string,
+			text: string,
+			usage: Readonly<{ inputTokens: number; outputTokens: number }>
+		): SessionRecord => ({
+			agentId: smokeAgent,
+			id: sessionRecordId(id),
+			messages: [
+				{
+					id: sessionMessageId(`${id}-message`),
+					metadata: { model: providerModel, usage },
+					parts: [{ text, type: "text" }],
+					role: "assistant",
+				},
+			],
+			model: providerModel,
+			outcome: {
+				kind: "assistant",
+				terminal: {
+					finishedAt: 1_800_000_000_000,
+					kind: "completed",
+					usage,
+				},
+			},
+			turnId: rootRecord.turnId,
+			version: SESSION_RECORD_VERSION,
+		});
+		const siblingRecord = createAssistantRecord(
+			"smoke-branch-export-sibling",
+			"branch smoke sibling answer",
+			{ inputTokens: 7, outputTokens: 2 }
+		);
+		const siblingWrite = await store.commitSessionRecord({
+			record: siblingRecord,
+			sessionId,
+		});
+		if (siblingWrite.kind !== "committed") {
+			throw new Error("Could not write the branch-export smoke sibling.");
+		}
+		const sourceTree = await store.readSessionHistoryTreePage(sessionId);
+		const rootEntry = sourceTree.entries.find(
+			(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
+		);
+		if (rootEntry === undefined) {
+			throw new Error("Could not locate the branch-export smoke root.");
+		}
+		await store.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "smoke-branch-export-return-to-root",
+		});
+		const selectedRecord = createAssistantRecord(
+			"smoke-branch-export-selected",
+			"branch smoke selected answer",
+			{ inputTokens: 11, outputTokens: 3 }
+		);
+		const selectedWrite = await store.commitSessionRecord({
+			record: selectedRecord,
+			sessionId,
+		});
+		if (selectedWrite.kind !== "committed") {
+			throw new Error("Could not write the branch-export smoke selected path.");
+		}
+		const titleWrite = await store.updateSession(sessionId, {
+			title: "branch-export-smoke-source",
+		});
+		if (titleWrite.kind !== "committed") {
+			throw new Error("Could not title the branch-export smoke Session.");
+		}
+	} finally {
+		close();
 	}
 }

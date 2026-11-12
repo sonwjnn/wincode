@@ -12,6 +12,7 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
+import type { SessionBundleImportResult } from "../../session-bundle-contract";
 import { createSessionBundleImportOperation } from "../../session-bundle-import";
 import { getSessionStore } from "../../storage/get-session-store";
 
@@ -28,7 +29,7 @@ export const formatSessionBundleImportFailure = (error: unknown): string => {
 };
 
 export type ImportSessionDialogProps = Readonly<{
-	onImported?: () => void | Promise<void>;
+	onImported?: (result: SessionBundleImportResult) => void | Promise<void>;
 }>;
 
 export function ImportSessionDialog({ onImported }: ImportSessionDialogProps) {
@@ -74,7 +75,7 @@ export function ImportSessionDialog({ onImported }: ImportSessionDialogProps) {
 				),
 				variant: "success",
 			});
-			await onImported?.();
+			await onImported?.(result);
 			close();
 		} catch (error) {
 			if (!controller.signal.aborted) {

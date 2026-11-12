@@ -72,5 +72,5 @@ export const renderSessionPicker = async ({
 		</ThemeProvider>,
 		{ height: 24, kittyKeyboard, width: 100 }
 	);
-	return { getStoreSpy, setup };
+	return { getStoreSpy, router, setup };
 };

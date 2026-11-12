@@ -9,6 +9,7 @@ import { SessionForkBusyError } from "@/modules/sessions/host/session-host-manag
 import type { SessionHost } from "@/modules/sessions/host/types";
 import type {
 	SessionBundleExportResult,
+	SessionBundleExportScope,
 	SessionBundleImportResult,
 } from "@/modules/sessions/session-bundle-contract";
 import { SessionBundleExportError } from "@/modules/sessions/session-bundle-export";
@@ -125,20 +126,27 @@ test("Sessions export CLI returns the shared bundle result as one JSON line", as
 			attachments: [],
 			cut: { hash: "a".repeat(64), sequence: 1 },
 			format: "wincode-session-bundle",
+			scope: "tree",
 			session: { id: sessionId, logId: "cli-export-log" },
 			sessionFile: {
 				byteLength: 42,
 				path: "session.jsonl",
 				sha256: "b".repeat(64),
 			},
-			version: 1,
+			version: 2,
 		},
 		sessionId,
 		status: "exported",
 	};
 	const stdout: string[] = [];
 	const stderr: string[] = [];
-	let request: Readonly<{ destination: string; sessionId: string }> | undefined;
+	let request:
+		| Readonly<{
+				destination: string;
+				scope?: SessionBundleExportScope;
+				sessionId: string;
+		  }>
+		| undefined;
 	const code = await runSessionsCli(
 		["export", sessionId, destination, "--json"],
 		{
@@ -163,7 +171,84 @@ test("Sessions export CLI returns the shared bundle result as one JSON line", as
 		sessionId,
 		status: "exported",
 	});
-	expect(request).toMatchObject({ destination, sessionId });
+	expect(request).toMatchObject({ destination, scope: "tree", sessionId });
+});
+
+test("Sessions export CLI passes explicit branch scope and rejects invalid scopes", async () => {
+	const sourceSessionId = toSessionId("cli-export-branch-source");
+	const branchSessionId = toSessionId("cli-export-branch-copy");
+	const destination = path.join(root, "exported-branch");
+	const result: SessionBundleExportResult = {
+		destination,
+		manifest: {
+			attachments: [],
+			cut: { hash: "a".repeat(64), sequence: 1 },
+			format: "wincode-session-bundle",
+			scope: "branch",
+			session: { id: branchSessionId, logId: "cli-export-branch-log" },
+			sessionFile: {
+				byteLength: 42,
+				path: "session.jsonl",
+				sha256: "b".repeat(64),
+			},
+			source: { activeLeafId: null, sourceSessionId },
+			version: 2,
+		},
+		sessionId: branchSessionId,
+		status: "exported",
+	};
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	let requestedScope: SessionBundleExportScope | undefined;
+	let exportCalls = 0;
+	const dependencies = {
+		exportSessionBundle: async (input: {
+			destination: string;
+			scope?: SessionBundleExportScope;
+			sessionId: string;
+		}) => {
+			exportCalls += 1;
+			requestedScope = input.scope;
+			return result;
+		},
+	};
+	const code = await runSessionsCli(
+		["export", sourceSessionId, destination, "--scope", "branch", "--json"],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => stdout.push(text) },
+		},
+		undefined,
+		dependencies
+	);
+	expect(code).toBe(0);
+	expect(stderr).toEqual([]);
+	expect(requestedScope).toBe("branch");
+	expect(exportCalls).toBe(1);
+	expect(JSON.parse(stdout[0] ?? "null")).toMatchObject({
+		command: "export",
+		sessionId: branchSessionId,
+		manifest: { scope: "branch" },
+	});
+
+	const invalidStdout: string[] = [];
+	const invalidCode = await runSessionsCli(
+		["export", sourceSessionId, destination, "--scope", "partial", "--json"],
+		{
+			stderr: { write: (text) => stderr.push(text) },
+			stdout: { write: (text) => invalidStdout.push(text) },
+		},
+		undefined,
+		dependencies
+	);
+	expect(invalidCode).toBe(2);
+	expect(exportCalls).toBe(1);
+	expect(JSON.parse(invalidStdout[0] ?? "null")).toMatchObject({
+		error: {
+			code: "usage",
+			message: "The --scope option requires 'tree' or 'branch'.",
+		},
+	});
 });
 
 const createPersistence = (

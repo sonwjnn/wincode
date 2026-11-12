@@ -75,6 +75,18 @@ const historyBranchResponse = (
 	prompt: string,
 	transcript: string
 ): FauxResponse | undefined => {
+	if (prompt.includes("terminal smoke continue imported branch")) {
+		const importedSelectedPath =
+			transcript.includes("branch smoke selected answer") &&
+			!transcript.includes("branch smoke sibling answer");
+		return completedResponse(
+			fauxText(
+				importedSelectedPath
+					? "imported-branch-only"
+					: "imported-branch-includes-sibling"
+			)
+		);
+	}
 	if (prompt.includes("branch from root")) {
 		return completedResponse(fauxText("root-branch-only"));
 	}

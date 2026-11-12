@@ -45,6 +45,7 @@ export type {
 	SessionBundleCut,
 	SessionBundleExportOptions,
 	SessionBundleExportResult,
+	SessionBundleExportScope,
 	SessionBundleFile,
 	SessionBundleImportOptions,
 	SessionBundleImportResult,

@@ -7,6 +7,7 @@ import { isAvailableProviderModelSelection } from "@/modules/providers/provider-
 import type { AttachmentReferenceResolver } from "@/modules/sessions/attachment-reference";
 import { createValidatedPluginProviderCollectionForSelection } from "@/modules/sessions/host/agent-session-turn-runner";
 import { ProviderCollectionUnavailableError } from "@/modules/sessions/provider-collection";
+import type { SessionBundleExportScope } from "@/modules/sessions/session-bundle-contract";
 import {
 	createSessionBundleExportOperation,
 	SessionBundleExportError,
@@ -525,6 +526,13 @@ export const createRpcRequestHandler = (
 			const params = paramsOf(request);
 			const sessionIdValue = stringValue(params.sessionId);
 			const destination = stringValue(params.destination);
+			const scopeValue = params.scope;
+			let scope: SessionBundleExportScope | undefined;
+			if (scopeValue === undefined) {
+				scope = "tree";
+			} else if (scopeValue === "tree" || scopeValue === "branch") {
+				scope = scopeValue;
+			}
 			if (sessionIdValue === undefined || !isValidSessionId(sessionIdValue)) {
 				throw rpcInvalidParams("sessionId must be a valid Session ID.");
 			}
@@ -532,6 +540,9 @@ export const createRpcRequestHandler = (
 				throw rpcInvalidParams(
 					"destination must be a non-empty directory path."
 				);
+			}
+			if (scope === undefined) {
+				throw rpcInvalidParams("scope must be 'tree' or 'branch'.");
 			}
 			const sessionId = toSessionId(sessionIdValue);
 			const exportSessionBundle = createSessionBundleExportOperation(
@@ -543,6 +554,7 @@ export const createRpcRequestHandler = (
 					request.id,
 					await exportSessionBundle({
 						destination,
+						scope,
 						sessionId,
 						sourceWorkspacePath: assembly.workspace,
 					})

@@ -175,7 +175,7 @@ never resolves co-selected Skill or Custom Command intents.
 
 ### Session management
 
-`SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store. `Ctrl+E` exports the selected Session as a local bundle directory; `Ctrl+O` imports a bundle into the current workspace.
+`SessionsDialog` lists local sessions, supports pin/unpin and deletion, and `RenameSessionDialog` updates titles through the same store. `Ctrl+E` exports the selected Session as a local bundle directory after choosing `tree` or `branch`; `Ctrl+O` imports a bundle into the current workspace and opens the imported Session.
 
 ### Context edits
 
@@ -212,7 +212,7 @@ becomes retryable.
 
 ### Session bundles
 
-`wincode sessions export <session-id> <directory>` writes a portable bundle, and `wincode sessions import <directory>` validates and imports one. The public Session SDK and RPC expose the same import operation. Imports verify the manifest, log integrity and resource bounds, and require every referenced attachment to be present and valid before publishing Session history. Repeating the same import is a no-op; a different log using an existing Session ID is a conflict.
+`wincode sessions export <session-id> <directory> [--scope tree|branch]` writes a portable bundle; `tree` is the default. The public Session SDK and the `session/exportBundle` RPC use the same optional `scope` (`tree` or `branch`, default `tree`). Tree scope preserves the Session ID and exports its complete history tree, including non-selected branches. Branch scope exports only the Selected Path and gives the bundle a new Session ID. It remaps history identities, retains only that path's attachment closure, and records the source Session and Active Leaf as provenance. `wincode sessions import <directory>` validates and imports either bundle. Imports verify the manifest, log integrity and resource bounds, and require every referenced attachment to be present and valid before publishing Session history. Repeating the same import is a no-op; a different log using an existing Session ID is a conflict.
 
 Imported Sessions are bound locally but remain idle. A stored pending submission is not replayed during import, projection rebuild, or automatic Session open. The first explicit continuation or new input durably records activation before model work can start. Importing never resumes an interrupted Agent Turn.
 

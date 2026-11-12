@@ -7,6 +7,7 @@ import { getErrorCode } from "@/shared/utils/error-log-fields";
 import type { SessionHostManager } from "./host/types";
 import type {
 	SessionBundleExportResult,
+	SessionBundleExportScope,
 	SessionBundleManifest,
 } from "./session-bundle-contract";
 import {
@@ -20,7 +21,6 @@ import {
 import { SessionLogError } from "./storage/session-jsonl-codec";
 import {
 	SessionBundleExportCleanupError,
-	SessionHistoryBranchesUnsupportedError,
 	SessionWriteOutcomeError,
 } from "./storage/session-jsonl-store";
 import type { SessionStore } from "./storage/session-store";
@@ -35,7 +35,6 @@ export type SessionBundleExportErrorCode =
 	| "session_export_cleanup_failed"
 	| "session_export_failed"
 	| "session_export_unavailable"
-	| "session_history_branches_unsupported"
 	| "session_lock_failed"
 	| "session_log_corrupt"
 	| "session_log_version_unsupported"
@@ -78,6 +77,7 @@ export class SessionBundleExportError extends Error {
 
 export type SessionBundleExportInput = Readonly<{
 	destination: string;
+	scope?: SessionBundleExportScope;
 	sessionId: SessionId | string;
 	signal?: AbortSignal;
 	sourceWorkspacePath?: string;
@@ -120,11 +120,6 @@ const exportErrorFor = (
 		});
 	}
 	if (error instanceof SessionBundleValidationError) {
-		return new SessionBundleExportError(error.code, sessionId, error.message, {
-			cause: error,
-		});
-	}
-	if (error instanceof SessionHistoryBranchesUnsupportedError) {
 		return new SessionBundleExportError(error.code, sessionId, error.message, {
 			cause: error,
 		});
@@ -219,6 +214,7 @@ export const createSessionBundleExportOperation =
 	): SessionBundleExportOperation =>
 	async ({
 		destination,
+		scope = "tree",
 		sessionId: sessionIdValue,
 		signal,
 		sourceWorkspacePath,
@@ -248,6 +244,7 @@ export const createSessionBundleExportOperation =
 							}),
 						{
 							existingHostWriter,
+							scope,
 							...omitUndefined({ signal }),
 						}
 					);
@@ -275,7 +272,7 @@ export const createSessionBundleExportOperation =
 		return {
 			destination: destinationPath,
 			manifest,
-			sessionId,
+			sessionId: toSessionId(manifest.session.id),
 			status: "exported",
 		};
 	};

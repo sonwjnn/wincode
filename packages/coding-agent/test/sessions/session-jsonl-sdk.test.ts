@@ -30,6 +30,7 @@ import type { SessionHost } from "@/modules/sessions/host/types";
 import { createSessionUserMessage } from "@/modules/sessions/message";
 import { createSessionSdkWithRuntime } from "@/modules/sessions/sdk";
 import type {
+	SessionSdk,
 	SessionSdkHandle,
 	SessionSdkSnapshot,
 	SessionSdkSubmissionAdmission,
@@ -50,7 +51,10 @@ import {
 	resolveLocalSessionProjectionPath,
 	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
-import { validateSessionBundleDirectory } from "@/modules/sessions/storage/session-bundle";
+import {
+	SESSION_BUNDLE_LOG_PATH,
+	validateSessionBundleDirectory,
+} from "@/modules/sessions/storage/session-bundle";
 import {
 	createSessionLogEvent,
 	decodeSessionLog,
@@ -1857,12 +1861,8 @@ test("public Session SDK lets a Plugin veto navigation to an inactive sibling be
 	}
 });
 
-test("public Session SDK refuses fork and export before publishing when history has multiple branches", async () => {
-	const databasePath = path.join(
-		root,
-		"multi-branch-export",
-		"sessions.sqlite"
-	);
+const createMultiBranchSessionFixture = async (name: string) => {
+	const databasePath = path.join(root, name, "sessions.sqlite");
 	await fs.mkdir(path.dirname(databasePath), { recursive: true });
 	const persistence = createSessionJsonlTestPersistence(
 		databasePath,
@@ -1877,73 +1877,748 @@ test("public Session SDK refuses fork and export before publishing when history 
 		store: persistence.store,
 		workspace,
 	});
-	const destination = path.join(workspace, "multi-branch-export.bundle");
-	try {
-		const { id: sessionId } = await persistence.store.createEmptySession({});
-		const rootRecord = buildUserSessionRecord({
-			agentId: agentId("multi-branch-export"),
-			message: createSessionUserMessage("shared root"),
+	const { id: sessionId } = await persistence.store.createEmptySession({});
+	const rootRecord = buildUserSessionRecord({
+		agentId: agentId("build"),
+		message: createSessionUserMessage("shared root"),
+		model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		turnId: agentTurnId(`${name}-root-turn`),
+	});
+	const createAssistantRecord = (
+		label: string,
+		text: string,
+		usage: Readonly<{ inputTokens: number; outputTokens: number }>
+	): SessionRecord => {
+		const id = `${name}-${label}`;
+		return {
+			agentId: agentId("build"),
+			id: sessionRecordId(id),
+			messages: [
+				{
+					id: sessionMessageId(`${id}-message`),
+					metadata: { model: DEFAULT_PROVIDER_MODEL_SELECTION, usage },
+					parts: [{ text, type: "text" }],
+					role: "assistant",
+				},
+			],
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
-			turnId: agentTurnId("multi-branch-export-root-turn"),
-		});
-		const firstBranchRecord = buildUserSessionRecord({
-			agentId: agentId("multi-branch-export"),
-			message: createSessionUserMessage("first branch"),
-			model: DEFAULT_PROVIDER_MODEL_SELECTION,
-			turnId: agentTurnId("multi-branch-export-first-turn"),
-		});
-		await persistence.store.commitSessionRecord({
-			record: rootRecord,
-			sessionId,
-		});
-		await persistence.store.commitSessionRecord({
-			record: firstBranchRecord,
-			sessionId,
-		});
-		const initialTree = await sdk.readSessionHistoryTreePage(sessionId);
-		const rootEntry = initialTree.entries.find(
-			(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
-		);
-		if (rootEntry === undefined) {
-			throw new Error("Expected the shared root history entry.");
-		}
-		await sdk.navigateSessionHistory(sessionId, {
-			targetEntryId: rootEntry.id,
-			operationId: "multi-branch-export-return-to-root",
-		});
-		const secondBranchRecord = buildUserSessionRecord({
-			agentId: agentId("multi-branch-export"),
-			message: createSessionUserMessage("second branch"),
-			model: DEFAULT_PROVIDER_MODEL_SELECTION,
-			turnId: agentTurnId("multi-branch-export-second-turn"),
-		});
-		await persistence.store.commitSessionRecord({
-			record: secondBranchRecord,
-			sessionId,
-		});
+			outcome: {
+				kind: "assistant",
+				terminal: { finishedAt: 1_800_000_000_000, kind: "completed", usage },
+			},
+			turnId: rootRecord.turnId,
+			version: SESSION_RECORD_VERSION,
+		};
+	};
+	const firstBranchRecord = createAssistantRecord(
+		"first-answer",
+		"first branch answer",
+		{ inputTokens: 13, outputTokens: 2 }
+	);
+	const rootWrite = await persistence.store.commitSessionRecord({
+		record: rootRecord,
+		sessionId,
+	});
+	const firstBranchWrite = await persistence.store.commitSessionRecord({
+		record: firstBranchRecord,
+		sessionId,
+	});
+	expect(rootWrite.kind).toBe("committed");
+	expect(firstBranchWrite.kind).toBe("committed");
+	const initialTree = await sdk.readSessionHistoryTreePage(sessionId);
+	const rootEntry = initialTree.entries.find(
+		(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
+	);
+	if (rootEntry === undefined) {
+		throw new Error("Expected the shared root history entry.");
+	}
+	await sdk.navigateSessionHistory(sessionId, {
+		targetEntryId: rootEntry.id,
+		operationId: `${name}-return-to-root`,
+	});
+	const secondBranchRecord = createAssistantRecord(
+		"second-answer",
+		"second branch answer",
+		{ inputTokens: 17, outputTokens: 4 }
+	);
+	const secondBranchWrite = await persistence.store.commitSessionRecord({
+		record: secondBranchRecord,
+		sessionId,
+	});
+	expect(secondBranchWrite.kind).toBe("committed");
+	return {
+		close: async () => {
+			await sdk.dispose();
+			persistence.close();
+		},
+		firstBranchRecord,
+		recorder,
+		rootRecord,
+		secondBranchRecord,
+		sdk,
+		sessionId,
+	};
+};
 
+test("public Session SDK whole-tree round-trip preserves sibling branches and the Active Leaf", async () => {
+	const fixture = await createMultiBranchSessionFixture("whole-tree-export");
+	const destination = path.join(workspace, "whole-tree-export.bundle");
+	const importDatabasePath = path.join(
+		root,
+		"whole-tree-import",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(importDatabasePath), { recursive: true });
+	let importedSdk: SessionSdk | undefined;
+	try {
+		const expectedTree = await fixture.sdk.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		const exported = await fixture.sdk.exportSessionBundle(
+			fixture.sessionId,
+			destination,
+			{ scope: "tree" }
+		);
+		const validated = await validateSessionBundleDirectory(destination);
+		expect(exported.manifest.scope).toBe("tree");
+		expect(validated.session).toEqual({
+			id: fixture.sessionId,
+			logId: exported.manifest.session.logId,
+		});
+		importedSdk = await createSessionSdk({
+			cwd: workspace,
+			databasePath: importDatabasePath,
+			pluginPaths: [],
+			workspace,
+		});
+		const imported = await importedSdk.importSessionBundle(destination);
+		const importedTree = await importedSdk.readSessionHistoryTreePage(
+			imported.sessionId
+		);
+		expect(imported).toMatchObject({
+			activationPending: true,
+			sessionId: fixture.sessionId,
+			status: "imported",
+		});
+		expect(importedTree.activeLeafId).toBe(expectedTree.activeLeafId);
+		expect(
+			importedTree.entries.map(({ id, parentEntryId, selectedPath }) => ({
+				id,
+				parentEntryId,
+				selectedPath,
+			}))
+		).toEqual(
+			expectedTree.entries.map(({ id, parentEntryId, selectedPath }) => ({
+				id,
+				parentEntryId,
+				selectedPath,
+			}))
+		);
+		const importedText = JSON.stringify(importedTree.entries);
+		expect(importedText).toContain("first branch answer");
+		expect(importedText).toContain("second branch answer");
+		expect(fixture.recorder.requests).toEqual([]);
+	} finally {
+		await importedSdk?.dispose();
+		await fixture.close();
+	}
+});
+
+test("public Session SDK branch export keeps only the Selected Path and marks usage inherited", async () => {
+	const fixture = await createMultiBranchSessionFixture("selected-path-export");
+	const destination = path.join(workspace, "selected-path-only.bundle");
+	const importDatabasePath = path.join(
+		root,
+		"selected-path-only-import",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(importDatabasePath), { recursive: true });
+	let importedSdk: SessionSdk | undefined;
+	try {
+		const sourceTree = await fixture.sdk.readSessionHistoryTreePage(
+			fixture.sessionId
+		);
+		const selectedSourceRecordIds = sourceTree.entries.flatMap((entry) =>
+			entry.kind === "record" && entry.selectedPath ? [entry.recordId] : []
+		);
+		const exported = await fixture.sdk.exportSessionBundle(
+			fixture.sessionId,
+			destination,
+			{ scope: "branch" }
+		);
+		expect(exported.sessionId).not.toBe(fixture.sessionId);
+		expect(exported.manifest).toMatchObject({
+			scope: "branch",
+			session: { id: exported.sessionId },
+			source: {
+				activeLeafId: sourceTree.activeLeafId,
+				sourceSessionId: fixture.sessionId,
+			},
+		});
+		importedSdk = await createSessionSdk({
+			cwd: workspace,
+			databasePath: importDatabasePath,
+			pluginPaths: [],
+			workspace,
+		});
+		const imported = await importedSdk.importSessionBundle(destination);
+		const importedTree = await importedSdk.readSessionHistoryTreePage(
+			imported.sessionId
+		);
+		const importedRecords = importedTree.entries.flatMap((entry) =>
+			entry.kind === "record" ? [entry] : []
+		);
+		const importedRecordIds = importedRecords.map(({ recordId }) => recordId);
+		const importedText = importedRecords
+			.flatMap(({ record }) =>
+				record.messages.flatMap((message) =>
+					message.parts.flatMap((part) =>
+						part.type === "text" ? [part.text] : []
+					)
+				)
+			)
+			.join(" ");
+		expect(imported).toMatchObject({
+			activationPending: true,
+			sessionId: exported.sessionId,
+			status: "imported",
+		});
+		expect(importedTree.activeLeafId).not.toBe(sourceTree.activeLeafId);
+		expect(importedTree.entries.every((entry) => entry.selectedPath)).toBe(
+			true
+		);
+		for (const sourceRecordId of selectedSourceRecordIds) {
+			expect(importedRecordIds).not.toContain(sourceRecordId);
+		}
+		expect(importedRecordIds).not.toContain(fixture.firstBranchRecord.id);
+		expect(importedText).toContain("shared root");
+		expect(importedText).toContain("second branch answer");
+		expect(importedText).not.toContain("first branch answer");
+		const statistics = await importedSdk.getSessionStatistics(
+			imported.sessionId
+		);
+		expect(statistics).toMatchObject({
+			recordCount: 2,
+			usage: {
+				actual: { contributionCount: 0, inputTokens: null },
+				inherited: {
+					contributionCount: 1,
+					inputTokens: 17,
+					outputTokens: 4,
+				},
+				selectedPath: {
+					contributionCount: 1,
+					inputTokens: 17,
+					outputTokens: 4,
+				},
+			},
+		});
+		expect(statistics.usage.contributions.inherited).toMatchObject([
+			{
+				identity: {
+					kind: "record",
+					recordId: fixture.secondBranchRecord.id,
+					sessionId: fixture.sessionId,
+				},
+			},
+		]);
+	} finally {
+		await importedSdk?.dispose();
+		await fixture.close();
+	}
+});
+
+test("branch artifact identity does not conflict with its source Session and identical re-import is a no-op", async () => {
+	const fixture = await createMultiBranchSessionFixture(
+		"branch-import-identity"
+	);
+	const treeDestination = path.join(workspace, "branch-identity-source.bundle");
+	const branchDestination = path.join(
+		workspace,
+		"branch-identity-child.bundle"
+	);
+	const importDatabasePath = path.join(
+		root,
+		"branch-import-identity-import",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(importDatabasePath), { recursive: true });
+	let importedSdk: SessionSdk | undefined;
+	try {
+		await fixture.sdk.exportSessionBundle(fixture.sessionId, treeDestination, {
+			scope: "tree",
+		});
+		const branch = await fixture.sdk.exportSessionBundle(
+			fixture.sessionId,
+			branchDestination,
+			{ scope: "branch" }
+		);
+		expect(branch.sessionId).not.toBe(fixture.sessionId);
+		importedSdk = await createSessionSdk({
+			cwd: workspace,
+			databasePath: importDatabasePath,
+			pluginPaths: [],
+			workspace,
+		});
+		const sourceImport = await importedSdk.importSessionBundle(treeDestination);
+		expect(sourceImport).toMatchObject({
+			sessionId: fixture.sessionId,
+			status: "imported",
+		});
+		const branchImport =
+			await importedSdk.importSessionBundle(branchDestination);
+		expect(branchImport).toMatchObject({
+			sessionId: branch.sessionId,
+			status: "imported",
+		});
+		const repeatedImport =
+			await importedSdk.importSessionBundle(branchDestination);
+		expect(repeatedImport).toMatchObject({
+			sessionId: branch.sessionId,
+			status: "unchanged",
+		});
+		const sessionIds = (await importedSdk.listSessionsPage()).sessions.map(
+			({ id }) => id
+		);
+		expect(sessionIds).toEqual(
+			expect.arrayContaining([fixture.sessionId, branch.sessionId])
+		);
+	} finally {
+		await importedSdk?.dispose();
+		await fixture.close();
+	}
+});
+
+test("public Session SDK still refuses to fork a Session with multiple history branches", async () => {
+	const fixture = await createMultiBranchSessionFixture(
+		"multi-branch-fork-refusal"
+	);
+	try {
 		await expect(
-			sdk.forkSession(
-				sessionId,
-				{ recordId: secondBranchRecord.id },
+			fixture.sdk.forkSession(
+				fixture.sessionId,
+				{ recordId: fixture.secondBranchRecord.id },
 				"multi-branch-fork-refused"
 			)
 		).rejects.toMatchObject({
 			code: "session_history_branches_unsupported",
 			message: expect.stringContaining("multiple history branches"),
 		});
-		await expect(
-			sdk.exportSessionBundle(sessionId, destination)
-		).rejects.toMatchObject({
-			code: "session_history_branches_unsupported",
-			message: expect.stringContaining("multiple history branches"),
-		});
-		await expect(fs.access(destination)).rejects.toMatchObject({
-			code: "ENOENT",
-		});
-		expect(await persistence.store.listSessions()).toHaveLength(1);
 	} finally {
-		await sdk.dispose();
+		await fixture.close();
+	}
+});
+
+test("public Session SDK continues from the imported branch's Selected Path on explicit input", async () => {
+	const fixture = await createMultiBranchSessionFixture("branch-continuation");
+	const branchDestination = path.join(workspace, "branch-continuation.bundle");
+	const continuationDatabasePath = path.join(
+		root,
+		"branch-continuation-import",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(continuationDatabasePath), { recursive: true });
+	const continuationPersistence = createSessionJsonlTestPersistence(
+		continuationDatabasePath,
+		workspace
+	);
+	const continuationRecorder = createFakeProviderRecorder();
+	let continuationSdk: SessionSdk | undefined;
+	try {
+		await fixture.sdk.exportSessionBundle(
+			fixture.sessionId,
+			branchDestination,
+			{ scope: "branch" }
+		);
+		const sdk = await createSessionSdkWithRuntime({
+			createProviderCollection: () =>
+				createFakeProviderCollection(continuationRecorder),
+			cwd: workspace,
+			databasePath: continuationDatabasePath,
+			pluginPaths: [],
+			store: continuationPersistence.store,
+			workspace,
+		});
+		continuationSdk = sdk;
+		const imported = await sdk.importSessionBundle(branchDestination);
+		expect(imported.activationPending).toBe(true);
+		expect(continuationRecorder.requests).toEqual([]);
+		const handle = await sdk.openSession(imported.sessionId, {
+			autoContinue: false,
+		});
+		try {
+			expect(continuationRecorder.requests).toEqual([]);
+			const beforeContinuation = await sdk.readSessionHistoryTreePage(
+				imported.sessionId
+			);
+			const turnTerminal = Promise.withResolvers<void>();
+			const unsubscribe = handle.onEvent((event) => {
+				if (isTerminalAgentTurnEvent(event)) {
+					turnTerminal.resolve();
+				}
+			});
+			try {
+				const admission = await handle.deliver({
+					idempotencyKey: "branch-selected-path-continuation",
+					text: "Continue from the selected branch.",
+				});
+				expect(admission).toMatchObject({
+					disposition: "started",
+					rejected: false,
+				});
+				await turnTerminal.promise;
+				const continuedTree = await sdk.readSessionHistoryTreePage(
+					imported.sessionId
+				);
+				const continuedUserEntry = continuedTree.entries.find(
+					(entry) =>
+						entry.kind === "record" &&
+						entry.record.messages.some(
+							(message) =>
+								message.role === "user" &&
+								message.parts.some(
+									(part) =>
+										part.type === "text" &&
+										part.text === "Continue from the selected branch."
+								)
+						)
+				);
+				expect(continuedUserEntry).toMatchObject({
+					parentEntryId: beforeContinuation.activeLeafId,
+				});
+				expect(continuedTree.activeLeafId).not.toBe(
+					beforeContinuation.activeLeafId
+				);
+				expect(continuationRecorder.requests).toHaveLength(1);
+				const providerContext = JSON.stringify(
+					continuationRecorder.requests[0]
+				);
+				expect(providerContext).toContain("second branch answer");
+				expect(providerContext).not.toContain("first branch answer");
+			} finally {
+				unsubscribe();
+			}
+		} finally {
+			await handle.dispose();
+		}
+	} finally {
+		await continuationSdk?.dispose();
+		continuationPersistence.close();
+		await fixture.close();
+	}
+});
+
+test("branch import and re-export preserve opaque Plugin entries and state tombstones without loading the Plugin", async () => {
+	const fixture = await createPluginSessionHistoryFixture(
+		"plugin-history-branch-bundle"
+	);
+	const importDatabasePath = path.join(
+		root,
+		"plugin-history-branch-import",
+		"sessions.sqlite"
+	);
+	const destination = path.join(workspace, "plugin-history-branch.bundle");
+	const reExportDestination = path.join(
+		workspace,
+		"plugin-history-branch-re-export.bundle"
+	);
+	let importedSdk: SessionSdk | undefined;
+	try {
+		const history = fixture.getHistory();
+		const siblingEntryId = await history.append(
+			"item-added",
+			{ itemId: "sibling-only" },
+			"plugin-history-bundle-sibling"
+		);
+		await fixture.handle.navigateHistory({
+			targetEntryId: null,
+			operationId: "plugin-history-bundle-return-to-root",
+		});
+		const selectedEntryId = await fixture
+			.getHistory()
+			.append(
+				"item-added",
+				{ itemId: "selected-path" },
+				"plugin-history-bundle-selected"
+			);
+		const setGeneration = (
+			await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId)
+		).historyGeneration;
+		await expect(
+			fixture.store.mutatePluginSessionState(
+				fixture.sessionId,
+				"history_entries",
+				{
+					key: "retained",
+					kind: "set",
+					operationId: "branch-state-retained",
+					schemaVersion: 1,
+					expectedHistoryGeneration: setGeneration,
+					value: "selected-path-state",
+				}
+			)
+		).resolves.toMatchObject({
+			kind: "written",
+			writeOutcome: { kind: "committed" },
+		});
+		const addGeneration = (
+			await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId)
+		).historyGeneration;
+		await expect(
+			fixture.store.mutatePluginSessionState(
+				fixture.sessionId,
+				"history_entries",
+				{
+					key: "removed",
+					kind: "set",
+					operationId: "branch-state-added",
+					schemaVersion: 1,
+					expectedHistoryGeneration: addGeneration,
+					value: "stale-state",
+				}
+			)
+		).resolves.toMatchObject({
+			kind: "written",
+			writeOutcome: { kind: "committed" },
+		});
+		const deleteGeneration = (
+			await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId)
+		).historyGeneration;
+		await expect(
+			fixture.store.mutatePluginSessionState(
+				fixture.sessionId,
+				"history_entries",
+				{
+					key: "removed",
+					kind: "delete",
+					operationId: "branch-state-deleted",
+					schemaVersion: 1,
+					expectedHistoryGeneration: deleteGeneration,
+				}
+			)
+		).resolves.toMatchObject({
+			kind: "written",
+			writeOutcome: { kind: "committed" },
+		});
+		const exported = await fixture.sdk.exportSessionBundle(
+			fixture.sessionId,
+			destination,
+			{ scope: "branch" }
+		);
+		await fs.mkdir(path.dirname(importDatabasePath), { recursive: true });
+		const importPersistence = createSessionJsonlTestPersistence(
+			importDatabasePath,
+			workspace
+		);
+		const importRecorder = createFakeProviderRecorder();
+		try {
+			importedSdk = await createSessionSdkWithRuntime({
+				createProviderCollection: () =>
+					createFakeProviderCollection(importRecorder),
+				cwd: workspace,
+				databasePath: importDatabasePath,
+				pluginPaths: [],
+				store: importPersistence.store,
+				workspace,
+			});
+			const imported = await importedSdk.importSessionBundle(destination);
+			const tree = await importedSdk.readSessionHistoryTreePage(
+				imported.sessionId
+			);
+			const pluginEntries = tree.entries.filter(
+				(entry) => entry.kind === "plugin-entry"
+			);
+			const pluginStateEntries = tree.entries.filter(
+				(entry) => entry.kind === "plugin-state"
+			);
+			const importedHandle = await importedSdk.openSession(imported.sessionId, {
+				autoContinue: false,
+			});
+			try {
+				const importedLog = await readSessionLogLines<{
+					entryType?: string;
+					payload?: unknown;
+					pluginId?: string;
+				}>(resolveLocalSessionLogRoot(importDatabasePath), imported.sessionId);
+				const persistedPluginEvents = importedLog.filter(
+					(entry) => entry.type === "plugin.entry-appended"
+				);
+				const persistedPluginStateEvents = importedLog.filter(
+					(entry) =>
+						entry.type === "plugin.state-replaced" ||
+						entry.type === "plugin.state-deleted"
+				);
+				expect(exported.sessionId).not.toBe(fixture.sessionId);
+				expect(imported).toMatchObject({
+					activationPending: true,
+					sessionId: exported.sessionId,
+					status: "imported",
+				});
+				expect(tree.activeLeafId).not.toBeNull();
+				expect(pluginEntries).toHaveLength(1);
+				expect(pluginEntries[0]?.id).not.toBe(selectedEntryId);
+				expect(pluginEntries[0]?.selectedPath).toBe(true);
+				expect(pluginEntries.map(({ id }) => id)).not.toContain(siblingEntryId);
+				expect(pluginStateEntries).toHaveLength(3);
+				expect(
+					pluginStateEntries.map(({ key, operation, selectedPath }) => ({
+						key,
+						operation,
+						selectedPath,
+					}))
+				).toEqual([
+					{ key: "retained", operation: "set", selectedPath: true },
+					{ key: "removed", operation: "set", selectedPath: true },
+					{ key: "removed", operation: "delete", selectedPath: true },
+				]);
+				expect(persistedPluginEvents).toHaveLength(1);
+				expect(persistedPluginEvents[0]?.payload).toMatchObject({
+					entryType: "item-added",
+					payload: { itemId: "selected-path" },
+					pluginId: "history_entries",
+				});
+				expect(persistedPluginStateEvents).toHaveLength(3);
+				expect(persistedPluginStateEvents[0]?.payload).toMatchObject({
+					key: "retained",
+					pluginId: "history_entries",
+					schemaVersion: 1,
+					value: "selected-path-state",
+				});
+				expect(persistedPluginStateEvents[2]?.type).toBe(
+					"plugin.state-deleted"
+				);
+				expect(
+					await importPersistence.store.getPluginSessionState(
+						imported.sessionId,
+						"history_entries",
+						"retained"
+					)
+				).toMatchObject({ schemaVersion: 1, value: "selected-path-state" });
+				expect(
+					await importPersistence.store.getPluginSessionState(
+						imported.sessionId,
+						"history_entries",
+						"removed"
+					)
+				).toBeUndefined();
+				expect(importRecorder.requests).toEqual([]);
+			} finally {
+				await importedHandle.dispose();
+			}
+			await importedSdk.exportSessionBundle(
+				imported.sessionId,
+				reExportDestination
+			);
+			const reExportedLog = decodeSessionLog(
+				imported.sessionId,
+				await Bun.file(
+					path.join(reExportDestination, SESSION_BUNDLE_LOG_PATH)
+				).bytes()
+			);
+			const reExportedEventTypes = reExportedLog.entries.map(
+				({ envelope }) => envelope.type
+			);
+			expect(reExportedEventTypes).toContain("plugin.entry-appended");
+			expect(reExportedEventTypes).toContain("plugin.state-replaced");
+			expect(reExportedEventTypes).toContain("plugin.state-deleted");
+			expect(importRecorder.requests).toEqual([]);
+		} finally {
+			await importedSdk?.dispose();
+			importPersistence.close();
+		}
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("branch export of a null Active Leaf omits its creation Record and stale last-message time", async () => {
+	const databasePath = path.join(
+		root,
+		"branch-null-active-leaf",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(databasePath), { recursive: true });
+	const persistence = createSessionJsonlTestPersistence(
+		databasePath,
+		workspace
+	);
+	const sourceSdk = await createSessionSdkWithRuntime({
+		createProviderCollection: () =>
+			createFakeProviderCollection(createFakeProviderRecorder()),
+		cwd: workspace,
+		databasePath,
+		pluginPaths: [],
+		store: persistence.store,
+		workspace,
+	});
+	const importDatabasePath = path.join(
+		root,
+		"branch-null-active-leaf-import",
+		"sessions.sqlite"
+	);
+	await fs.mkdir(path.dirname(importDatabasePath), { recursive: true });
+	const importPersistence = createSessionJsonlTestPersistence(
+		importDatabasePath,
+		workspace
+	);
+	const importRecorder = createFakeProviderRecorder();
+	let importedSdk: SessionSdk | undefined;
+	try {
+		const created = await persistence.store.createSession({
+			agent: agentId("branch-null-active-leaf"),
+			message: createSessionUserMessage("initial creation Record"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("branch-null-active-leaf-turn"),
+		});
+		const sessionId = created.id;
+		await sourceSdk.navigateSessionHistory(sessionId, {
+			targetEntryId: null,
+			operationId: "branch-null-active-leaf-navigate-to-empty",
+		});
+		const sourceTree = await sourceSdk.readSessionHistoryTreePage(sessionId);
+		expect(
+			(await persistence.store.listSessions()).find(
+				(session) => session.id === sessionId
+			)?.lastMessageAt
+		).not.toBeNull();
+		const destination = path.join(workspace, "null-active-leaf.bundle");
+		const exported = await sourceSdk.exportSessionBundle(
+			sessionId,
+			destination,
+			{
+				scope: "branch",
+			}
+		);
+		expect(sourceTree.activeLeafId).toBeNull();
+		expect(exported.manifest.source).toMatchObject({
+			activeLeafId: null,
+			sourceSessionId: sessionId,
+		});
+		importedSdk = await createSessionSdkWithRuntime({
+			createProviderCollection: () =>
+				createFakeProviderCollection(importRecorder),
+			cwd: workspace,
+			databasePath: importDatabasePath,
+			pluginPaths: [],
+			store: importPersistence.store,
+			workspace,
+		});
+		const imported = await importedSdk.importSessionBundle(destination);
+		const importedTree = await importedSdk.readSessionHistoryTreePage(
+			imported.sessionId
+		);
+		expect(importedTree).toMatchObject({ activeLeafId: null, entries: [] });
+		expect(imported.sessionId).toBe(exported.sessionId);
+		expect(
+			(await importPersistence.store.listSessions()).find(
+				(session) => session.id === imported.sessionId
+			)?.lastMessageAt
+		).toBeNull();
+		expect(importRecorder.requests).toEqual([]);
+	} finally {
+		await importedSdk?.dispose();
+		importPersistence.close();
+		await sourceSdk.dispose();
 		persistence.close();
 	}
 });
