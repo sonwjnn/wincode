@@ -485,8 +485,10 @@ test(
 				const rewoundFrame = await waitForFrame(
 					(frame) =>
 						frame.includes("Session ID: ") &&
-						frame.includes("Forked from Session "),
-					"the new Rewind Session identity"
+						frame.includes("Forked from Session ") &&
+						frame.includes("tool-roundtrip-ok") &&
+						!frame.includes("Working..."),
+					"the new Rewind Session identity and transcript"
 				);
 				const normalizedRewoundFrame = rewoundFrame.replace(/\s+/gu, " ");
 				expect(normalizedRewoundFrame).toContain("terminal smoke tool");

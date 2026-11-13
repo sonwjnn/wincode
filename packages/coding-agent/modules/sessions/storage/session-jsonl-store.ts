@@ -4947,16 +4947,24 @@ export const createSessionJsonlStore = (
 			sessionId,
 			"Session log changed while its history tree snapshot was read."
 		);
-		for (let attempt = 0; ; attempt += 1) {
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			// Recheck the intent instead of trusting one observation: a writer
+			// that finishes between checks leaves a complete snapshot behind, and
+			// the next read must be allowed to return it.
 			if (
 				(await readSessionWriteIntent(logRoot, sessionId, fileIo)) !== undefined
 			) {
-				await waitForPendingLogAppend(sessionId, attempt, changingLogError);
+				await Bun.sleep(10);
 				continue;
 			}
-			let snapshot: Readonly<{ bytes: Uint8Array; state: SessionLogState }>;
 			try {
-				snapshot = await readLog(logPath, sessionId);
+				const snapshot = await readLog(logPath, sessionId);
+				if (
+					(await readSessionWriteIntent(logRoot, sessionId, fileIo)) ===
+					undefined
+				) {
+					return snapshot;
+				}
 			} catch (error) {
 				if (
 					!(error instanceof SessionLogError) ||
@@ -4964,16 +4972,23 @@ export const createSessionJsonlStore = (
 				) {
 					throw error;
 				}
-				await waitForPendingLogAppend(sessionId, attempt, error);
-				continue;
 			}
-			if (
-				(await readSessionWriteIntent(logRoot, sessionId, fileIo)) === undefined
-			) {
-				return snapshot;
-			}
-			await waitForPendingLogAppend(sessionId, attempt, changingLogError);
+			await Bun.sleep(10);
 		}
+		const intent = await readSessionWriteIntent(logRoot, sessionId, fileIo);
+		if (intent === undefined) {
+			throw changingLogError;
+		}
+		throw new SessionLogError(
+			"session_log_write_indeterminate",
+			sessionId,
+			`Session write ${intent.operationId} has an incomplete suffix.`,
+			{
+				offset: intent.expectedOffset,
+				operationId: intent.operationId,
+				sequence: intent.sequence,
+			}
+		);
 	};
 
 	const readLogSuffixForProjection = async (
