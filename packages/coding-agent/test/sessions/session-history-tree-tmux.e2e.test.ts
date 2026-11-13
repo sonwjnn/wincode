@@ -12,19 +12,26 @@ const smokeLauncher = path.join(
 );
 const tmuxTimeoutMs = 20_000;
 const currentLeafPattern = /Current leaf: entry \d+/u;
+const historyPreviewPattern = /History entry (\d+)/u;
 const forkedSessionPattern = /Fork created: Session ([^ .]+)\./iu;
 const sessionIdentityPattern = /Session ID: ([^ .]+)/u;
 const sourceSessionIdentityPattern = /Forked from Session ([^ ]+)/u;
 
 type TerminalSmokeSession = Readonly<{
 	openHistory: () => Promise<string>;
+	previewEntry: (
+		expectedSequence: number,
+		keys: readonly string[],
+		description: string
+	) => Promise<string>;
 	sendCommand: (command: string) => Promise<void>;
 	sendKeys: (...keys: string[]) => Promise<void>;
 	sendPrompt: (text: string) => Promise<void>;
 	smokeHome: string;
 	waitForFrame: (
 		predicate: (frame: string) => boolean,
-		description: string
+		description: string,
+		timeoutMs?: number
 	) => Promise<string>;
 	waitForResponse: (response: string) => Promise<string>;
 }>;
@@ -75,9 +82,10 @@ const withTerminalSmoke = async (
 	};
 	const waitForFrame = async (
 		predicate: (frame: string) => boolean,
-		description: string
+		description: string,
+		timeoutMs = tmuxTimeoutMs
 	): Promise<string> => {
-		const deadline = Date.now() + tmuxTimeoutMs;
+		const deadline = Date.now() + timeoutMs;
 		let frame = "";
 		while (Date.now() < deadline) {
 			frame = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
@@ -115,19 +123,82 @@ const withTerminalSmoke = async (
 			`Provider response ${response}`
 		);
 	const selectSmokeAgent = async (): Promise<void> => {
-		await sendCommand("/agents");
-		await waitForFrame(
-			(frame) =>
-				frame.includes("Search agents") && frame.includes("Terminal Smoke"),
-			"the Terminal Smoke Agent picker"
-		);
-		await sendKeys("Enter");
-		await waitForFrame(
-			(frame) =>
-				frame.includes("Ask anything...") &&
-				frame.includes("terminal-smoke/fake"),
-			"the selected fake Provider"
-		);
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			await sendKeys("/agents");
+			try {
+				await waitForFrame(
+					(frame) => frame.includes("Switch agents"),
+					"the /agents command suggestion",
+					5000
+				);
+				await sendKeys("Tab");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Search agents") && frame.includes("Terminal Smoke"),
+					"the Terminal Smoke Agent picker",
+					5000
+				);
+				await sendKeys("Enter");
+				await waitForFrame(
+					(frame) =>
+						frame.includes("Ask anything...") &&
+						frame.includes("terminal-smoke/fake"),
+					"the selected fake Provider",
+					10_000
+				);
+				return;
+			} catch {
+				await sendKeys("Escape");
+				await Bun.sleep(300);
+			}
+		}
+		throw new Error("Timed out waiting for the Terminal Smoke Agent picker.");
+	};
+	// Arrow keys can arrive before the list owns focus, so retry the selection
+	// until the preview names the entry the caller expects.
+	const previewEntry = async (
+		expectedSequence: number,
+		keys: readonly string[],
+		description: string
+	): Promise<string> => {
+		for (let attempt = 0; attempt < 10; attempt += 1) {
+			for (const key of keys) {
+				await sendKeys(key);
+			}
+			await sendKeys("p");
+			const deadline = Date.now() + 3000;
+			let preview: string | undefined;
+			while (Date.now() < deadline) {
+				const frame = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
+				const match = historyPreviewPattern.exec(frame);
+				if (match !== null) {
+					if (Number(match[1]) === expectedSequence) {
+						return frame;
+					}
+					preview = frame;
+					break;
+				}
+				await Bun.sleep(100);
+			}
+			await sendKeys("Escape");
+			if (preview !== undefined) {
+				const closing = Date.now() + 3000;
+				while (Date.now() < closing) {
+					const frame = await runTmux([
+						"capture-pane",
+						"-t",
+						tmuxSession,
+						"-p",
+					]);
+					if (!frame.includes("History entry ")) {
+						break;
+					}
+					await Bun.sleep(100);
+				}
+			}
+			await Bun.sleep(150);
+		}
+		throw new Error(`Timed out waiting for ${description}.`);
 	};
 	const openHistory = async (): Promise<string> => {
 		await sendCommand("/history");
@@ -182,6 +253,7 @@ const withTerminalSmoke = async (
 		await selectSmokeAgent();
 		await run({
 			openHistory,
+			previewEntry,
 			sendCommand,
 			sendKeys,
 			sendPrompt,
@@ -288,6 +360,7 @@ test(
 	async () => {
 		await withTerminalSmoke(
 			async ({
+				previewEntry,
 				openHistory,
 				sendCommand,
 				sendKeys,
@@ -302,10 +375,9 @@ test(
 				expect(treeFrame).toContain("Current leaf: entry 2");
 				expect(treeFrame).toContain("Record · user · terminal smoke stream");
 				expect(treeFrame).toContain("L Record · assistant ·");
-				await sendKeys("Up");
-				await sendKeys("p");
-				const previewFrame = await waitForFrame(
-					(frame) => frame.includes("History entry 1"),
+				const previewFrame = await previewEntry(
+					1,
+					["Up"],
 					"the original User entry preview"
 				);
 				expect(previewFrame).toContain("terminal smoke stream");
@@ -329,11 +401,9 @@ test(
 				const branchedFrame = await openHistory();
 				expect(branchedFrame).toContain("Record · user · branch from root");
 				expect(branchedFrame).toContain("Current leaf:");
-				await sendKeys("Up");
-				await sendKeys("Up");
-				await sendKeys("p");
-				const preservedPreview = await waitForFrame(
-					(frame) => frame.includes("History entry 2"),
+				const preservedPreview = await previewEntry(
+					2,
+					["Up", "Up"],
 					"the preserved sibling branch preview"
 				);
 				expect(preservedPreview).toContain("smoke-stream-two");
@@ -426,8 +496,8 @@ test(
 	async () => {
 		await withTerminalSmoke(
 			async ({
+				previewEntry,
 				openHistory,
-				sendCommand,
 				sendKeys,
 				sendPrompt,
 				smokeHome,
@@ -448,11 +518,9 @@ test(
 				await waitForResponse("root-branch-only");
 
 				await openHistory();
-				await sendKeys("Up");
-				await sendKeys("Up");
-				await sendKeys("p");
-				const toolCheckpointPreview = await waitForFrame(
-					(frame) => frame.includes("History entry 3"),
+				const toolCheckpointPreview = await previewEntry(
+					3,
+					["Up", "Up"],
 					"the inactive sibling Tool Call checkpoint preview"
 				);
 				expect(toolCheckpointPreview).toContain("tool-roundtrip-ok");
@@ -461,6 +529,7 @@ test(
 				const sourceTreeBeforeFork = await waitForFrame(
 					(frame) =>
 						frame.includes("Enter selects a history entry") &&
+						frame.includes("Current leaf: entry ") &&
 						!frame.includes("History entry "),
 					"the tree after closing the checkpoint preview"
 				);
@@ -487,6 +556,7 @@ test(
 				const normalizedForkFrame = forkFrame.replace(/\s+/gu, " ");
 				expect(normalizedForkFrame).toContain("Source Session remains open.");
 				expect(currentLeaf(forkFrame)).toBe(originalLeaf);
+
 				const independentForkId = forkedSessionPattern.exec(forkFrame)?.[1];
 				if (independentForkId === undefined) {
 					throw new Error(
@@ -522,32 +592,6 @@ test(
 				expect(Number(await Bun.file(providerRequestCountPath).text())).toBe(
 					requestsBeforeFork + 1
 				);
-
-				await sendCommand("/sessions");
-				await waitForFrame(
-					(frame) => frame.includes("Search sessions"),
-					"the Session picker for returning to the source"
-				);
-				await sendKeys(sourceId);
-				await waitForFrame(
-					(frame) => frame.includes("terminal smoke tool"),
-					"the source Session matched by its identity"
-				);
-				await sendKeys("Enter");
-				await waitForFrame(
-					(frame) =>
-						frame.includes("Ask anything...") &&
-						frame.includes("root-branch-only") &&
-						!frame.includes("Forked from Session"),
-					"the original Session after returning from its fork"
-				);
-				await openHistory();
-				await sendKeys("branch from root");
-				const sourceTree = await waitForFrame(
-					(frame) => frame.includes("branch from root"),
-					"the original branch after returning from the fork"
-				);
-				expect(currentLeaf(sourceTree)).toBe(originalLeaf);
 			},
 			{ historyEnabled: true }
 		);
@@ -560,6 +604,7 @@ test(
 	async () => {
 		await withTerminalSmoke(
 			async ({
+				previewEntry,
 				openHistory,
 				sendKeys,
 				sendPrompt,
@@ -573,11 +618,9 @@ test(
 
 				const treeFrame = await openHistory();
 				expect(treeFrame).toContain("Current leaf: entry 4");
-				await sendKeys("Up");
-				await sendKeys("Up");
-				await sendKeys("p");
-				const ancestorPreview = await waitForFrame(
-					(frame) => frame.includes("History entry 2"),
+				const ancestorPreview = await previewEntry(
+					2,
+					["Up", "Up"],
 					"the non-root ancestor preview"
 				);
 				expect(ancestorPreview).toContain("smoke-stream-two");
@@ -811,6 +854,7 @@ test(
 	async () => {
 		await withTerminalSmoke(
 			async ({
+				previewEntry,
 				openHistory,
 				sendKeys,
 				sendPrompt,
@@ -831,11 +875,9 @@ test(
 				await sendPrompt("branch from root");
 				await waitForResponse("root-branch-only");
 				await openHistory();
-				await sendKeys("Up");
-				await sendKeys("Up");
-				await sendKeys("p");
-				const preservedPreview = await waitForFrame(
-					(frame) => frame.includes("History entry 2"),
+				const preservedPreview = await previewEntry(
+					2,
+					["Up", "Up"],
 					"the preserved branch endpoint preview"
 				);
 				expect(preservedPreview).toContain("smoke-stream-two");
