@@ -51,7 +51,10 @@ import {
 } from "../provider-collection";
 import { restoreSelection } from "../selection";
 import type { SessionSdkEvent } from "../session-events";
-import { requireSessionWriteReady } from "../storage/session-jsonl-store";
+import {
+	requireSessionWriteReady,
+	SessionWriteOutcomeError,
+} from "../storage/session-jsonl-store";
 import type {
 	SessionForkProvenance,
 	SessionUsageEntry,
@@ -293,14 +296,12 @@ const openSession = async (
 	providerModel?: ProviderModelSelection
 ): Promise<OpenedSession> => {
 	const store = capabilities.getStore();
-	const [session, compactions, loadedRecords, usageEntries, forkProvenance] =
-		await Promise.all([
-			store.getSession(sessionId),
-			store.getCompactions(sessionId),
-			store.listSessionRecords(sessionId),
-			store.listSessionUsageEntries(sessionId),
-			store.getSessionForkProvenance(sessionId),
-		]);
+	let historyPath = await store.readSessionHistoryPath(sessionId);
+	const [usageEntries, forkProvenance] = await Promise.all([
+		store.listSessionUsageEntries(sessionId),
+		store.getSessionForkProvenance(sessionId),
+	]);
+	const loadedRecords = historyPath.records;
 	const interrupted = loadedRecords.flatMap((record) =>
 		record.messages.flatMap((message) => {
 			const submissionId = message.metadata?.submissionId;
@@ -331,14 +332,15 @@ const openSession = async (
 			)
 		);
 	}
-	const records =
-		interrupted.length === 0
-			? loadedRecords
-			: await store.listSessionRecords(sessionId);
+	if (interrupted.length > 0) {
+		historyPath = await store.readSessionHistoryPath(sessionId);
+	}
+	const records = historyPath.records;
+	const compactions = historyPath.compactions;
 	const transcript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(records)
 	);
-	const contextEdits = await store.getSessionContextEdits(sessionId);
+	const contextEdits = [...historyPath.contextEdits];
 	const latestContextEdits = new Map(
 		contextEdits.map((edit) => [edit.targetId, edit] as const)
 	);
@@ -388,13 +390,18 @@ const openSession = async (
 		}
 	}
 	const context = applySessionContextEdits(uneditedContext, contextEdits);
+	const selectedModel = providerModel ?? historyPath.model;
+	const selectedThinkingLevel = historyPath.thinkingLevel;
 	return {
 		compactions,
 		context,
-		model: providerModel ?? session.model,
-		steeringMessages: restoreSteeringMessages(records, transcript, session),
+		model: selectedModel,
+		steeringMessages: restoreSteeringMessages(records, transcript, {
+			model: selectedModel,
+			thinkingLevel: selectedThinkingLevel,
+		}),
 		transcript,
-		thinkingLevel: session.thinkingLevel,
+		thinkingLevel: selectedThinkingLevel,
 		usageEntries,
 		forkProvenance,
 	};
@@ -591,8 +598,9 @@ export const createSessionHost = async ({
 		importActivationPending =
 			(await sessionStore.isSessionImportActivationPending?.(sessionId)) ??
 			false;
-		const storedSession = await sessionStore.getSession(sessionId);
-		const selectedProviderModel = providerModel ?? storedSession.model;
+		const selectedHistoryPath =
+			await sessionStore.readSessionHistoryPath(sessionId);
+		const selectedProviderModel = providerModel ?? selectedHistoryPath.model;
 		const sessionWorkManager = capabilities.getSessionHostManager();
 		const withAsyncSessionWork = async <Result>(
 			action: () => Promise<Result>,
@@ -632,7 +640,7 @@ export const createSessionHost = async ({
 			allowedPluginProviderSources,
 			sessionProviderCollection
 		);
-		const opened = await openSession(
+		let opened = await openSession(
 			capabilities,
 			sessionId,
 			selectedProviderModel
@@ -832,6 +840,8 @@ export const createSessionHost = async ({
 
 		return {
 			agentSession: guardedAgentSession,
+			blockExecution: (error) =>
+				openedAgentSession.internalPort.blockExecution(error),
 			reportStorageError: (error) =>
 				openedAgentSession.internalPort.reportStorageError(error),
 			editContext: async (input) => {
@@ -839,8 +849,9 @@ export const createSessionHost = async ({
 				if (isFailedAttemptContextEdit(edit.operationId)) {
 					throw new Error("Context edit operation ID uses a reserved prefix.");
 				}
-				const previousEdits =
-					await sessionStore.getSessionContextEdits(sessionId);
+				const previousEdits = (
+					await sessionStore.readSessionHistoryPath(sessionId)
+				).contextEdits;
 				const previousOperation = previousEdits.find(
 					({ operationId }) => operationId === edit.operationId
 				);
@@ -884,6 +895,88 @@ export const createSessionHost = async ({
 				}
 				openedAgentSession.internalPort.replaceContext(context);
 				openedStatefulAgent.invalidateContext();
+			},
+			navigateHistory: async (request) => {
+				const { targetEntryId } = request;
+				const previousPath =
+					await sessionStore.readSessionHistoryPath(sessionId);
+				const writeOutcome = await sessionStore.navigateSessionHistory(
+					sessionId,
+					request
+				);
+				if (writeOutcome.kind === "not-committed") {
+					return {
+						kind: "rejected",
+						code: writeOutcome.error.code,
+						reason: writeOutcome.error.message,
+						writeOutcome,
+					};
+				}
+				if (writeOutcome.kind === "indeterminate") {
+					const error = new SessionWriteOutcomeError(writeOutcome);
+					openedAgentSession.internalPort.reportStorageError(error);
+					return {
+						kind: "indeterminate",
+						reason: writeOutcome.error.message,
+						writeOutcome,
+					};
+				}
+				if (writeOutcome.sequence <= previousPath.historyGeneration) {
+					return {
+						kind: "unchanged",
+						activeLeafId: previousPath.activeLeafId,
+					};
+				}
+				if (writeOutcome.projection === "blocked") {
+					const error = new SessionWriteOutcomeError(writeOutcome);
+					openedAgentSession.internalPort.reportStorageError(error);
+					return {
+						kind: "committed-blocked",
+						activeLeafId: targetEntryId,
+						reason: error.message,
+						writeOutcome,
+					};
+				}
+				try {
+					const nextOpened = await openSession(capabilities, sessionId);
+					await providerController?.restoreModels(nextOpened.model?.providerId);
+					cacheWarming?.cancel();
+					opened = nextOpened;
+					const nextSelection = resolveOpenedSelection(
+						capabilities.getRegistry()
+					);
+					openedAgentSession.internalPort.replaceHistory({
+						compactions: nextOpened.compactions,
+						context: nextOpened.context,
+						selection: {
+							agent: nextSelection?.agent,
+							model: nextOpened.model ?? nextSelection?.model,
+							thinkingLevel:
+								nextOpened.thinkingLevel ?? nextSelection?.thinkingLevel,
+						},
+						steeringMessages: nextOpened.steeringMessages,
+						transcript: nextOpened.transcript,
+					});
+					openedStatefulAgent.invalidateContext();
+					const nextPath = await sessionStore.readSessionHistoryPath(sessionId);
+					return {
+						kind: "navigated",
+						activeLeafId: nextPath.activeLeafId,
+						writeOutcome,
+					};
+				} catch (error) {
+					const navigationError =
+						error instanceof Error
+							? error
+							: new Error("Session history projection could not be restored.");
+					openedAgentSession.internalPort.blockExecution(navigationError);
+					return {
+						kind: "committed-blocked",
+						activeLeafId: targetEntryId,
+						reason: navigationError.message,
+						writeOutcome,
+					};
+				}
 			},
 			forkSession: (checkpoint, operationId) =>
 				sessionStore.forkSessionWithHeldWriter(

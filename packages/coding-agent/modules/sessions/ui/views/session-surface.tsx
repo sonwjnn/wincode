@@ -1,3 +1,4 @@
+import { useRouter } from "@tanstack/react-router";
 import type { AgentId, SessionRecordId } from "@wincode/agent-core";
 import type {
 	ProviderCollection,
@@ -6,7 +7,14 @@ import type {
 } from "@wincode/ai";
 import { getErrorMessage } from "@wincode/utils";
 import type { Dispatch, SetStateAction } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	createElement,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	type AgentSelectionOverride,
 	resolveActiveAgentId,
@@ -68,6 +76,12 @@ import {
 	SessionWriterAction,
 	SessionWriterOwnerLabel,
 } from "../components/session-writer-controls";
+import { SessionHistoryTreeDialogContent } from "../dialogs/session-history-tree-dialog";
+import {
+	createSessionForkAction,
+	rewindSessionView,
+	type SessionRewindAction,
+} from "../session-rewind";
 import type { SessionInitialSubmission } from "./session-view";
 import { SessionView } from "./session-view";
 import { StoredSessionHistoryView } from "./stored-session-history-view";
@@ -395,6 +409,7 @@ export function SessionSurface({
 	readonly sessionId: SessionId;
 }) {
 	const { colors } = useTheme();
+	const router = useRouter();
 	const sessionServicesHandle = useSessionServicesHandle();
 	const registry = useAgentRegistry();
 	const {
@@ -445,8 +460,8 @@ export function SessionSurface({
 	const handleReselectModel = useCallback(() => {
 		reselectModelRef.current?.();
 	}, []);
-	const handleRewindCheckpoint = useCallback(
-		async (recordId: SessionRecordId) => {
+	const createForkCheckpoint = useCallback(
+		async (recordId: SessionRecordId): Promise<SessionRewindAction> => {
 			const services = await sessionServicesHandle.open();
 			const sessionSdk = services.capabilities.getSessionSdk?.();
 			if (sessionSdk === undefined) {
@@ -458,18 +473,59 @@ export function SessionSurface({
 				sessionId,
 				checkpoint
 			);
-			const result = await sessionSdk.forkSession(
-				sessionId,
-				checkpoint,
-				operationId
-			);
-			return {
+			return createSessionForkAction({
 				complete: () =>
 					store.completeSessionForkAction(sessionId, checkpoint, operationId),
-				sessionId: result.id,
-			};
+				createFork: () =>
+					sessionSdk.forkSession(sessionId, checkpoint, operationId),
+			});
 		},
 		[sessionId, sessionServicesHandle]
+	);
+	const handleRewindCheckpoint = createForkCheckpoint;
+	const handleForkCheckpoint = useCallback(
+		async (recordId: SessionRecordId) => {
+			const action = await createForkCheckpoint(recordId);
+			await action.complete();
+			return action.sessionId;
+		},
+		[createForkCheckpoint]
+	);
+	const handleRewindCheckpointFromHistory = useCallback(
+		async (recordId: SessionRecordId) => {
+			await rewindSessionView({
+				createFork: () => createForkCheckpoint(recordId),
+				navigate: async (targetSessionId) => {
+					await router.navigate({
+						params: { id: targetSessionId },
+						to: "/sessions/$id",
+					});
+				},
+			});
+		},
+		[createForkCheckpoint, router]
+	);
+	const handleOpenSessionHistory = useCallback(
+		async (isRewindDisabled: boolean) => {
+			const services = await sessionServicesHandle.open();
+			dialogRef.current.open({
+				children: createElement(SessionHistoryTreeDialogContent, {
+					isRewindDisabled,
+					onForkCheckpoint: handleForkCheckpoint,
+					onRewindCheckpoint: handleRewindCheckpointFromHistory,
+					sessionId,
+					sessionSdk: services.sessionSdk,
+				}),
+				title: "Session history",
+				width: 80,
+			});
+		},
+		[
+			handleForkCheckpoint,
+			handleRewindCheckpointFromHistory,
+			sessionId,
+			sessionServicesHandle,
+		]
 	);
 	const handleSelectionDialogDismiss = useCallback(() => {
 		selectionDialogOpenRef.current = false;
@@ -993,6 +1049,7 @@ export function SessionSurface({
 				owner={surface.owner}
 				selectionError={surface.selectionError}
 				selectionPickerError={surface.selectionPickerError}
+				sessionId={sessionId}
 				sessionTitle={surface.history.sessionTitle}
 				statistics={surface.history.statistics}
 			/>
@@ -1005,12 +1062,14 @@ export function SessionSurface({
 				<SessionForkProvenanceBanner
 					inheritedUsage={surface.session.forkSummary.inheritedUsage}
 					provenance={surface.session.forkSummary.provenance}
+					sessionId={sessionId}
 				/>
 			)}
 			<SessionView
 				host={surface.session.host}
 				initialSubmission={surface.session.initialSubmission}
 				initialTranscript={surface.session.transcript}
+				onOpenSessionHistory={handleOpenSessionHistory}
 				onRewindCheckpoint={handleRewindCheckpoint}
 				sessionId={sessionId}
 				sessionTitle={surface.session.sessionTitle}

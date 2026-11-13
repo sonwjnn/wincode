@@ -514,6 +514,84 @@ test("rebuilds the active context from the newest durable compaction", () => {
 	});
 });
 
+test("reopening keeps the boundary assistant when only runtime parts were summarized", () => {
+	const latest: SessionCompaction = {
+		completedAt: new Date("2026-08-30T00:00:00.000Z"),
+		createdAt: new Date("2026-08-30T00:00:00.000Z"),
+		firstKeptAssistantPartIndex: 0,
+		firstKeptUiMessageId: sessionMessageId("u2"),
+		id: compactionId("entry-runtime-prefix"),
+		sequence: 1,
+		sessionId: sessionId("session-runtime-prefix"),
+		summarizationModel: model,
+		summary: {
+			coveredMessageIds: [sessionMessageId("u1"), sessionMessageId("a1")],
+			formatVersion: 1,
+			text: "summary",
+		},
+		throughMessageUiId: sessionMessageId("a2"),
+		estimatedTokensAfter: 20,
+		tokensBefore: 100,
+		trigger: "manual",
+	};
+
+	const active = rebuildActiveMessages(
+		[
+			message("u1", "user", "first request"),
+			message("a1", "assistant", "first answer"),
+			message("u2", "user", "current request"),
+			message("a2", "assistant", "current answer"),
+		],
+		latest
+	);
+
+	expect(active.map(({ id }) => id)).toEqual([
+		sessionMessageId("compaction:entry-runtime-prefix"),
+		sessionMessageId("u2"),
+		sessionMessageId("a2"),
+	]);
+	expect(active.at(-1)?.parts).toEqual([
+		{ text: "current answer", type: "text" },
+	]);
+});
+
+test("reopening from an earlier live-part boundary keeps durable assistant content", () => {
+	const latest: SessionCompaction = {
+		completedAt: new Date("2026-08-30T00:00:00.000Z"),
+		createdAt: new Date("2026-08-30T00:00:00.000Z"),
+		// An index written against live parts exceeds this durable one-part message.
+		firstKeptAssistantPartIndex: 1,
+		firstKeptUiMessageId: sessionMessageId("u2"),
+		id: compactionId("entry-live-prefix"),
+		sequence: 1,
+		sessionId: sessionId("session-live-prefix"),
+		summarizationModel: model,
+		summary: {
+			coveredMessageIds: [sessionMessageId("u1"), sessionMessageId("a1")],
+			formatVersion: 1,
+			text: "summary",
+		},
+		throughMessageUiId: sessionMessageId("a2"),
+		estimatedTokensAfter: 20,
+		tokensBefore: 100,
+		trigger: "manual",
+	};
+
+	const active = rebuildActiveMessages(
+		[
+			message("u1", "user", "first request"),
+			message("a1", "assistant", "first answer"),
+			message("u2", "user", "current request"),
+			message("a2", "assistant", "current answer"),
+		],
+		latest
+	);
+
+	expect(active.at(-1)?.parts).toEqual([
+		{ text: "current answer", type: "text" },
+	]);
+});
+
 test("fails closed when a durable compaction boundary is missing", () => {
 	const latest: SessionCompaction = {
 		completedAt: new Date("2026-08-30T00:00:00.000Z"),

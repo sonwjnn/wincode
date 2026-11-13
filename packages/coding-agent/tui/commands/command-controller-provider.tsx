@@ -204,6 +204,7 @@ export function CommandControllerProvider({
 					onReload: reloadResources,
 					onTrust: trustProject,
 					onOpenSettings: options.onOpenSettings,
+					onOpenSessionHistory: options.onOpenSessionHistory,
 					refreshAgentRegistry,
 					renderer,
 					toast,

@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { logger } from "@wincode/utils";
+import { toSessionHistoryEntryId } from "@/shared/identifiers";
 import {
 	createLoggerHome,
 	type LoggerRecord,
@@ -9,6 +10,11 @@ import {
 	withLoggerHome,
 } from "../../utils/test/logger-home";
 import { SerializedWriter } from "../modules/application/rpc/output";
+import type { RpcRequest } from "../modules/application/rpc/protocol";
+import {
+	createRpcRequestHandler,
+	type RpcRequestHandlerContext,
+} from "../modules/application/rpc/request-handler";
 import {
 	reportDeferredFlushFailure,
 	runRpc,
@@ -16,7 +22,9 @@ import {
 import {
 	MAX_OUTPUT_BYTES,
 	type OutputWriter,
+	type RpcAssembly,
 	RpcOutputOverflowError,
+	type RpcSessionState,
 } from "../modules/application/rpc/types";
 import {
 	createSessionHostManager,
@@ -27,6 +35,11 @@ import type {
 	SessionHost,
 	SessionHostManager,
 } from "../modules/sessions/host/types";
+import type {
+	SessionHistoryNavigationOutcome,
+	SessionHistoryNavigationRequest,
+} from "../modules/sessions/sdk-contract";
+import type { SessionBundleExportScope } from "../modules/sessions/session-bundle-contract";
 import { SessionBundleImportError } from "../modules/sessions/session-bundle-import";
 import { SessionLogError } from "../modules/sessions/storage/session-jsonl-codec";
 import { SessionPaginationError } from "../modules/sessions/storage/session-pagination";
@@ -71,6 +84,123 @@ const writer = (): FrameWriter => {
 
 const emptyCapabilities = (): SessionCapabilities =>
 	({}) as SessionCapabilities;
+
+test("RPC preserves committed-blocked and indeterminate history navigation outcomes", async () => {
+	const sourceSessionId = sessionId("rpc-history-navigation-session");
+	const receipt = {
+		entryHash: "a".repeat(64),
+		kind: "committed",
+		operationId: "navigation-blocked-operation",
+		projection: "ready",
+		sequence: 3,
+	} as const;
+	const outcomes = new Map<string, SessionHistoryNavigationOutcome>([
+		[
+			"entry-blocked",
+			{
+				kind: "committed-blocked",
+				activeLeafId: toSessionHistoryEntryId("entry-selected"),
+				reason: "Plugin State restore failed.",
+				writeOutcome: receipt,
+			},
+		],
+		[
+			"entry-indeterminate",
+			{
+				kind: "indeterminate",
+				reason: "The navigation append must be reconciled.",
+				writeOutcome: {
+					kind: "indeterminate",
+					operationId: "navigation-indeterminate-operation",
+					error: {
+						code: "session_log_write_indeterminate",
+						message: "The navigation append may have committed.",
+					},
+					requiresReconciliation: true,
+				},
+			},
+		],
+	]);
+	const host = fromPartial<SessionHost>({
+		navigateHistory: async (
+			request: SessionHistoryNavigationRequest
+		): Promise<SessionHistoryNavigationOutcome> => {
+			const outcome = outcomes.get(request.targetEntryId ?? "root");
+			if (outcome === undefined) {
+				throw new Error("Unexpected RPC history navigation target.");
+			}
+			return outcome;
+		},
+	});
+	const withIdleForSessionNavigation: SessionHostManager["withIdleForSessionNavigation"] =
+		async (requestedSessionId, _request, action) => {
+			expect(requestedSessionId).toBe(sourceSessionId);
+			return action(host);
+		};
+	const manager = fromPartial<SessionHostManager>({
+		withIdleForSessionNavigation,
+	});
+	const store = fromPartial<SessionStore>({});
+	const capabilities = fromPartial<SessionCapabilities>({
+		getSessionHostManager: () => manager,
+	});
+	const assembly: RpcAssembly = {
+		capabilities,
+		shutdown: async () => undefined,
+		store,
+		workspace: process.cwd(),
+		workspaceId: "rpc-history-navigation-workspace",
+	};
+	const state: RpcSessionState = {
+		assembly,
+		boundSessionId: sourceSessionId,
+		host,
+		lifecycle: "bound",
+		shutdownRequested: false,
+		signalRequested: false,
+	};
+	const handleRequest = createRpcRequestHandler(
+		fromPartial<RpcRequestHandlerContext>({
+			requireBound: () => host,
+			requireInitialized: () => undefined,
+			state,
+		})
+	);
+	const requests: Readonly<{
+		id: string;
+		operationId: string;
+		targetEntryId: string;
+		outcome: SessionHistoryNavigationOutcome;
+	}>[] = [
+		{
+			id: "blocked-navigation",
+			operationId: "navigation-blocked-operation",
+			targetEntryId: "entry-blocked",
+			outcome: outcomes.get("entry-blocked") as SessionHistoryNavigationOutcome,
+		},
+		{
+			id: "indeterminate-navigation",
+			operationId: "navigation-indeterminate-operation",
+			targetEntryId: "entry-indeterminate",
+			outcome: outcomes.get(
+				"entry-indeterminate"
+			) as SessionHistoryNavigationOutcome,
+		},
+	];
+	for (const { id, operationId, outcome, targetEntryId } of requests) {
+		const response = await handleRequest({
+			id,
+			jsonrpc: "2.0",
+			method: "session/navigateHistory",
+			params: {
+				operationId,
+				sessionId: sourceSessionId,
+				targetEntryId,
+			},
+		} satisfies RpcRequest);
+		expect(response).toMatchObject({ id, result: outcome });
+	}
+});
 
 test("JSONL RPC initialize is the first readiness frame and shutdown is clean", async () => {
 	const stdout = writer();
@@ -129,6 +259,7 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 					sessionBundleExport: true,
 					sessionBundleImport: true,
 					sessionFork: true,
+					sessionHistoryNavigation: true,
 					sessionRewind: true,
 					transcriptPagination: true,
 				},
@@ -315,7 +446,11 @@ test("RPC fork dispatch validates identifiers and runs against an idle source Se
 	]);
 	expect(responses[0]).toMatchObject({
 		result: {
-			capabilities: { sessionFork: true, sessionRewind: true },
+			capabilities: {
+				sessionFork: true,
+				sessionHistoryNavigation: true,
+				sessionRewind: true,
+			},
 		},
 	});
 	expect(responses[1]).toMatchObject({
@@ -461,6 +596,11 @@ test("RPC Session read methods forward snapshot read points and reject unknown s
 						destination: "bundle",
 						sessionId: "../invalid",
 					}),
+					request("bad-export-scope", "session/exportBundle", {
+						destination: "bundle",
+						scope: "partial",
+						sessionId: "rpc-page-session",
+					}),
 					request("bad-import", "session/importBundle", {}),
 					request("shutdown", "server/shutdown", {}),
 				].join("\n")}\n`
@@ -530,17 +670,36 @@ test("RPC Session read methods forward snapshot read points and reject unknown s
 	expect(responses[7]).toMatchObject({
 		error: {
 			code: -32_602,
+			message: "scope must be 'tree' or 'branch'.",
+		},
+		id: "bad-export-scope",
+	});
+	expect(responses[8]).toMatchObject({
+		error: {
+			code: -32_602,
 			message: "bundlePath must be a non-empty directory path.",
 		},
 		id: "bad-import",
 	});
 });
 
-test("RPC Session export routes through the shared operation and preserves its typed error", async () => {
+test("RPC Session export passes branch scope through the shared operation", async () => {
 	const manager = createSessionHostManager();
 	const capabilities = {
 		getSessionHostManager: () => manager,
 	} as SessionCapabilities;
+	const exportedSessionId = sessionId("rpc-export-session");
+	let requestedScope: SessionBundleExportScope | undefined;
+	const withSessionBundleExport: NonNullable<
+		SessionStore["withSessionBundleExport"]
+	> = async (_sessionId, _operation, options) => {
+		requestedScope = options.scope;
+		throw new SessionLogError(
+			"session_not_found",
+			exportedSessionId,
+			"Session not found."
+		);
+	};
 	const request = (
 		id: string,
 		method: string,
@@ -552,7 +711,7 @@ test("RPC Session export routes through the shared operation and preserves its t
 		composeServices: async () => ({
 			capabilities,
 			shutdown: () => manager.shutdownAll(),
-			store: fromPartial<SessionStore>({}),
+			store: fromPartial<SessionStore>({ withSessionBundleExport }),
 			workspace: process.cwd(),
 			workspaceId: "workspace-export-test",
 		}),
@@ -567,6 +726,7 @@ test("RPC Session export routes through the shared operation and preserves its t
 					}),
 					request("export", "session/exportBundle", {
 						destination: path.join(process.cwd(), "rpc-export-test"),
+						scope: "branch",
 						sessionId: "rpc-export-session",
 					}),
 					request("shutdown", "server/shutdown", {}),
@@ -582,10 +742,11 @@ test("RPC Session export routes through the shared operation and preserves its t
 
 	expect(exitCode).toBe(0);
 	expect(stderr.frames).toEqual([]);
+	expect(requestedScope).toBe("branch");
 	expect(responses[1]).toMatchObject({
 		error: {
 			code: -32_000,
-			data: { code: "session_export_unavailable" },
+			data: { code: "session_not_found", sessionId: exportedSessionId },
 		},
 		id: "export",
 	});

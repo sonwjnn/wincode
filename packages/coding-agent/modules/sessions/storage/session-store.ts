@@ -17,6 +17,7 @@ import type {
 import type { EditMode, FileObservationStore } from "@/modules/tools";
 import type {
 	CompactionId,
+	SessionHistoryEntryId,
 	SessionId,
 	SessionUsageEntryId,
 } from "@/shared/identifiers";
@@ -27,7 +28,10 @@ import type {
 import type {
 	Session,
 	SessionCatalogPage,
+	SessionHistoryNavigationRequest,
 	SessionHistoryPage,
+	SessionHistoryPath,
+	SessionHistoryTreePage,
 	SessionPageOptions,
 } from "../session-pagination-types";
 import type {
@@ -51,6 +55,9 @@ export type {
 	Session,
 	SessionCatalogPage,
 	SessionHistoryPage,
+	SessionHistoryPath,
+	SessionHistoryTreeEntry,
+	SessionHistoryTreePage,
 	SessionPageOptions,
 } from "../session-pagination-types";
 export type {
@@ -59,7 +66,15 @@ export type {
 } from "../usage/session-statistics";
 
 import type { SessionContextEdit } from "../context-edits";
-import type { SessionBundleImportResult } from "../session-bundle-contract";
+import type {
+	SessionBundleExportScope,
+	SessionBundleImportResult,
+} from "../session-bundle-contract";
+import type {
+	PluginSessionHistoryAppendInput,
+	PluginSessionHistoryAppendResult,
+	PluginSessionHistoryPage,
+} from "../session-plugin-history";
 import type {
 	PluginSessionStateMutation,
 	PluginSessionStateMutationResult,
@@ -296,7 +311,11 @@ export type SessionProjectionStore = {
 	withSessionBundleExport?: <Result>(
 		sessionId: SessionId,
 		operation: (source: PreparedSessionBundleExport) => Promise<Result>,
-		options: Readonly<{ existingHostWriter: boolean; signal?: AbortSignal }>
+		options: Readonly<{
+			existingHostWriter: boolean;
+			scope: SessionBundleExportScope;
+			signal?: AbortSignal;
+		}>
 	) => Promise<Result>;
 	withSessionBundleImport?: (
 		bundlePath: string,
@@ -384,6 +403,29 @@ export type SessionStore = Omit<
 		sessionId: SessionId,
 		options?: SessionPageOptions
 	) => Promise<SessionHistoryPage>;
+	readSessionHistoryTreePage: (
+		sessionId: SessionId,
+		options?: SessionPageOptions
+	) => Promise<SessionHistoryTreePage>;
+	readSessionHistoryPath: (sessionId: SessionId) => Promise<SessionHistoryPath>;
+	readPluginSessionHistoryPage: (
+		sessionId: SessionId,
+		pluginId: string,
+		options?: SessionPageOptions
+	) => Promise<PluginSessionHistoryPage>;
+	appendPluginSessionHistoryEntry: (
+		sessionId: SessionId,
+		pluginId: string,
+		input: PluginSessionHistoryAppendInput
+	) => Promise<PluginSessionHistoryAppendResult>;
+	hasSessionHistoryEntry: (
+		sessionId: SessionId,
+		entryId: SessionHistoryEntryId
+	) => Promise<boolean>;
+	navigateSessionHistory: (
+		sessionId: SessionId,
+		request: SessionHistoryNavigationRequest
+	) => Promise<SessionWriteOutcome>;
 	getSessionStatistics: (
 		sessionId: SessionId,
 		options?: SessionStatisticsOptions

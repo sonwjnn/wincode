@@ -60,6 +60,23 @@ const historyPageCursorSchema = z
 		kind: z.literal("history-page"),
 	})
 	.strict();
+const historyTreeReadPointSchema = z
+	.object({
+		kind: z.literal("history-tree-read-point"),
+		lastHash: z.string().regex(/^[0-9a-f]{64}$/u),
+		logId: z.string().min(1).max(512),
+		readPointSequence: nonNegativeSafeInteger,
+		sessionId: sessionIdSchema,
+		version: z.literal(1),
+	})
+	.strict();
+const historyTreePageCursorSchema = z
+	.object({
+		...historyTreeReadPointSchema.shape,
+		afterSequence: nonNegativeSafeInteger,
+		kind: z.literal("history-tree-page"),
+	})
+	.strict();
 
 export type SessionCatalogReadPoint = Readonly<
 	z.infer<typeof catalogReadPointSchema>
@@ -73,8 +90,14 @@ export type SessionHistoryReadPoint = Readonly<
 export type SessionHistoryPageCursor = Readonly<
 	z.infer<typeof historyPageCursorSchema>
 >;
+export type SessionHistoryTreeReadPoint = Readonly<
+	z.infer<typeof historyTreeReadPointSchema>
+>;
+export type SessionHistoryTreePageCursor = Readonly<
+	z.infer<typeof historyTreePageCursorSchema>
+>;
 export type SessionCatalogPageKey = Readonly<z.infer<typeof catalogKeySchema>>;
-export type SessionPageCursorKind = "catalog" | "history";
+export type SessionPageCursorKind = "catalog" | "history" | "history-tree";
 
 export class SessionPaginationError extends Error {
 	readonly code: "cursor_expired" | "cursor_invalid" | "page_limit_invalid";
@@ -111,6 +134,8 @@ export const encodeSessionPageToken = (
 		| SessionCatalogPageCursor
 		| SessionHistoryReadPoint
 		| SessionHistoryPageCursor
+		| SessionHistoryTreeReadPoint
+		| SessionHistoryTreePageCursor
 ): string =>
 	new TextEncoder()
 		.encode(JSON.stringify(value))
@@ -152,7 +177,10 @@ export const decodeSessionHistoryReadPointToken = (
 export const decodeSessionPageToken = (
 	value: string,
 	expectedKind: SessionPageCursorKind
-): SessionCatalogPageCursor | SessionHistoryPageCursor => {
+):
+	| SessionCatalogPageCursor
+	| SessionHistoryPageCursor
+	| SessionHistoryTreePageCursor => {
 	if (value.length > MAX_CURSOR_LENGTH || !CURSOR_PATTERN.test(value)) {
 		throw new SessionPaginationError(
 			"cursor_invalid",
@@ -181,6 +209,16 @@ export const decodeSessionPageToken = (
 		throw new SessionPaginationError(
 			"cursor_invalid",
 			"Session cursor is invalid."
+		);
+	}
+	if (expectedKind === "history-tree") {
+		const parsed = historyTreePageCursorSchema.safeParse(decoded);
+		if (parsed.success) {
+			return parsed.data;
+		}
+		throw new SessionPaginationError(
+			"cursor_invalid",
+			"Session history tree cursor is invalid."
 		);
 	}
 	const parsed = historyPageCursorSchema.safeParse(decoded);

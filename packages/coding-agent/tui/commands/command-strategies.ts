@@ -45,6 +45,7 @@ export type CommandStrategyContext = {
 	onReload: () => Promise<void>;
 	onTrust: () => Promise<void>;
 	onOpenSettings?: (section?: string) => void | Promise<void>;
+	onOpenSessionHistory?: () => void | Promise<void>;
 	refreshAgentRegistry: () => void;
 	renderer: Pick<CliRenderer, "destroy">;
 	toast: Pick<ToastContextValue, "show">;
@@ -249,6 +250,15 @@ const STRATEGIES = {
 		kind: "dialog",
 		title: "Sessions",
 		content: () => createElement(SessionsDialogContent),
+	},
+	"dialog.session-history": {
+		kind: "action",
+		run: ({ onOpenSessionHistory }) => {
+			if (onOpenSessionHistory === undefined) {
+				throw new Error("Session history is unavailable in this view.");
+			}
+			return onOpenSessionHistory();
+		},
 	},
 	"dialog.theme": {
 		kind: "dialog",

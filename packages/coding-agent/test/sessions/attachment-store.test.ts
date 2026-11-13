@@ -25,6 +25,7 @@ import {
 	createSessionLogEvent,
 	createSessionLogHeader,
 	encodeSessionLogLine,
+	sessionHistoryEntryIdForRecord,
 } from "@/modules/sessions/storage/session-jsonl-codec";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import { toSessionId } from "@/shared/identifiers";
@@ -530,11 +531,17 @@ test("attachment collection reads flat JSONL liveness and ignores non-log entrie
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		turnId: agentTurnId("flat-attachment-liveness-turn"),
 	});
+	const initialHistoryEntryId = sessionHistoryEntryIdForRecord(
+		sessionId,
+		record.id
+	);
 	const created = createSessionLogEvent({
 		operationId: `create-${sessionId}`,
 		payload: {
+			activeLeafId: initialHistoryEntryId,
 			createdAt: timestamp,
 			editMode: "hashline",
+			initialHistoryEntryId,
 			initialRecord: record,
 			lastMessageAt: timestamp,
 			pinned: false,

@@ -22,14 +22,21 @@ export type SessionBundleCut = Readonly<{
 	sequence: number;
 }>;
 
+export type SessionBundleExportScope = "tree" | "branch";
+
 export type SessionBundleManifest = Readonly<{
 	attachments: readonly SessionBundleAttachment[];
 	cut: SessionBundleCut;
 	format: "wincode-session-bundle";
+	scope: SessionBundleExportScope;
 	session: Readonly<{ id: string; logId: string }>;
 	sessionFile: SessionBundleFile & Readonly<{ path: "session.jsonl" }>;
-	source?: Readonly<{ workspacePath?: string }>;
-	version: 1;
+	source?: Readonly<{
+		activeLeafId?: string | null;
+		sourceSessionId?: string;
+		workspacePath?: string;
+	}>;
+	version: 2;
 }>;
 
 export type SessionBundleExportResult = Readonly<{
@@ -46,6 +53,7 @@ export type SessionBundleImportResult = Readonly<{
 }>;
 
 export type SessionBundleExportOptions = Readonly<{
+	scope?: SessionBundleExportScope;
 	signal?: AbortSignal;
 }>;
 

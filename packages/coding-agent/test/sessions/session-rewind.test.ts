@@ -1,5 +1,9 @@
-import { expect, test } from "bun:test";
-import { rewindSessionView } from "@/modules/sessions/ui/session-rewind";
+import { expect, mock, test } from "bun:test";
+import {
+	createSessionForkAction,
+	rewindSessionView,
+} from "@/modules/sessions/ui/session-rewind";
+import { toSessionId } from "@/shared/identifiers";
 import { sessionId } from "../support/identifiers";
 
 test("a failed fork keeps the source Session view active and leaves retry state intact", async () => {
@@ -42,4 +46,22 @@ test("the active Session view changes only after the fork publishes", async () =
 	});
 
 	expect(calls).toEqual(["published", "navigated", "acknowledged"]);
+});
+
+test("history Fork releases its temporary child Host view and keeps the child ID", async () => {
+	const childSessionId = toSessionId("history-fork-child");
+	const dispose = mock(async () => undefined);
+	const complete = mock(async () => undefined);
+
+	const action = await createSessionForkAction({
+		complete,
+		createFork: async () => ({
+			id: childSessionId,
+			handle: { dispose },
+		}),
+	});
+
+	expect(action.sessionId).toBe(childSessionId);
+	expect(dispose).toHaveBeenCalledTimes(1);
+	expect(complete).not.toHaveBeenCalled();
 });

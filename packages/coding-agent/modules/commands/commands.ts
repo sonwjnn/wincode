@@ -5,6 +5,7 @@ const NO_INPUT = { kind: "none" } as const;
 export const COMMAND_CAPABILITIES = [
 	"compaction",
 	"provider-sdk",
+	"session-history",
 	"thinking-level-selection",
 ] as const;
 
@@ -102,6 +103,15 @@ export const COMMANDS = [
 		kind: "builtin",
 		action: "dialog.sessions",
 		input: NO_INPUT,
+	},
+	{
+		description: "Browse the current Session history tree",
+		name: "history",
+		value: "/history",
+		kind: "builtin",
+		action: "dialog.session-history",
+		input: NO_INPUT,
+		requires: ["session-history"],
 	},
 	{
 		description: "Change color theme",

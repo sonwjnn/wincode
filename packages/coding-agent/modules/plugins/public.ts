@@ -14,16 +14,26 @@ import type {
 } from "@wincode/ai";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
+import type { SessionHistoryEntryId } from "../../shared/identifiers";
 import type {
 	SessionSdkAgentSource,
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
 } from "../sessions/sdk-contract";
 import type {
+	PluginSessionHistory,
+	PluginSessionHistoryReader,
+} from "../sessions/session-plugin-history";
+import type {
 	PluginSessionStateJsonValue,
 	PluginSessionStateRead,
 } from "../sessions/session-plugin-state";
 import type { SessionWriteOutcome } from "../sessions/session-write-outcome";
+
+export type {
+	PluginSessionHistory,
+	PluginSessionHistoryReader,
+} from "../sessions/session-plugin-history";
 
 export type PluginJsonValue = PluginSessionStateJsonValue;
 
@@ -63,6 +73,20 @@ export class PluginSessionStateWriteError extends Error {
 			cause === undefined ? undefined : { cause }
 		);
 		this.name = "PluginSessionStateWriteError";
+		this.writeOutcome = writeOutcome;
+	}
+}
+
+export class PluginSessionHistoryWriteError extends Error {
+	readonly code = "plugin_session_history_write_failed" as const;
+	readonly writeOutcome: SessionWriteOutcome;
+
+	constructor(writeOutcome: SessionWriteOutcome, cause?: unknown) {
+		super(
+			"Plugin Session History entry was not durably committed.",
+			cause === undefined ? undefined : { cause }
+		);
+		this.name = "PluginSessionHistoryWriteError";
 		this.writeOutcome = writeOutcome;
 	}
 }
@@ -210,9 +234,27 @@ export type PluginSessionContext = Readonly<{
 	executionMode?: ExecutionMode;
 	sessionId: string;
 	sessionSdk?: SessionSdkOperations;
+	sessionHistory?: PluginSessionHistory;
 	sessionState?: PluginSessionState;
 	workspace: string;
 }>;
+
+export type PluginSessionHistoryNavigationContext = PluginSessionContext &
+	Readonly<{
+		fromEntryId: SessionHistoryEntryId | null;
+		historyGeneration: number;
+		operationId: string;
+		toEntryId: SessionHistoryEntryId | null;
+	}>;
+
+export type PluginBeforeSessionHistoryNavigationContext = Omit<
+	PluginSessionHistoryNavigationContext,
+	"sessionHistory" | "sessionState"
+> &
+	Readonly<{
+		sessionHistory?: PluginSessionHistoryReader;
+		sessionState?: Pick<PluginSessionState, "read">;
+	}>;
 
 export type PluginBeforeAgentTurnContext = PluginSessionContext &
 	Readonly<{
@@ -269,6 +311,7 @@ export type PluginToolContext = PluginSessionContext &
 
 export type PluginCommandContext = Readonly<{
 	argument: string;
+	sessionHistory?: PluginSessionHistory;
 	sessionId?: string;
 	sessionState?: PluginSessionState;
 	workspace: string;
@@ -322,6 +365,20 @@ export type PluginSessionShutdownHook = (
 	context: PluginSessionContext
 ) => void | Promise<void>;
 
+export type PluginBeforeSessionHistoryNavigationResult =
+	| Readonly<{ cancel: string }>
+	| undefined;
+
+export type PluginBeforeSessionHistoryNavigationHook = (
+	context: PluginBeforeSessionHistoryNavigationContext
+) =>
+	| PluginBeforeSessionHistoryNavigationResult
+	| Promise<PluginBeforeSessionHistoryNavigationResult>;
+
+export type PluginSessionHistoryNavigatedHook = (
+	context: PluginSessionHistoryNavigationContext
+) => void | Promise<void>;
+
 export type PluginBeforeAgentTurnHook = (
 	context: PluginBeforeAgentTurnContext,
 	api: PluginToolRegistrationAPI
@@ -356,6 +413,12 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 		registerStatusPanel: (panel: PluginStatusPanelRegistration) => void;
 		onSessionStart: (handler: PluginSessionStartHook) => void;
 		onSessionShutdown: (handler: PluginSessionShutdownHook) => void;
+		onBeforeSessionHistoryNavigation: (
+			handler: PluginBeforeSessionHistoryNavigationHook
+		) => void;
+		onSessionHistoryNavigated: (
+			handler: PluginSessionHistoryNavigatedHook
+		) => void;
 		onBeforeAgentTurn: (handler: PluginBeforeAgentTurnHook) => void;
 		onBeforeCompaction: (handler: PluginBeforeCompactionHook) => void;
 		onCompactionCompleted: (handler: PluginCompactionCompletedHook) => void;

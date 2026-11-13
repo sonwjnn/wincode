@@ -1,3 +1,4 @@
+import type { SessionId } from "@/shared/identifiers";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionForkProvenance } from "../../storage/session-store";
 import type { SessionStatisticsUsageTotals } from "../../usage/session-statistics";
@@ -5,6 +6,7 @@ import type { SessionStatisticsUsageTotals } from "../../usage/session-statistic
 type SessionForkProvenanceBannerProps = Readonly<{
 	inheritedUsage: SessionStatisticsUsageTotals;
 	provenance: SessionForkProvenance;
+	sessionId: SessionId;
 }>;
 
 const inheritedUsageLabel = (usage: SessionStatisticsUsageTotals): string => {
@@ -21,12 +23,13 @@ const inheritedUsageLabel = (usage: SessionStatisticsUsageTotals): string => {
 export function SessionForkProvenanceBanner({
 	inheritedUsage,
 	provenance,
+	sessionId,
 }: SessionForkProvenanceBannerProps) {
 	const { colors } = useTheme();
 	return (
 		<>
 			<text fg={colors.textMuted} id="session-fork-provenance">
-				{`Forked from Session ${provenance.sourceSessionId} at Record ${provenance.sourceRecordId}, message ${provenance.sourceMessageId} (sequence ${provenance.sourceSequence}).`}
+				{`Session ID: ${sessionId} · Forked from Session ${provenance.sourceSessionId} at Record ${provenance.sourceRecordId}, message ${provenance.sourceMessageId} (sequence ${provenance.sourceSequence}).`}
 			</text>
 			{provenance.sourceAvailability === "unavailable" ? (
 				<text fg={colors.textMuted}>

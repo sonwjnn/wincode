@@ -929,8 +929,14 @@ test("Session SDK forwards opaque page cursors without opening a Host", async ()
 		usage: {
 			actual: emptyUsage,
 			auxiliary: emptyUsage,
-			contributions: { actual: [], auxiliary: [], inherited: [] },
+			contributions: {
+				actual: [],
+				auxiliary: [],
+				inherited: [],
+				selectedPath: [],
+			},
 			inherited: emptyUsage,
+			selectedPath: emptyUsage,
 		},
 	};
 	const sdkStore = fromPartial<SessionStore>({

@@ -2,6 +2,8 @@
 
 Status: accepted
 
+[ADR-0056](0056-session-history-tree-and-plugin-entries.md) mở rộng ngoại lệ conversation-state bên dưới bằng Plugin custom entries và state theo Selected Path trong cây lịch sử. Quyết định này chưa triển khai và không thay ownership của operational Plugin data hay Delegated Tasks.
+
 ADR-0041 locates the Subagents Plugin implementation in its own package, publishes the Plugin and Session SDK contracts at the Coding-Agent package root, and assigns default Plugin installation/selection to the distribution rather than the Coding-Agent package graph. The Session and delegation behavior below remains in force.
 
 Delegated Sessions currently depend on an application-internal task runtime registration, so a Plugin cannot create and manage Agent Sessions through the same public contract used by Wincode. Wincode will publish a general Session SDK from `@wincode/coding-agent`, modeled on Pi's `createAgentSession` and `SessionManager`. Callers can create or reopen a Session, prompt or continue it, subscribe to events, and dispose its live handle. The caller owns handle cleanup. Model, tools, workspace, storage, and resource loading are configurable; omitted settings resolve from Wincode configuration. The SDK's default tool set includes core coding and shell Plugins. MCP and Subagents are selected explicitly by SDK callers. File-loaded Plugins are included only when their paths have been explicitly enabled in user-controlled Wincode configuration or passed by the caller, never by project discovery.

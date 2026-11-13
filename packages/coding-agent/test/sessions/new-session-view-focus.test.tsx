@@ -1327,7 +1327,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		}
 	});
 
-	test("shows model and thinking together after Provider metadata loads", async () => {
+	test("shows the Agent-pinned model and thinking together after Provider metadata loads", async () => {
 		const operations: string[] = [];
 		const fixture = createAgentProviderFixture({
 			operations,
@@ -1364,10 +1364,13 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			await flushTestRenderer(setup, 3);
 			const selectedFrame = await waitForHomeFrame(
 				setup,
-				"openai/gpt-5.6-luna:low"
+				"interactive-agent-provider/interactive-agent-model:low"
 			);
 			expect(normalizeHomeFrame(selectedFrame)).toContain(
-				"openai/gpt-5.6-luna:low"
+				"interactive-agent-provider/interactive-agent-model:low"
+			);
+			expect(normalizeHomeFrame(selectedFrame)).not.toContain(
+				"openai/gpt-5.6-luna"
 			);
 		} finally {
 			pendingSnapshot.resolve([]);

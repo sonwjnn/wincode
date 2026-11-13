@@ -14,6 +14,7 @@ import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
 import { getInteractiveSessionHostManager } from "../../host/session-host-manager";
+import type { SessionBundleExportScope } from "../../session-bundle-contract";
 import {
 	createSessionBundleExportOperation,
 	SessionBundleExportError,
@@ -42,6 +43,10 @@ export function ExportSessionDialog({ session }: ExportSessionDialogProps) {
 	const inputRef = useRef<InputRenderable>(null);
 	const abortControllerRef = useRef<AbortController | null>(null);
 	const [exporting, setExporting] = useState(false);
+	const [focusedField, setFocusedField] = useState<"destination" | "scope">(
+		"destination"
+	);
+	const [scopeIndex, setScopeIndex] = useState(0);
 	const { close } = useDialog();
 	const { colors } = useTheme();
 	const { show } = useToast();
@@ -68,14 +73,19 @@ export function ExportSessionDialog({ session }: ExportSessionDialogProps) {
 				getInteractiveSessionHostManager(),
 				getSessionStore()
 			);
+			const scope: SessionBundleExportScope =
+				scopeIndex === 0 ? "tree" : "branch";
 			const result = await exportSessionBundle({
 				destination,
+				scope,
 				sessionId: session.id,
 				signal: controller.signal,
 				sourceWorkspacePath: process.cwd(),
 			});
 			show({
-				message: sanitizeText(`Exported Session to ${result.destination}`),
+				message: sanitizeText(
+					`Exported ${result.manifest.scope} Session bundle ${result.sessionId} to ${result.destination}`
+				),
 				variant: "success",
 			});
 			close();
@@ -90,10 +100,17 @@ export function ExportSessionDialog({ session }: ExportSessionDialogProps) {
 			abortControllerRef.current = null;
 			setExporting(false);
 		}
-	}, [close, exporting, session.id, show]);
+	}, [close, exporting, scopeIndex, session.id, show]);
 
 	useKeyboard((key) => {
 		if (!isTopLayer(layerId)) {
+			return;
+		}
+		if (key.name === "tab") {
+			key.preventDefault();
+			setFocusedField((current) =>
+				current === "destination" ? "scope" : "destination"
+			);
 			return;
 		}
 		if (key.name === "return" || key.name === "enter") {
@@ -108,22 +125,42 @@ export function ExportSessionDialog({ session }: ExportSessionDialogProps) {
 		<DialogInset>
 			<box flexDirection="column" gap={1}>
 				<text selectable={false}>
-					Export {session.title} as a local bundle directory. The bundle
-					contains user-provided Session content and is not uploaded.
+					Export {session.title} locally. Whole tree keeps the Session identity;
+					Selected Path creates a standalone Session with a new identity.
+					Nothing is uploaded.
 				</text>
 				<input
-					focused
+					focused={focusedField === "destination"}
 					focusedTextColor={colors.text}
 					onContentChange={() => undefined}
 					placeholder="./session-bundle"
 					ref={inputRef}
 					textColor={colors.text}
 				/>
+				<text selectable={false}>Export scope (default: Whole tree)</text>
+				<select
+					focused={focusedField === "scope"}
+					height={4}
+					onChange={(index) => setScopeIndex(index)}
+					options={[
+						{
+							name: "Whole tree",
+							description: "All history branches and the Active Leaf",
+						},
+						{
+							name: "Selected Path",
+							description:
+								"Only the current path; creates a new Session identity",
+						},
+					]}
+					selectedIndex={scopeIndex}
+				/>
 				<box flexDirection="row" gap={2} height={1} marginTop={2}>
 					<DialogFooterHint
 						label={exporting ? "exporting" : "export"}
 						shortcut="enter"
 					/>
+					<DialogFooterHint label="switch field" shortcut="tab" />
 					<DialogFooterHint label="cancel" shortcut="esc" />
 				</box>
 			</box>

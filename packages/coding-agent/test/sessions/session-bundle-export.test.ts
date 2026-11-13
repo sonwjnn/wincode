@@ -3,7 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
-import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
+import {
+	type AttachmentReference,
+	attachmentReferenceToFilePart,
+} from "@/modules/sessions/attachment-reference";
 import { createSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import type { SessionHostManager } from "@/modules/sessions/host/types";
 import { createSessionUserMessage } from "@/modules/sessions/message";
@@ -265,7 +268,8 @@ test("export bundles all retained record and compaction attachments with verifie
 		const manifest = result.manifest;
 		expect(manifest).toMatchObject({
 			format: "wincode-session-bundle",
-			version: 1,
+			scope: "tree",
+			version: 2,
 			session: { id: sessionId },
 			source: { workspacePath: fixture.workspace },
 		});
@@ -287,6 +291,255 @@ test("export bundles all retained record and compaction attachments with verifie
 		}
 		expect(validated.session.logId).toBe(manifest.session.logId);
 		expect(validated.cut).toEqual(manifest.cut);
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("branch export includes only Selected Path attachments and records its source leaf", async () => {
+	const fixture = await createFixture();
+	const attachments = await Promise.all([
+		createAttachment(fixture, "shared.png", 11),
+		createAttachment(fixture, "sibling.png", 12),
+		createAttachment(fixture, "selected.png", 13),
+	]);
+	try {
+		const { id: sessionId } = await fixture.store.createEmptySession({});
+		const [shared, sibling, selected] = attachments;
+		if (
+			shared === undefined ||
+			sibling === undefined ||
+			selected === undefined
+		) {
+			throw new Error("Expected branch attachment fixtures.");
+		}
+		const createAttachedRecord = (
+			text: string,
+			attachment: Readonly<{ reference: AttachmentReference }>,
+			turnId: string
+		) =>
+			buildUserSessionRecord({
+				agentId: agentId("branch-export"),
+				message: createSessionUserMessage(
+					text,
+					undefined,
+					[],
+					[attachmentReferenceToFilePart(attachment.reference)]
+				),
+				model: DEFAULT_PROVIDER_MODEL_SELECTION,
+				turnId: agentTurnId(turnId),
+			});
+		const rootRecord = createAttachedRecord(
+			"shared path attachment",
+			shared,
+			"branch-export-root-turn"
+		);
+		const siblingRecord = createAttachedRecord(
+			"sibling-only attachment",
+			sibling,
+			"branch-export-sibling-turn"
+		);
+		const selectedRecord = createAttachedRecord(
+			"selected path attachment",
+			selected,
+			"branch-export-selected-turn"
+		);
+		for (const record of [rootRecord, siblingRecord]) {
+			const outcome = await fixture.store.commitSessionRecord({
+				record,
+				sessionId,
+			});
+			expect(outcome).toMatchObject({ kind: "committed", projection: "ready" });
+		}
+		const initialTree =
+			await fixture.store.readSessionHistoryTreePage(sessionId);
+		const rootEntry = initialTree.entries.find(
+			(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
+		);
+		if (rootEntry === undefined) {
+			throw new Error("Expected the shared root history entry.");
+		}
+		await fixture.store.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "branch-export-return-to-root",
+		});
+		const selectedOutcome = await fixture.store.commitSessionRecord({
+			record: selectedRecord,
+			sessionId,
+		});
+		expect(selectedOutcome).toMatchObject({
+			kind: "committed",
+			projection: "ready",
+		});
+		const sourceTree =
+			await fixture.store.readSessionHistoryTreePage(sessionId);
+		const destination = path.join(fixture.root, "selected-path-attachments");
+		const result = await createSessionBundleExportOperation(
+			fixture.manager,
+			fixture.store
+		)({
+			destination,
+			scope: "branch",
+			sessionId,
+		});
+		const selectedAttachmentIds = [
+			shared.reference.attachmentId,
+			selected.reference.attachmentId,
+		].sort();
+		expect(result.manifest).toMatchObject({
+			scope: "branch",
+			source: {
+				activeLeafId: sourceTree.activeLeafId,
+				sourceSessionId: sessionId,
+			},
+		});
+		expect(
+			result.manifest.attachments.map(({ attachmentId }) => attachmentId).sort()
+		).toEqual(selectedAttachmentIds);
+		expect(
+			result.manifest.attachments.map(({ attachmentId }) => attachmentId)
+		).not.toContain(sibling.reference.attachmentId);
+		expect(await validateSessionBundleDirectory(destination)).toMatchObject({
+			session: { id: result.sessionId },
+		});
+	} finally {
+		await Promise.all(attachments.map(({ release }) => release()));
+		await fixture.close();
+	}
+});
+
+test("branch bundle validation rejects an authoritative log with sibling history entries", async () => {
+	const fixture = await createFixture();
+	try {
+		const { id: sessionId } = await fixture.store.createEmptySession({});
+		const rootRecord = buildUserSessionRecord({
+			agentId: agentId("branch-scope-validation"),
+			message: createSessionUserMessage("shared root"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("branch-scope-validation-root"),
+		});
+		const firstBranchRecord = buildUserSessionRecord({
+			agentId: agentId("branch-scope-validation"),
+			message: createSessionUserMessage("first branch"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("branch-scope-validation-first"),
+		});
+		const selectedBranchRecord = buildUserSessionRecord({
+			agentId: agentId("branch-scope-validation"),
+			message: createSessionUserMessage("selected branch"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("branch-scope-validation-selected"),
+		});
+		for (const record of [rootRecord, firstBranchRecord]) {
+			await fixture.store.commitSessionRecord({ record, sessionId });
+		}
+		const tree = await fixture.store.readSessionHistoryTreePage(sessionId);
+		const rootEntry = tree.entries.find(
+			(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
+		);
+		if (rootEntry === undefined) {
+			throw new Error("Expected the shared root history entry.");
+		}
+		await fixture.store.navigateSessionHistory(sessionId, {
+			targetEntryId: rootEntry.id,
+			operationId: "branch-scope-validation-return-to-root",
+		});
+		await fixture.store.commitSessionRecord({
+			record: selectedBranchRecord,
+			sessionId,
+		});
+		const sourceTree =
+			await fixture.store.readSessionHistoryTreePage(sessionId);
+		const destination = path.join(fixture.root, "tree-relabelled-as-branch");
+		await createSessionBundleExportOperation(
+			fixture.manager,
+			fixture.store
+		)({
+			destination,
+			sessionId,
+		});
+		const manifestPath = path.join(destination, "manifest.json");
+		const manifest = await Bun.file(manifestPath).json();
+		await Bun.write(
+			manifestPath,
+			JSON.stringify({
+				...manifest,
+				scope: "branch",
+				source: {
+					activeLeafId: sourceTree.activeLeafId,
+					sourceSessionId: "branch-scope-validation-source",
+				},
+			})
+		);
+		await expect(
+			validateSessionBundleDirectory(destination)
+		).rejects.toMatchObject({
+			code: "session_bundle_invalid",
+			message: "Branch bundles must contain only the Selected Path.",
+		});
+	} finally {
+		await fixture.close();
+	}
+});
+
+test("branch bundle validation rejects manifest source provenance that disagrees with the log", async () => {
+	const fixture = await createFixture();
+	try {
+		const { id: sessionId } = await fixture.store.createEmptySession({});
+		const record = buildUserSessionRecord({
+			agentId: agentId("branch-provenance-validation"),
+			message: createSessionUserMessage("branch provenance source record"),
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			turnId: agentTurnId("branch-provenance-validation-turn"),
+		});
+		const write = await fixture.store.commitSessionRecord({
+			record,
+			sessionId,
+		});
+		expect(write).toMatchObject({ kind: "committed", projection: "ready" });
+		const destination = path.join(fixture.root, "branch-provenance-bundle");
+		const exported = await createSessionBundleExportOperation(
+			fixture.manager,
+			fixture.store
+		)({
+			destination,
+			scope: "branch",
+			sessionId,
+		});
+		const branchLog = decodeSessionLog(
+			exported.sessionId,
+			await Bun.file(path.join(destination, "session.jsonl")).bytes()
+		);
+		expect(
+			branchLog.entries.some(
+				({ envelope }) => envelope.type === "session.forked"
+			)
+		).toBe(true);
+		const manifestPath = path.join(destination, "manifest.json");
+		const manifest = parseSessionBundleManifest(
+			JSON.parse(await Bun.file(manifestPath).text()) as unknown
+		);
+		if (manifest.source === undefined) {
+			throw new Error("Expected branch source provenance in its manifest.");
+		}
+		const tamperedManifest = parseSessionBundleManifest({
+			...manifest,
+			source: {
+				...manifest.source,
+				sourceSessionId: "different-valid-source-session",
+			},
+		});
+		await Bun.write(
+			manifestPath,
+			`${JSON.stringify(tamperedManifest, null, 2)}\n`
+		);
+		await expect(
+			validateSessionBundleDirectory(destination)
+		).rejects.toMatchObject({
+			code: "session_bundle_invalid",
+			message:
+				"Branch bundle provenance does not match its authoritative Session log.",
+		});
 	} finally {
 		await fixture.close();
 	}
@@ -460,15 +713,44 @@ test("source semantic corruption remains session_log_corrupt with its sequence a
 			resolveSessionLogFilePath(fixture.logRoot, sessionId)
 		).bytes();
 		const state = decodeSessionLog(sessionId, sourceBytes);
-		const firstRecord = state.entries.find(
+		const firstRecordEntry = state.entries.find(
 			({ envelope }) => envelope.type === "record.committed"
-		)?.envelope.payload.record;
-		if (firstRecord === undefined) {
+		);
+		const firstRecord = firstRecordEntry?.envelope.payload.record;
+		const historyEntryId = firstRecordEntry?.envelope.payload.historyEntryId;
+		if (
+			firstRecordEntry === undefined ||
+			firstRecord === null ||
+			typeof firstRecord !== "object" ||
+			typeof historyEntryId !== "string"
+		) {
 			throw new Error("The fixture has no committed Session Record.");
+		}
+		let parentEntryId: string | null = null;
+		for (const { envelope } of state.entries) {
+			if (
+				envelope.type === "session.created" ||
+				envelope.type === "record.committed" ||
+				envelope.type === "plugin.state-replaced" ||
+				envelope.type === "plugin.state-deleted"
+			) {
+				const activeLeafId = envelope.payload.activeLeafId;
+				if (typeof activeLeafId === "string" || activeLeafId === null) {
+					parentEntryId = activeLeafId;
+				}
+			}
+		}
+		if (parentEntryId === null) {
+			throw new Error("The fixture has no current history leaf.");
 		}
 		const duplicate = createSessionLogEvent({
 			operationId: "semantic-duplicate-record",
-			payload: { record: firstRecord },
+			payload: {
+				activeLeafId: historyEntryId,
+				historyEntryId,
+				parentEntryId,
+				record: firstRecord,
+			},
 			previousHash: state.lastHash,
 			sequence: state.nextSequence,
 			sessionId,
@@ -874,13 +1156,14 @@ test("bundle manifest validation rejects a log ID ending in a line terminator", 
 		attachments: [],
 		cut: { hash: "a".repeat(64), sequence: 1 },
 		format: "wincode-session-bundle",
+		scope: "tree",
 		session: { id: "bundle-source", logId: "source-log\n" },
 		sessionFile: {
 			byteLength: 0,
 			path: "session.jsonl",
 			sha256: "b".repeat(64),
 		},
-		version: 1,
+		version: 2,
 	};
 	expect(() => parseSessionBundleManifest(manifest)).toThrow(
 		SessionBundleValidationError
@@ -892,13 +1175,14 @@ test("bundle manifest validation rejects path traversal before reading outside t
 		attachments: [],
 		cut: { hash: "a".repeat(64), sequence: 1 },
 		format: "wincode-session-bundle",
+		scope: "tree",
 		session: { id: "bundle-source", logId: "source-log" },
 		sessionFile: {
 			byteLength: 0,
 			path: "../outside.jsonl",
 			sha256: "b".repeat(64),
 		},
-		version: 1,
+		version: 2,
 	};
 	expect(() => parseSessionBundleManifest(invalidManifest)).toThrow();
 });

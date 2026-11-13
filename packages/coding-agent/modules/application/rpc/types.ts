@@ -65,6 +65,7 @@ export const SESSION_RPC_METHODS = new Set([
 	"session/getTranscript",
 	"session/listPage",
 	"session/getHistoryPage",
+	"session/navigateHistory",
 	"session/getStatistics",
 	"session/exportBundle",
 	"session/importBundle",

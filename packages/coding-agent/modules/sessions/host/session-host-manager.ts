@@ -1,9 +1,20 @@
-import type { PluginSessionContext } from "@/modules/plugins/public";
+import { getErrorMessage } from "@wincode/utils";
+import type {
+	PluginSessionContext,
+	PluginSessionHistoryNavigationContext,
+} from "@/modules/plugins/public";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProviderModelSelectionForHost } from "@/modules/providers/provider-model-selection";
+import type { SessionHistoryPath } from "@/modules/sessions/session-pagination-types";
+import type { PluginSessionHistoryPersistence } from "@/modules/sessions/session-plugin-history";
 import type { PluginSessionStatePersistence } from "@/modules/sessions/session-plugin-state";
 import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
+import type {
+	SessionStore,
+	SessionWriteOutcome,
+} from "@/modules/sessions/storage/session-store";
 import type { SessionId } from "@/shared/identifiers";
+import type { SessionHistoryNavigationOutcome } from "../sdk-contract";
 import { nextChatSelection, restoreSelection } from "../selection";
 import { projectSessionMessageRecords } from "../transcript-projection";
 import { assertImportedSessionAgentIsAvailable } from "./imported-session-agent";
@@ -31,10 +42,12 @@ type ManagedHostEntry = {
 	unsubscribeSnapshot: (() => void) | undefined;
 	unsubscribeBackgroundWork: (() => void) | undefined;
 	views: number;
+	historyGeneration: number;
 	pluginRuntime?: PluginRuntime;
 	pluginSessionContext: PluginSessionContext;
 	pluginSessionStatePersistence: PluginSessionStatePersistence;
-	pendingPluginSessionStateError: Error | undefined;
+	pluginSessionHistoryPersistence: PluginSessionHistoryPersistence;
+	pendingPluginSessionStorageError: Error | undefined;
 	unloadCheck: Promise<void> | undefined;
 };
 
@@ -60,6 +73,83 @@ export class SessionForkBusyError extends SessionHostBusyError {
 }
 
 let interactiveManager: SessionHostManager | undefined;
+
+const runBeforeHistoryNavigationHook = async (
+	entry: ManagedHostEntry,
+	context: PluginSessionHistoryNavigationContext
+): Promise<SessionHistoryNavigationOutcome | null> => {
+	const hook = entry.pluginRuntime?.runBeforeSessionHistoryNavigation;
+	if (hook === undefined) {
+		return null;
+	}
+	try {
+		const reason = await hook(context);
+		return reason === undefined
+			? null
+			: {
+					kind: "rejected",
+					code: "plugin_navigation_rejected",
+					reason,
+				};
+	} catch (error) {
+		return {
+			kind: "rejected",
+			code: "plugin_navigation_rejected",
+			reason: getErrorMessage(
+				error,
+				"A Plugin could not prepare for history navigation."
+			),
+		};
+	}
+};
+
+const completeHistoryNavigation = async (
+	entry: ManagedHostEntry,
+	host: SessionHost,
+	store: SessionStore,
+	previousPath: SessionHistoryPath,
+	operationId: string,
+	outcome: SessionHistoryNavigationOutcome
+): Promise<SessionHistoryNavigationOutcome> => {
+	if (outcome.kind !== "navigated") {
+		return outcome;
+	}
+	try {
+		const pathAfterNavigation = await store.readSessionHistoryPath(
+			entry.sessionId
+		);
+		entry.historyGeneration = pathAfterNavigation.historyGeneration;
+		const afterContext: PluginSessionHistoryNavigationContext = {
+			...entry.pluginSessionContext,
+			fromEntryId: previousPath.activeLeafId,
+			historyGeneration: pathAfterNavigation.historyGeneration,
+			operationId,
+			toEntryId: pathAfterNavigation.activeLeafId,
+		};
+		await entry.pluginRuntime?.notifySessionHistoryNavigated?.(afterContext);
+		const completedPath = await store.readSessionHistoryPath(entry.sessionId);
+		return { ...outcome, activeLeafId: completedPath.activeLeafId };
+	} catch (error) {
+		const navigationError =
+			error instanceof Error
+				? error
+				: new Error("A Plugin could not restore Session history state.");
+		host.blockExecution(navigationError);
+		let activeLeafId = outcome.activeLeafId;
+		try {
+			activeLeafId = (await store.readSessionHistoryPath(entry.sessionId))
+				.activeLeafId;
+		} catch {
+			// The committed navigation result remains the best-known durable leaf.
+		}
+		return {
+			kind: "committed-blocked",
+			activeLeafId,
+			reason: navigationError.message,
+			writeOutcome: outcome.writeOutcome,
+		};
+	}
+};
 
 export const createSessionHostManager = (
 	processPluginRuntime?: PluginRuntime
@@ -193,11 +283,32 @@ export const createSessionHostManager = (
 		executionMode: SessionHostOptions["executionMode"],
 		providerModel: SessionHostOptions["providerModel"],
 		providerCollection: SessionHostOptions["providerCollection"],
-		autoContinue: boolean
+		autoContinue: boolean,
+		historyGeneration: number
 	): ManagedHostEntry => {
 		const opened = Promise.withResolvers<SessionHost>();
 		const sessionSdk = capabilities.getSessionSdk?.();
 		const store = capabilities.getStore();
+		const reportPluginWriteOutcome = (
+			outcome: SessionWriteOutcome
+		): Error | undefined => {
+			if (
+				outcome.kind !== "indeterminate" &&
+				!(outcome.kind === "committed" && outcome.projection === "blocked")
+			) {
+				return;
+			}
+			const error = new SessionWriteOutcomeError(outcome);
+			const activeEntry = entries.get(sessionId);
+			if (activeEntry?.host === undefined) {
+				if (activeEntry !== undefined) {
+					activeEntry.pendingPluginSessionStorageError ??= error;
+				}
+			} else {
+				activeEntry.host.reportStorageError(error);
+			}
+			return error;
+		};
 		const entry: ManagedHostEntry = {
 			capabilities,
 			closing: undefined,
@@ -209,6 +320,7 @@ export const createSessionHostManager = (
 			unsubscribeEvents: undefined,
 			unsubscribeSnapshot: undefined,
 			views: 0,
+			historyGeneration,
 			unsubscribeBackgroundWork: undefined,
 			pluginRuntime: capabilities.getPluginRuntime?.() ?? currentPluginRuntime,
 			pluginSessionContext: {
@@ -217,27 +329,21 @@ export const createSessionHostManager = (
 				...(sessionSdk === undefined ? {} : { sessionSdk }),
 				workspace: capabilities.getConfig().workspace,
 			},
-			pendingPluginSessionStateError: undefined,
+			pendingPluginSessionStorageError: undefined,
 			pluginSessionStatePersistence: {
+				getHistoryGeneration: () => entry.historyGeneration,
 				read: (pluginId, key) =>
 					store.getPluginSessionState(sessionId, pluginId, key),
 				mutate: (pluginId, mutation) =>
 					store.mutatePluginSessionState(sessionId, pluginId, mutation),
-				reportWriteOutcome: (outcome) => {
-					if (
-						outcome.kind !== "indeterminate" &&
-						!(outcome.kind === "committed" && outcome.projection === "blocked")
-					) {
-						return;
-					}
-					const error = new SessionWriteOutcomeError(outcome);
-					if (entry.host === undefined) {
-						entry.pendingPluginSessionStateError ??= error;
-					} else {
-						entry.host.reportStorageError(error);
-					}
-					return error;
-				},
+				reportWriteOutcome: reportPluginWriteOutcome,
+			},
+			pluginSessionHistoryPersistence: {
+				append: (pluginId, input) =>
+					store.appendPluginSessionHistoryEntry(sessionId, pluginId, input),
+				read: (pluginId, options) =>
+					store.readPluginSessionHistoryPage(sessionId, pluginId, options),
+				reportWriteOutcome: reportPluginWriteOutcome,
 			},
 			unloadCheck: undefined,
 		};
@@ -250,14 +356,16 @@ export const createSessionHostManager = (
 			entry.pluginRuntime
 				?.startSession(
 					entry.pluginSessionContext,
-					entry.pluginSessionStatePersistence
+					entry.pluginSessionStatePersistence,
+					entry.pluginSessionHistoryPersistence
 				)
 				.catch(() => undefined) ?? Promise.resolve();
 		void sessionStart
 			.then(() =>
 				createSessionHost({
 					autoContinue:
-						autoContinue && entry.pendingPluginSessionStateError === undefined,
+						autoContinue &&
+						entry.pendingPluginSessionStorageError === undefined,
 					capabilities,
 					...(executionMode === undefined ? {} : { executionMode }),
 					...(providerModel === undefined ? {} : { providerModel }),
@@ -268,9 +376,9 @@ export const createSessionHostManager = (
 			.then(
 				(host) => {
 					entry.host = host;
-					if (entry.pendingPluginSessionStateError !== undefined) {
-						host.reportStorageError(entry.pendingPluginSessionStateError);
-						entry.pendingPluginSessionStateError = undefined;
+					if (entry.pendingPluginSessionStorageError !== undefined) {
+						host.reportStorageError(entry.pendingPluginSessionStorageError);
+						entry.pendingPluginSessionStorageError = undefined;
 					}
 					entry.unsubscribeEvents = host.onEvent((event) =>
 						emit({ event, sessionId, type: "session-event" })
@@ -331,13 +439,17 @@ export const createSessionHostManager = (
 		view: boolean,
 		autoContinue: boolean
 	): Promise<ManagedHostEntry> => {
+		const historyPath = await capabilities
+			.getStore()
+			.readSessionHistoryPath(sessionId);
 		const entry = createEntry(
 			capabilities,
 			sessionId,
 			executionMode,
 			providerModel,
 			providerCollection,
-			autoContinue
+			autoContinue,
+			historyPath.historyGeneration
 		);
 		if (view) {
 			entry.views += 1;
@@ -386,11 +498,12 @@ export const createSessionHostManager = (
 		agentPinSelection: SessionHostOptions["providerModel"]
 	): Promise<void> => {
 		const store = capabilities.getStore();
-		const [session, records] = await Promise.all([
+		const [session, historyPath] = await Promise.all([
 			store.getSession(sessionId),
-			store.listSessionRecords(sessionId),
+			store.readSessionHistoryPath(sessionId),
 		]);
-		const messages = records.flatMap((record) =>
+		const selectedPathRecords = historyPath.records;
+		const messages = selectedPathRecords.flatMap((record) =>
 			projectSessionMessageRecords(record.messages, record)
 		);
 		// The Session's recorded tiers, and the newest message's own choice when
@@ -404,7 +517,7 @@ export const createSessionHostManager = (
 			false;
 		assertImportedSessionAgentIsAvailable(
 			capabilities.getRegistry(),
-			latestSelection?.persistedAgent ?? records.at(-1)?.agentId,
+			latestSelection?.persistedAgent ?? selectedPathRecords.at(-1)?.agentId,
 			isImportedSession
 		);
 		const pluginRuntime =
@@ -745,7 +858,8 @@ export const createSessionHostManager = (
 				started.push(entry);
 				await runtime.startSession(
 					entry.pluginSessionContext,
-					entry.pluginSessionStatePersistence
+					entry.pluginSessionStatePersistence,
+					entry.pluginSessionHistoryPersistence
 				);
 			}
 			return true;
@@ -904,8 +1018,10 @@ export const createSessionHostManager = (
 			return;
 		}
 		if (reloadInProgress) {
+			const lifecycleAction =
+				operation === "reset" ? "reset Session data" : "delete a Session";
 			throw new Error(
-				`Cannot ${operation === "reset" ? "reset Session data" : "delete a Session"} while resources are reloading.`
+				`Cannot ${lifecycleAction} while resources are reloading.`
 			);
 		}
 		if (sessionId === undefined) {
@@ -916,15 +1032,18 @@ export const createSessionHostManager = (
 	};
 	const assertExclusiveAdmission = (
 		sessionId: SessionId,
-		operation: "fork" | "context edit"
+		operation: "fork" | "context edit" | "history navigation"
 	): void => {
 		const busy = (message: string, cause?: unknown): never => {
 			throw operation === "fork"
 				? new SessionForkBusyError(sessionId, message, cause)
 				: new SessionHostBusyError(sessionId, message, cause);
 		};
-		const action =
-			operation === "fork" ? "fork a Session" : "edit Session Context";
+		const action = {
+			fork: "fork a Session",
+			"context edit": "edit Session Context",
+			"history navigation": "navigate Session history",
+		}[operation];
 		if (shuttingDown) {
 			busy("The Session Host manager is shutting down.");
 		}
@@ -993,6 +1112,32 @@ export const createSessionHostManager = (
 		}
 		if (!canUnload(entry, host, { allowPassiveSteeringMessages: true })) {
 			busy("Cannot fork a Session while its Host has active or pending work.");
+		}
+	};
+	const assertEntryIdleForNavigation = (entry: ManagedHostEntry): void => {
+		const busy = (message: string): never => {
+			throw new SessionHostBusyError(entry.sessionId, message);
+		};
+		const host = entry.host;
+		if (host === undefined) {
+			throw new SessionHostBusyError(
+				entry.sessionId,
+				"Cannot navigate Session history while its Host is opening."
+			);
+		}
+		if (!entry.openingComplete) {
+			busy("Cannot navigate Session history while its Host is opening.");
+		}
+		if (entry.closing !== undefined || entry.unloadCheck !== undefined) {
+			busy("Cannot navigate Session history while its Host is closing.");
+		}
+		if (host.getSnapshot().projectionBlocked) {
+			busy("Cannot navigate Session history with unresolved storage state.");
+		}
+		if (!canUnload(entry, host)) {
+			busy(
+				"Cannot navigate Session history while the Host has active or pending work."
+			);
 		}
 	};
 	const assertEntryIdleForContextEdit = (entry: ManagedHostEntry): void => {
@@ -1108,6 +1253,50 @@ export const createSessionHostManager = (
 			}
 			return runExclusiveSessionAction(sessionId, entry, action);
 		};
+	const withIdleForSessionNavigation: SessionHostManager["withIdleForSessionNavigation"] =
+		async (sessionId, request, action) => {
+			const { operationId, targetEntryId } = request;
+			assertExclusiveAdmission(sessionId, "history navigation");
+			const entry = entries.get(sessionId);
+			if (entry !== undefined) {
+				assertEntryIdleForNavigation(entry);
+			}
+			return runExclusiveSessionAction(sessionId, entry, async (host) => {
+				if (host === undefined || entry === undefined) {
+					return action(host);
+				}
+				const store = entry.capabilities.getStore();
+				const previousPath = await store.readSessionHistoryPath(sessionId);
+				const navigationContext: PluginSessionHistoryNavigationContext = {
+					...entry.pluginSessionContext,
+					fromEntryId: previousPath.activeLeafId,
+					historyGeneration: previousPath.historyGeneration,
+					operationId,
+					toEntryId: targetEntryId,
+				};
+				const selectedTargetExists =
+					targetEntryId === null ||
+					(await store.hasSessionHistoryEntry(sessionId, targetEntryId));
+				if (selectedTargetExists) {
+					const rejection = await runBeforeHistoryNavigationHook(
+						entry,
+						navigationContext
+					);
+					if (rejection !== null) {
+						return rejection;
+					}
+				}
+				const outcome = await action(host);
+				return completeHistoryNavigation(
+					entry,
+					host,
+					store,
+					previousPath,
+					operationId,
+					outcome
+				);
+			});
+		};
 	const withIdleForSessionDataReset: SessionHostManager["withIdleForSessionDataReset"] =
 		async (action) => {
 			assertLifecycleAdmission("reset");
@@ -1151,6 +1340,7 @@ export const createSessionHostManager = (
 		withIdleForSessionLifecycle,
 		withIdleForSessionFork,
 		withIdleForSessionContextEdit,
+		withIdleForSessionNavigation,
 		withIdleForSessionDataReset,
 		withIdleForReload,
 		replacePluginRuntime,

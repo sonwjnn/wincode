@@ -115,7 +115,7 @@ const getListItemKey = (item: ListItem): string => {
 
 const getListItemSearchText = (item: ListItem): string => {
 	if (item.kind === "session") {
-		return item.session.title;
+		return `${item.session.title} ${item.session.id}`;
 	}
 	if (item.kind === "load-more") {
 		return "Load more sessions";
@@ -181,7 +181,7 @@ export const SessionsDialogContent = () => {
 	const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 	const pageRequestIdRef = useRef(0);
 	const pendingDeleteIdRef = useLatest(pendingDeleteId);
-	const { close, open: openDialog } = useDialog();
+	const { close, closeAll, open: openDialog } = useDialog();
 	const navigate = useNavigate();
 	const { show } = useToast();
 	const { colors } = useTheme();
@@ -382,10 +382,21 @@ export const SessionsDialogContent = () => {
 
 	const openImport = useCallback(() => {
 		openDialog({
-			children: <ImportSessionDialog onImported={fetchSessions} />,
+			children: (
+				<ImportSessionDialog
+					onImported={async (result) => {
+						await fetchSessions();
+						closeAll();
+						void navigate({
+							params: { id: result.sessionId },
+							to: "/sessions/$id",
+						}).catch(() => undefined);
+					}}
+				/>
+			),
 			title: "Import Session Bundle",
 		});
-	}, [fetchSessions, openDialog]);
+	}, [closeAll, fetchSessions, navigate, openDialog]);
 
 	const handleSelectedSessionAction = (
 		key: { ctrl: boolean; name: string; shift?: boolean },

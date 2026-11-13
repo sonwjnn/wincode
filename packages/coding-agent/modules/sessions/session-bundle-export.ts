@@ -7,6 +7,7 @@ import { getErrorCode } from "@/shared/utils/error-log-fields";
 import type { SessionHostManager } from "./host/types";
 import type {
 	SessionBundleExportResult,
+	SessionBundleExportScope,
 	SessionBundleManifest,
 } from "./session-bundle-contract";
 import {
@@ -76,6 +77,7 @@ export class SessionBundleExportError extends Error {
 
 export type SessionBundleExportInput = Readonly<{
 	destination: string;
+	scope?: SessionBundleExportScope;
 	sessionId: SessionId | string;
 	signal?: AbortSignal;
 	sourceWorkspacePath?: string;
@@ -212,6 +214,7 @@ export const createSessionBundleExportOperation =
 	): SessionBundleExportOperation =>
 	async ({
 		destination,
+		scope = "tree",
 		sessionId: sessionIdValue,
 		signal,
 		sourceWorkspacePath,
@@ -241,6 +244,7 @@ export const createSessionBundleExportOperation =
 							}),
 						{
 							existingHostWriter,
+							scope,
 							...omitUndefined({ signal }),
 						}
 					);
@@ -268,7 +272,7 @@ export const createSessionBundleExportOperation =
 		return {
 			destination: destinationPath,
 			manifest,
-			sessionId,
+			sessionId: toSessionId(manifest.session.id),
 			status: "exported",
 		};
 	};

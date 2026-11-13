@@ -27,6 +27,10 @@ if [[ "$LIVE" == 0 && -n "$MODEL" ]]; then
   printf '%s\n' '--model is only valid with --live.' >&2
   exit 1
 fi
+BRANCH_EXPORT_SMOKE=0
+if [[ "$LIVE" == 0 && -z "$BINARY" ]]; then
+  BRANCH_EXPORT_SMOKE=1
+fi
 for command in bun tmux; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf '%s is required for the interactive smoke.\n' "$command" >&2
@@ -103,6 +107,7 @@ tmux new-session -d -s "$SESSION" -x 80 -y 24 -c "$WORKSPACE" \
   -e "WINCODE_SMOKE_LIVE=$LIVE" \
   -e "WINCODE_SMOKE_APPROVED=$APPROVED" \
   -e "WINCODE_SMOKE_MODEL=$MODEL" \
+  -e "WINCODE_SMOKE_BRANCH_EXPORT=$BRANCH_EXPORT_SMOKE" \
   "$ROOT/scripts/test-support/interactive-smoke-launcher.sh"
 tmux set-option -p -t "$SESSION" remain-on-exit on
 
@@ -123,7 +128,7 @@ wait_for_text() {
   capture_frame
   # Prior scripted errors can remain visible while waiting for recovery output.
   local initial_errors
-  initial_errors="$(printf '%s\n' "$FRAME" | grep -Ei '(^|[[:space:]])error:' | LC_ALL=C sort || true)"
+  initial_errors="$(printf '%s\n' "$FRAME" | grep -E '(^|[[:space:]])error:' | LC_ALL=C sort || true)"
   for ((attempt = 0; attempt < attempts; attempt++)); do
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
       fail_with_frame "tmux session exited before '$text' appeared."
@@ -138,11 +143,11 @@ wait_for_text() {
       return 0
     fi
     local current_errors
-    current_errors="$(printf '%s\n' "$FRAME" | grep -Ei '(^|[[:space:]])error:' | LC_ALL=C sort || true)"
+    current_errors="$(printf '%s\n' "$FRAME" | grep -E '(^|[[:space:]])error:' | LC_ALL=C sort || true)"
     local new_errors
     new_errors="$(comm -13 <(printf '%s\n' "$initial_errors") <(printf '%s\n' "$current_errors") || true)"
     if [[ -n "$new_errors" ]]; then
-      fail_with_frame 'Wincode displayed a new error while waiting.'
+      fail_with_frame "Wincode displayed a new error while waiting for '$text'."
     fi
     sleep 0.1
   done
@@ -151,8 +156,12 @@ wait_for_text() {
 
 wait_for_text 'Ask anything...' 150
 # The composer appears before Provider model selection has finished loading.
-# Wait for the loaded model before sending the first keyboard input in every mode.
-wait_for_text 'openai/gpt-5.6-luna:low' 150
+# Wait for the selected smoke model before sending the first keyboard input.
+if [[ "$LIVE" == 1 ]]; then
+  wait_for_text "$MODEL" 150
+else
+  wait_for_text 'terminal-smoke/fake' 150
+fi
 if [[ "$LIVE" == 1 ]]; then
   tmux send-keys -l -t "$SESSION" 'Reply only with smoke followed by a hyphen, live, a hyphen, and ok. Do not use tools.'
   tmux send-keys -t "$SESSION" Enter
@@ -212,6 +221,37 @@ for size in '100 30' '60 20' '80 24'; do
 done
 tmux send-keys -t "$SESSION" C-c
 wait_for_text 'Ask anything...'
+
+if [[ "$BRANCH_EXPORT_SMOKE" == 1 ]]; then
+  tmux send-keys -l -t "$SESSION" '/sessions'
+  tmux send-keys -t "$SESSION" Enter
+  wait_for_text 'Search sessions'
+  tmux send-keys -l -t "$SESSION" 'branch-export-smoke-source'
+  wait_for_text 'branch-export-smoke-source'
+  tmux send-keys -t "$SESSION" C-e
+  wait_for_text 'Export scope (default: Whole tree)'
+  tmux send-keys -l -t "$SESSION" './selected-path-branch.bundle'
+  tmux send-keys -t "$SESSION" Tab
+  tmux send-keys -t "$SESSION" Down
+  sleep 0.1
+  tmux send-keys -t "$SESSION" Enter
+  wait_for_text 'Exported branch Session bundle' 150
+  [[ -d "$WORKSPACE/selected-path-branch.bundle" ]] || \
+    fail_with_frame 'Selected Path export did not create the bundle directory.'
+
+  rm -f "$WORKSPACE/.smoke-provider-request-seen"
+  tmux send-keys -t "$SESSION" C-o
+  wait_for_text 'Import a validated local Session bundle'
+  tmux send-keys -l -t "$SESSION" './selected-path-branch.bundle'
+  tmux send-keys -t "$SESSION" Enter
+  wait_for_text 'branch smoke selected answer' 150
+  sleep 0.5
+  [[ ! -e "$WORKSPACE/.smoke-provider-request-seen" ]] || \
+    fail_with_frame 'Imported branch began Provider work before explicit input.'
+  tmux send-keys -l -t "$SESSION" 'terminal smoke continue imported branch'
+  tmux send-keys -t "$SESSION" Enter
+  wait_for_text 'imported-branch-only' 150
+fi
 fi
 tmux send-keys -l -t "$SESSION" '/exit'
 tmux send-keys -t "$SESSION" Enter
@@ -228,6 +268,24 @@ EXIT_STATUS="$(tmux display-message -p -t "$SESSION" '#{pane_dead_status}')"
 EXIT_SIGNAL="$(tmux display-message -p -t "$SESSION" '#{pane_dead_signal}')"
 [[ "$EXIT_STATUS" == '0' ]] || \
   fail_with_frame "TUI exited with status ${EXIT_STATUS:-unknown}${EXIT_SIGNAL:+ (signal $EXIT_SIGNAL)}."
+if [[ "$BRANCH_EXPORT_SMOKE" == 1 ]]; then
+  OS_USERNAME="${USER:-${LOGNAME:-$(id -un)}}"
+  env -i \
+    PATH="$PATH_VALUE" \
+    HOME="$TEST_HOME" \
+    USER="$OS_USERNAME" \
+    LOGNAME="$OS_USERNAME" \
+    TMPDIR="$TEST_HOME/tmp" \
+    XDG_DATA_HOME="$TEST_HOME/data" \
+    XDG_CONFIG_HOME="$TEST_HOME/config" \
+    XDG_CACHE_HOME="$TEST_HOME/cache" \
+    APPDATA="$TEST_HOME/appdata" \
+    WINCODE_SMOKE_HOME="$TEST_HOME" \
+    WINCODE_SMOKE_WORKSPACE="$WORKSPACE" \
+    WINCODE_TEST_SESSION_INDEX_DIR="$TEST_HOME/session-indexes" \
+    "$BUN_PATH" --no-env-file \
+    "$ROOT/scripts/test-support/verify-interactive-branch-smoke.ts"
+fi
 if [[ "$LIVE" == 1 ]]; then
   printf 'PASS: live Provider reply and clean /exit.\n'
 elif [[ -n "$BINARY" ]]; then

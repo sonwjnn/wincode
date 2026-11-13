@@ -84,6 +84,18 @@ describe("getSuggestions", () => {
 			controller.getSuggestions("git", "root").items.map(({ label }) => label)
 		).toEqual(["git-commit"]);
 	});
+
+	test("offers the history command only when the Session history view is available", () => {
+		const available = createController();
+		const unavailable = createController({
+			unavailableCapabilities: ["session-history"],
+		});
+
+		expect(
+			available.getSuggestions("history").items.map(({ label }) => label)
+		).toEqual(["history"]);
+		expect(unavailable.getSuggestions("history").items).toEqual([]);
+	});
 });
 
 describe("select", () => {

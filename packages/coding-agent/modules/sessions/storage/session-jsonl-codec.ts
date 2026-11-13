@@ -14,6 +14,11 @@ import { assertCompactionMessageReferences } from "@/modules/sessions/compaction
 import { sessionContextEditSchema } from "@/modules/sessions/context-edits";
 import { SESSION_LOG_IDENTIFIER_PATTERN } from "@/modules/sessions/session-log-identifiers";
 import {
+	serializePluginSessionHistoryPayload,
+	validatePluginSessionHistoryPluginId,
+	validatePluginSessionHistoryType,
+} from "@/modules/sessions/session-plugin-history";
+import {
 	type PluginSessionStateJsonValue,
 	serializePluginSessionStateValue,
 	validatePluginSessionStateKey,
@@ -21,25 +26,30 @@ import {
 	validatePluginSessionStateSchemaVersion,
 } from "@/modules/sessions/session-plugin-state";
 import { editModeSchema } from "@/modules/tools/versioned/contracts";
-import type {
-	CompactionId,
-	SessionId,
-	WorkspaceId,
+import {
+	type CompactionId,
+	isValidSessionId,
+	type SessionHistoryEntryId,
+	type SessionId,
+	toSessionHistoryEntryId,
+	type WorkspaceId,
 } from "@/shared/identifiers";
 import { getSessionRecordValidationError } from "./session-record";
 
-export const SESSION_LOG_FORMAT_VERSION = 2;
+export const SESSION_LOG_FORMAT_VERSION = 5;
 export const SESSION_LOG_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 
 export const SESSION_LOG_EVENT_TYPES = [
 	"session.header",
 	"session.created",
 	"session.metadata-updated",
+	"session.history-navigated",
 	"record.committed",
 	"context.edited",
 	"submission.status-updated",
 	"compaction.committed",
 	"usage.committed",
+	"plugin.entry-appended",
 	"plugin.state-replaced",
 	"plugin.state-deleted",
 	"session.activation-confirmed",
@@ -48,6 +58,28 @@ export const SESSION_LOG_EVENT_TYPES = [
 ] as const;
 
 export type SessionLogEventType = (typeof SESSION_LOG_EVENT_TYPES)[number];
+
+export const SESSION_HISTORY_ENTRY_EVENT_TYPES = [
+	"record.committed",
+	"plugin.entry-appended",
+	"plugin.state-replaced",
+	"plugin.state-deleted",
+	"context.edited",
+	"submission.status-updated",
+	"compaction.committed",
+] as const satisfies readonly SessionLogEventType[];
+
+export type SessionHistoryEntryEventType =
+	(typeof SESSION_HISTORY_ENTRY_EVENT_TYPES)[number];
+
+const sessionHistoryEntryEventTypeSet = new Set<string>(
+	SESSION_HISTORY_ENTRY_EVENT_TYPES
+);
+
+export const isSessionHistoryEntryEventType = (
+	type: unknown
+): type is SessionHistoryEntryEventType =>
+	typeof type === "string" && sessionHistoryEntryEventTypeSet.has(type);
 
 export type SessionLogEnvelope = Readonly<{
 	entryHash: string;
@@ -74,6 +106,152 @@ export type SessionLogState = Readonly<{
 	nextSequence: number;
 	lastHash: string;
 }>;
+
+const sessionHistoryActiveLeafFromPayload = (
+	payload: Readonly<Record<string, unknown>>
+): SessionHistoryEntryId | null => {
+	if (payload.activeLeafId === null) {
+		return null;
+	}
+	return toSessionHistoryEntryId(String(payload.activeLeafId));
+};
+
+type SessionHistoryParent = Readonly<{
+	activeLeafId: SessionHistoryEntryId;
+	entryId: SessionHistoryEntryId;
+	parentEntryId: SessionHistoryEntryId | null;
+}>;
+
+const sessionHistoryParentFromEnvelope = (
+	envelope: SessionLogEnvelope
+): SessionHistoryParent | undefined => {
+	if (!isSessionHistoryEntryEventType(envelope.type)) {
+		return;
+	}
+	const parentEntryId =
+		envelope.payload.parentEntryId === null
+			? null
+			: toSessionHistoryEntryId(String(envelope.payload.parentEntryId));
+	return {
+		activeLeafId: toSessionHistoryEntryId(
+			String(envelope.payload.activeLeafId)
+		),
+		entryId: toSessionHistoryEntryId(String(envelope.payload.historyEntryId)),
+		parentEntryId,
+	};
+};
+
+const collectSelectedSessionHistoryEntryIds = (
+	activeLeafId: SessionHistoryEntryId | null,
+	parents: ReadonlyMap<SessionHistoryEntryId, SessionHistoryEntryId | null>,
+	sessionId: SessionId
+): ReadonlySet<SessionHistoryEntryId> => {
+	const entryIds = new Set<SessionHistoryEntryId>();
+	const visited = new Set<SessionHistoryEntryId>();
+	let currentEntryId = activeLeafId;
+	while (currentEntryId !== null) {
+		if (visited.has(currentEntryId)) {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				sessionId,
+				"Session history tree contains a parent cycle."
+			);
+		}
+		visited.add(currentEntryId);
+		const parentEntryId = parents.get(currentEntryId);
+		if (parentEntryId === undefined) {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				sessionId,
+				"Session Active Leaf references a missing history entry."
+			);
+		}
+		entryIds.add(currentEntryId);
+		currentEntryId = parentEntryId;
+	}
+	return entryIds;
+};
+
+const sessionHistoryGraphFromLog = (
+	state: SessionLogState,
+	snapshotSequence: number
+): Readonly<{
+	activeLeafId: SessionHistoryEntryId | null;
+	parents: ReadonlyMap<SessionHistoryEntryId, SessionHistoryEntryId | null>;
+}> => {
+	const parents = new Map<
+		SessionHistoryEntryId,
+		SessionHistoryEntryId | null
+	>();
+	let activeLeafId: SessionHistoryEntryId | null = null;
+	for (const { envelope } of state.entries) {
+		if (envelope.sequence > snapshotSequence) {
+			break;
+		}
+		switch (envelope.type) {
+			case "session.created": {
+				const initialHistoryEntryId = envelope.payload.initialHistoryEntryId;
+				if (typeof initialHistoryEntryId === "string") {
+					parents.set(toSessionHistoryEntryId(initialHistoryEntryId), null);
+				}
+				activeLeafId = sessionHistoryActiveLeafFromPayload(envelope.payload);
+				continue;
+			}
+			case "session.history-navigated":
+				activeLeafId = sessionHistoryActiveLeafFromPayload(envelope.payload);
+				continue;
+			default: {
+				const parent = sessionHistoryParentFromEnvelope(envelope);
+				if (parent !== undefined) {
+					parents.set(parent.entryId, parent.parentEntryId);
+					activeLeafId = parent.activeLeafId;
+				}
+			}
+		}
+	}
+	return { activeLeafId, parents };
+};
+
+export const sessionHistoryPathToEntryFromLog = (
+	state: SessionLogState,
+	sessionId: SessionId,
+	targetEntryId: SessionHistoryEntryId,
+	snapshotSequence = state.nextSequence - 1
+): ReadonlySet<SessionHistoryEntryId> => {
+	const { parents } = sessionHistoryGraphFromLog(state, snapshotSequence);
+	if (!parents.has(targetEntryId)) {
+		throw new SessionLogError(
+			"session_log_corrupt",
+			sessionId,
+			"Session history target references a missing entry."
+		);
+	}
+	return collectSelectedSessionHistoryEntryIds(
+		targetEntryId,
+		parents,
+		sessionId
+	);
+};
+
+export const selectedSessionHistoryPathFromLog = (
+	state: SessionLogState,
+	sessionId: SessionId,
+	snapshotSequence = state.nextSequence - 1
+): Readonly<{
+	activeLeafId: SessionHistoryEntryId | null;
+	entryIds: ReadonlySet<SessionHistoryEntryId>;
+}> => {
+	const { activeLeafId, parents } = sessionHistoryGraphFromLog(
+		state,
+		snapshotSequence
+	);
+	const entryIds = collectSelectedSessionHistoryEntryIds(
+		activeLeafId,
+		parents,
+		sessionId
+	);
+	return { activeLeafId, entryIds };
+};
 
 export type SessionProjectionCursor = Readonly<{
 	generation: number;
@@ -180,6 +358,22 @@ const safeIdentifierSchema = z
 	.max(512)
 	.regex(SESSION_LOG_IDENTIFIER_PATTERN);
 
+const sessionBundleBranchProvenanceSchema = z
+	.object({
+		activeLeafId: safeIdentifierSchema.nullable(),
+		sourceSessionId: safeIdentifierSchema.refine(isValidSessionId),
+	})
+	.strict();
+
+export type SessionBundleBranchProvenance = z.infer<
+	typeof sessionBundleBranchProvenanceSchema
+>;
+
+export const parseSessionBundleBranchProvenance = (
+	value: unknown
+): SessionBundleBranchProvenance =>
+	sessionBundleBranchProvenanceSchema.parse(value);
+
 const envelopeSchema = z
 	.object({
 		entryHash: z.string().regex(SESSION_LOG_HASH_PATTERN),
@@ -196,8 +390,11 @@ const envelopeSchema = z
 
 const createdPayloadSchema = z
 	.object({
+		activeLeafId: safeIdentifierSchema.nullable(),
+		bundleProvenance: sessionBundleBranchProvenanceSchema.optional(),
 		createdAt: z.string().datetime(),
 		editMode: editModeSchema,
+		initialHistoryEntryId: safeIdentifierSchema.optional(),
 		initialRecord: z.unknown().optional(),
 		lastMessageAt: z.string().datetime().nullable(),
 		model: providerModelSelectionSchema.optional(),
@@ -205,7 +402,14 @@ const createdPayloadSchema = z
 		thinkingLevel: thinkingLevelSchema.optional(),
 		title: z.string(),
 	})
-	.strict();
+	.strict()
+	.refine((payload) =>
+		payload.initialRecord === undefined
+			? payload.initialHistoryEntryId === undefined &&
+				payload.activeLeafId === null
+			: payload.initialHistoryEntryId !== undefined &&
+				payload.activeLeafId === payload.initialHistoryEntryId
+	);
 
 const metadataUpdatedPayloadSchema = z
 	.object({
@@ -218,27 +422,70 @@ const metadataUpdatedPayloadSchema = z
 	.strict()
 	.refine((payload) => Object.keys(payload).length > 0);
 
+const historyNavigatedPayloadSchema = z
+	.object({
+		activeLeafId: safeIdentifierSchema.nullable(),
+		previousActiveLeafId: safeIdentifierSchema.nullable(),
+	})
+	.strict();
+
+const historyEntryFieldsSchema = {
+	activeLeafId: safeIdentifierSchema,
+	historyEntryId: safeIdentifierSchema,
+	parentEntryId: safeIdentifierSchema.nullable(),
+};
+
 const recordCommittedPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		record: z.unknown(),
 		sessionModel: providerModelSelectionSchema.optional(),
 		sessionThinkingLevel: thinkingLevelSchema.optional(),
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
+
+const contextEditedPayloadSchema = sessionContextEditSchema
+	.extend(historyEntryFieldsSchema)
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 const submissionStatusPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		failure: z.string().optional(),
 		messageId: safeIdentifierSchema,
 		recordId: safeIdentifierSchema,
 		status: z.enum(["failed", "pending", "processed", "processing"]),
 		submissionId: safeIdentifierSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 export type SessionSubmissionStatusPayload = z.infer<
 	typeof submissionStatusPayloadSchema
 >;
+
+export const parseSessionContextEditPayload = (value: unknown) => {
+	const payload = contextEditedPayloadSchema.parse(value);
+	return {
+		operationId: payload.operationId,
+		replacement: payload.replacement,
+		targetId: payload.targetId,
+	};
+};
 
 export const parseSessionSubmissionStatusPayload = (
 	value: unknown
@@ -268,6 +515,7 @@ const compactionSummarySchema = z
 
 const compactionPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		completedAt: z.string().datetime(),
 		createdAt: z.string().datetime(),
 		estimatedTokensAfter: z.number().int().nonnegative(),
@@ -285,7 +533,12 @@ const compactionPayloadSchema = z
 		trigger: z.enum(["manual", "threshold", "overflow"]),
 		throughMessageUiId: safeIdentifierSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 export type SessionCompactionPayload = z.infer<typeof compactionPayloadSchema>;
 
@@ -319,6 +572,7 @@ const inheritedUsageIdentitySchema = z.discriminatedUnion("kind", [
 
 const inheritedUsageContributionSchema = z
 	.object({
+		compactionId: safeIdentifierSchema.optional(),
 		cost: z
 			.object({ amount: z.number().finite().nonnegative(), unit: z.string() })
 			.strict()
@@ -413,12 +667,18 @@ const pluginSessionStateVersionSchema = z
 
 const pluginSessionStateReplacedPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		key: pluginSessionStateKeySchema,
 		pluginId: pluginSessionStatePluginIdSchema,
 		schemaVersion: pluginSessionStateVersionSchema,
 		value: z.unknown(),
 	})
 	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	)
 	.superRefine((payload, context) => {
 		try {
 			serializePluginSessionStateValue(payload.value);
@@ -436,24 +696,69 @@ const pluginSessionStateReplacedPayloadSchema = z
 
 const pluginSessionStateDeletedPayloadSchema = z
 	.object({
+		...historyEntryFieldsSchema,
 		key: pluginSessionStateKeySchema,
 		pluginId: pluginSessionStatePluginIdSchema,
 		schemaVersion: pluginSessionStateVersionSchema,
 	})
-	.strict();
+	.strict()
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
 
 export type PluginSessionStateReplacedPayload = Readonly<{
+	activeLeafId: string;
+	historyEntryId: string;
 	key: string;
+	parentEntryId: string | null;
 	pluginId: string;
 	schemaVersion: number;
 	value: PluginSessionStateJsonValue;
 }>;
 
 export type PluginSessionStateDeletedPayload = Readonly<{
+	activeLeafId: string;
+	historyEntryId: string;
 	key: string;
+	parentEntryId: string | null;
 	pluginId: string;
 	schemaVersion: number;
 }>;
+
+const pluginSessionHistoryEntryPayloadSchema = z
+	.object({
+		...historyEntryFieldsSchema,
+		entryType: z.string(),
+		payload: z.unknown(),
+		pluginId: safeIdentifierSchema,
+	})
+	.strict()
+	.superRefine((payload, context) => {
+		try {
+			validatePluginSessionHistoryPluginId(payload.pluginId);
+			validatePluginSessionHistoryType(payload.entryType);
+			serializePluginSessionHistoryPayload(payload.payload);
+		} catch (error) {
+			context.addIssue({
+				code: "custom",
+				message:
+					error instanceof Error
+						? error.message
+						: "Plugin Session History payload is invalid.",
+			});
+		}
+	})
+	.refine(
+		(payload) =>
+			payload.activeLeafId === payload.historyEntryId &&
+			payload.parentEntryId !== payload.historyEntryId
+	);
+
+export type PluginSessionHistoryEntryPayload = z.infer<
+	typeof pluginSessionHistoryEntryPayloadSchema
+>;
 
 const usageCommittedPayloadSchema = z
 	.object({
@@ -478,11 +783,13 @@ const eventPayloadSchemas: Readonly<
 > = {
 	"session.created": createdPayloadSchema,
 	"session.metadata-updated": metadataUpdatedPayloadSchema,
+	"session.history-navigated": historyNavigatedPayloadSchema,
 	"record.committed": recordCommittedPayloadSchema,
-	"context.edited": sessionContextEditSchema,
+	"context.edited": contextEditedPayloadSchema,
 	"submission.status-updated": submissionStatusPayloadSchema,
 	"compaction.committed": compactionPayloadSchema,
 	"usage.committed": usageCommittedPayloadSchema,
+	"plugin.entry-appended": pluginSessionHistoryEntryPayloadSchema,
 	"plugin.state-replaced": pluginSessionStateReplacedPayloadSchema,
 	"plugin.state-deleted": pluginSessionStateDeletedPayloadSchema,
 	"session.activation-confirmed": z
@@ -535,6 +842,20 @@ export const encodeCanonicalSessionJson = (value: unknown): string => {
 
 const sha256 = (value: string | Uint8Array): string =>
 	new Bun.CryptoHasher("sha256").update(value).digest("hex");
+
+export const sessionHistoryEntryIdForRecord = (
+	sessionId: SessionId,
+	recordId: string
+): SessionHistoryEntryId =>
+	toSessionHistoryEntryId(`entry-${sha256(`${sessionId}\0${recordId}`)}`);
+
+export const sessionHistoryEntryIdForOperation = (
+	sessionId: SessionId,
+	operationId: string
+): SessionHistoryEntryId =>
+	toSessionHistoryEntryId(
+		`entry-${sha256(`${sessionId}\0operation\0${operationId}`)}`
+	);
 
 const semanticOperationDigest = (
 	type: SessionLogEventType,
@@ -894,7 +1215,9 @@ export type SessionLogDecodeOptions = Readonly<{
 }>;
 
 type SessionLogReferenceState = {
+	activeLeafId: string | null | undefined;
 	compactionIds: Set<string>;
+	historyEntryParents: Map<string, string | null>;
 	compactionSequence: number;
 	messageIds: Set<SessionMessageId>;
 	messages: Map<SessionMessageId, SessionRecord["messages"][number]>;
@@ -919,6 +1242,62 @@ const rejectInvalidSessionLogReference = (
 		offset: entry.startOffset,
 		sequence: entry.envelope.sequence,
 	});
+};
+
+const appendHistoryEntryReference = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState,
+	{
+		activeLeafId,
+		historyEntryId,
+		parentEntryId,
+	}: {
+		activeLeafId: unknown;
+		historyEntryId: unknown;
+		parentEntryId: unknown;
+	},
+	expectedEntryId: string
+): void => {
+	const historyId =
+		typeof historyEntryId === "string"
+			? historyEntryId
+			: rejectInvalidSessionLogReference(
+					entry,
+					sessionId,
+					"Session history entry identity is invalid."
+				);
+	const activeLeaf =
+		typeof activeLeafId === "string"
+			? activeLeafId
+			: rejectInvalidSessionLogReference(
+					entry,
+					sessionId,
+					"Session Active Leaf identity is invalid."
+				);
+	const parentId =
+		parentEntryId === null || typeof parentEntryId === "string"
+			? parentEntryId
+			: rejectInvalidSessionLogReference(
+					entry,
+					sessionId,
+					"Session history parent identity is invalid."
+				);
+	if (
+		historyId !== expectedEntryId ||
+		activeLeaf !== historyId ||
+		state.historyEntryParents.has(historyId) ||
+		parentId !== state.activeLeafId ||
+		(parentId !== null && !state.historyEntryParents.has(parentId))
+	) {
+		rejectInvalidSessionLogReference(
+			entry,
+			sessionId,
+			"Session history entry has a duplicate identity, missing parent or cross-Session parent, cycle, or invalid selected leaf."
+		);
+	}
+	state.historyEntryParents.set(historyId, parentId);
+	state.activeLeafId = activeLeaf;
 };
 
 const validateRecordContextReferences = (
@@ -1097,14 +1476,141 @@ const validateUsageReferences = (
 	state.usageIds.add(payload.id);
 };
 
+const validateInitialHistoryEntryReference = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState
+): void => {
+	const { activeLeafId, initialHistoryEntryId, initialRecord } =
+		entry.envelope.payload;
+	if (typeof initialHistoryEntryId === "string") {
+		if (
+			!isSessionRecord(initialRecord) ||
+			initialHistoryEntryId !==
+				sessionHistoryEntryIdForRecord(sessionId, initialRecord.id)
+		) {
+			rejectInvalidSessionLogReference(
+				entry,
+				sessionId,
+				"Session initial history entry has an invalid identity."
+			);
+		}
+		state.historyEntryParents.set(initialHistoryEntryId, null);
+	}
+	if (
+		activeLeafId !== null &&
+		(typeof activeLeafId !== "string" ||
+			!state.historyEntryParents.has(activeLeafId))
+	) {
+		rejectInvalidSessionLogReference(
+			entry,
+			sessionId,
+			"Session Active Leaf references a missing history entry."
+		);
+	}
+	state.activeLeafId = activeLeafId as string | null;
+};
+
+const validateAppendedHistoryEntryReference = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState
+): void => {
+	const { envelope } = entry;
+	const payload = envelope.payload;
+	const expectedEntryId =
+		envelope.type === "record.committed"
+			? sessionHistoryEntryIdForRecord(
+					sessionId,
+					String((payload.record as SessionRecord).id)
+				)
+			: sessionHistoryEntryIdForOperation(sessionId, envelope.operationId);
+	appendHistoryEntryReference(
+		entry,
+		sessionId,
+		state,
+		{
+			activeLeafId: payload.activeLeafId,
+			historyEntryId: payload.historyEntryId,
+			parentEntryId: payload.parentEntryId,
+		},
+		expectedEntryId
+	);
+};
+
+const validateSessionHistoryEntryReference = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState
+): void => {
+	if (entry.envelope.type === "session.created") {
+		validateInitialHistoryEntryReference(entry, sessionId, state);
+		return;
+	}
+	if (entry.envelope.type === "session.history-navigated") {
+		const payload = historyNavigatedPayloadSchema.parse(entry.envelope.payload);
+		const targetExists =
+			payload.activeLeafId === null ||
+			state.historyEntryParents.has(payload.activeLeafId);
+		if (payload.previousActiveLeafId !== state.activeLeafId || !targetExists) {
+			rejectInvalidSessionLogReference(
+				entry,
+				sessionId,
+				"Session history navigation must select an existing entry or the root."
+			);
+		}
+		state.activeLeafId = payload.activeLeafId;
+		return;
+	}
+	if (isSessionHistoryEntryEventType(entry.envelope.type)) {
+		validateAppendedHistoryEntryReference(entry, sessionId, state);
+	}
+};
+
+const validateOperationalReferences = (
+	entry: SessionLogEntry,
+	sessionId: SessionId,
+	state: SessionLogReferenceState
+): void => {
+	switch (entry.envelope.type) {
+		case "context.edited": {
+			const edit = parseSessionContextEditPayload(entry.envelope.payload);
+			if (
+				edit.operationId !== entry.envelope.operationId ||
+				!state.messageIds.has(edit.targetId)
+			) {
+				rejectInvalidSessionLogReference(
+					entry,
+					sessionId,
+					"Context edit references a missing message or inconsistent operation identity."
+				);
+			}
+			break;
+		}
+		case "submission.status-updated":
+			validateSubmissionReferences(entry, sessionId, state);
+			break;
+		case "compaction.committed":
+			validateCompactionReferences(entry, sessionId, state);
+			break;
+		case "usage.committed":
+			validateUsageReferences(entry, sessionId, state);
+			break;
+		default:
+			break;
+	}
+};
+
 const validateSessionLogReferences = (
 	entries: readonly SessionLogEntry[],
 	sessionId: SessionId,
 	options: SessionLogDecodeOptions
 ): void => {
 	const state: SessionLogReferenceState = {
+		activeLeafId: undefined,
 		compactionIds: new Set(),
 		compactionSequence: 0,
+		historyEntryParents: new Map(),
 		messageIds: new Set(),
 		messages: new Map(),
 		pendingJoinedTurnReferences: [],
@@ -1124,33 +1630,8 @@ const validateSessionLogReferences = (
 		if (record !== undefined) {
 			addSessionRecordReferences(entry, sessionId, record, state);
 		}
-		switch (entry.envelope.type) {
-			case "context.edited": {
-				const edit = sessionContextEditSchema.parse(entry.envelope.payload);
-				if (
-					edit.operationId !== entry.envelope.operationId ||
-					!state.messageIds.has(edit.targetId)
-				) {
-					rejectInvalidSessionLogReference(
-						entry,
-						sessionId,
-						"Context edit references a missing message or inconsistent operation identity."
-					);
-				}
-				break;
-			}
-			case "submission.status-updated":
-				validateSubmissionReferences(entry, sessionId, state);
-				break;
-			case "compaction.committed":
-				validateCompactionReferences(entry, sessionId, state);
-				break;
-			case "usage.committed":
-				validateUsageReferences(entry, sessionId, state);
-				break;
-			default:
-				break;
-		}
+		validateSessionHistoryEntryReference(entry, sessionId, state);
+		validateOperationalReferences(entry, sessionId, state);
 	}
 	for (const reference of state.pendingJoinedTurnReferences) {
 		if (!state.turnIds.has(reference.turnId)) {

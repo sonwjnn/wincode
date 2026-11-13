@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core";
 import type { SessionWriterLockOwner } from "@/modules/sessions/storage/session-writer-lock";
+import type { SessionId } from "@/shared/identifiers";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionCompaction } from "../../compaction/types";
 import type { SessionMessage } from "../../message";
@@ -20,6 +21,7 @@ import {
 
 type StoredSessionHistoryViewProps = Readonly<{
 	compactions: readonly SessionCompaction[];
+	sessionId: SessionId;
 	forkProvenance?: SessionForkProvenance;
 	hasMoreHistory: boolean;
 	historyError?: string;
@@ -41,6 +43,7 @@ type StoredSessionHistoryViewProps = Readonly<{
 
 export function StoredSessionHistoryView({
 	compactions,
+	sessionId,
 	forkProvenance,
 	hasMoreHistory,
 	historyError,
@@ -126,17 +129,22 @@ export function StoredSessionHistoryView({
 					<SessionForkProvenanceBanner
 						inheritedUsage={statistics.usage.inherited}
 						provenance={forkProvenance}
+						sessionId={sessionId}
 					/>
 				)}
 				<text fg={colors.textMuted}>
 					{`Persisted statistics · read point ${statistics.readPoint.slice(0, 12)}… · ${statistics.recordCount} committed records · ${statistics.completedToolCallCount} completed Tool Calls`}
 				</text>
 				<text fg={colors.textMuted}>
-					{usageLabel("Actual", statistics.usage.actual)}
+					{usageLabel("Selected path", statistics.usage.selectedPath)}
 				</text>
 				<text fg={colors.textMuted}>
-					Inherited usage is historical source spend, not new spend in this
-					Session.
+					{usageLabel("Whole Session actual", statistics.usage.actual)}
+				</text>
+				<text fg={colors.textMuted}>
+					Selected-path usage follows the current history branch; whole-Session
+					categories include all branches. Inherited usage is historical source
+					spend, not new spend in this Session.
 				</text>
 				<text fg={colors.textMuted}>
 					{usageLabel("Inherited", statistics.usage.inherited)}

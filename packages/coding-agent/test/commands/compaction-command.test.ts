@@ -13,6 +13,7 @@ test("dispatches manual compaction focus to its registered action", async () => 
 		"app.exit": () => undefined,
 		"connection.open": () => undefined,
 		"dialog.sessions": () => undefined,
+		"dialog.session-history": () => undefined,
 		"dialog.theme": () => undefined,
 		"thinking.select": () => undefined,
 		"model.select": () => undefined,

@@ -1,4 +1,7 @@
-import { isJsonValue } from "@wincode/utils";
+import {
+	isJsonValue,
+	isNonEmptyStringWithinUtf8ByteLimit,
+} from "@wincode/utils";
 import { MAX_PLUGIN_OUTPUT_BYTES } from "../plugins/output";
 import type { SessionWriteOutcome } from "./session-write-outcome";
 
@@ -33,12 +36,14 @@ export type PluginSessionStateMutation =
 			kind: "delete";
 			operationId: string;
 			schemaVersion: number;
+			expectedHistoryGeneration: number;
 	  }>
 	| Readonly<{
 			key: string;
 			kind: "set";
 			operationId: string;
 			schemaVersion: number;
+			expectedHistoryGeneration: number;
 			value: PluginSessionStateJsonValue;
 	  }>;
 
@@ -53,6 +58,7 @@ export type PluginSessionStateMutationResult =
 	  }>;
 
 export type PluginSessionStatePersistence = Readonly<{
+	getHistoryGeneration: () => number;
 	read: (
 		pluginId: string,
 		key: string
@@ -82,9 +88,10 @@ export const validatePluginSessionStatePluginId = (pluginId: string): void => {
 
 export const validatePluginSessionStateKey = (key: string): void => {
 	if (
-		key.length === 0 ||
-		new TextEncoder().encode(key).byteLength >
+		!isNonEmptyStringWithinUtf8ByteLimit(
+			key,
 			PLUGIN_SESSION_STATE_MAX_KEY_BYTES
+		)
 	) {
 		throw new Error(
 			`Plugin Session State keys must be non-empty and no larger than ${PLUGIN_SESSION_STATE_MAX_KEY_BYTES} UTF-8 bytes.`
@@ -114,8 +121,10 @@ export const serializePluginSessionStateValue = (value: unknown): string => {
 	}
 	if (
 		typeof serialized !== "string" ||
-		new TextEncoder().encode(serialized).byteLength >
+		!isNonEmptyStringWithinUtf8ByteLimit(
+			serialized,
 			PLUGIN_SESSION_STATE_MAX_VALUE_BYTES
+		)
 	) {
 		throw new Error(
 			`Plugin Session State values must be no larger than ${PLUGIN_SESSION_STATE_MAX_VALUE_BYTES} UTF-8 bytes.`

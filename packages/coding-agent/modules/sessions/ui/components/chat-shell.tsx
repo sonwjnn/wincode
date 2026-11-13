@@ -97,6 +97,7 @@ type ChatShellProps = {
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onProviderModelChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
+	onOpenSessionHistory?: () => Promise<void> | void;
 	providerController?: InteractiveProviderController;
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 	promptHistory: PromptHistoryEntry[];
@@ -305,6 +306,7 @@ export function ChatShell({
 	onCompact,
 	onProviderModelChanged,
 	onOpenSettings,
+	onOpenSessionHistory,
 	providerController,
 	onRetry,
 	promptHistory,
@@ -656,6 +658,7 @@ export function ChatShell({
 						isSelectionReady={isSelectionReady}
 						onCompact={onCompact}
 						onEmptySubmit={onEmptySubmit}
+						onOpenSessionHistory={onOpenSessionHistory}
 						onOpenSettings={onOpenSettings}
 						onProviderModelChanged={onProviderModelChanged}
 						onSubmit={handleSubmit}

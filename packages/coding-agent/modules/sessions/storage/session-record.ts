@@ -385,6 +385,11 @@ const toDurableSessionPart = (
 	}
 	return [];
 };
+/** Whether a runtime part survives into a durable Session Record. */
+export const isDurableSessionPart = (
+	part: SessionMessage["parts"][number]
+): boolean => toDurableSessionPart(part).length > 0;
+
 export const buildUserSessionRecord = ({
 	agentId,
 	message,
