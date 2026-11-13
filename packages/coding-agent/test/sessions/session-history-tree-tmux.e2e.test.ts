@@ -131,12 +131,25 @@ const withTerminalSmoke = async (
 	};
 	const openHistory = async (): Promise<string> => {
 		await sendCommand("/history");
-		return await waitForFrame(
+		await waitForFrame(
 			(frame) =>
 				frame.includes("Enter selects a history entry") &&
 				!frame.includes("Loading Session history..."),
 			"the history tree"
 		);
+		// The first page applies its initial selection after the dialog paints, so
+		// wait for the tree to stop changing before sending navigation keys.
+		await Bun.sleep(250);
+		let previous = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
+		for (let attempt = 0; attempt < 50; attempt += 1) {
+			await Bun.sleep(100);
+			const current = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
+			if (current === previous) {
+				return current;
+			}
+			previous = current;
+		}
+		return previous;
 	};
 
 	try {
