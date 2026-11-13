@@ -45,6 +45,7 @@ import {
 	isSessionWriteIndeterminate,
 	requireSessionWriteReady,
 } from "../storage/session-jsonl-store";
+import { isDurableSessionPart } from "../storage/session-record";
 import type { SessionStore } from "../storage/session-store";
 import {
 	estimateSessionContextTokens,
@@ -107,7 +108,9 @@ const applyDurableSplitBoundary = (
 	latest: SessionCompaction
 ): SessionMessage[] => {
 	const partIndex = latest.firstKeptAssistantPartIndex;
-	if (isUndefined(partIndex)) {
+	if (isUndefined(partIndex) || partIndex === 0) {
+		// A zero offset means the summarized prefix held only runtime parts that
+		// never reached the Session Record, so every durable part is retained.
 		return activeMessages;
 	}
 	const assistantIndex = activeMessages.findIndex(
@@ -117,20 +120,25 @@ const applyDurableSplitBoundary = (
 			message.id === latest.throughMessageUiId
 	);
 	const assistant = activeMessages[assistantIndex];
-	if (
-		!(assistant && Number.isSafeInteger(partIndex)) ||
-		partIndex <= 0 ||
-		partIndex >= assistant.parts.length
-	) {
+	if (!(assistant && Number.isSafeInteger(partIndex))) {
 		throw new SessionCompactionError(
 			"invalid-boundary",
 			`Compaction boundary "${latest.id}" has an invalid assistant part cut point.`
 		);
 	}
+	// The offset counts durable parts; runtime-only parts describe nothing that
+	// reopening the Session can restore, so they never participate in the cut.
+	const durableIndexes = assistant.parts.flatMap((part, index) =>
+		isDurableSessionPart(part) ? [index] : []
+	);
+	const firstKeptPartIndex = durableIndexes[partIndex];
+	if (firstKeptPartIndex === undefined) {
+		return activeMessages;
+	}
 	const nextMessages = [...activeMessages];
 	nextMessages[assistantIndex] = {
 		...assistant,
-		parts: assistant.parts.slice(partIndex),
+		parts: assistant.parts.slice(firstKeptPartIndex),
 	};
 	return nextMessages;
 };
@@ -787,6 +795,11 @@ const makeSplitTurnCutPoint = (
 		if (splitsToolPairWithinAssistant(messages, assistantIndex, partIndex)) {
 			continue;
 		}
+		// The persisted cut counts durable parts only; a split that keeps no
+		// durable suffix would drop the whole durable message on reopen.
+		if (!assistant.parts.slice(partIndex).some(isDurableSessionPart)) {
+			continue;
+		}
 		const suffixAssistant: SessionMessage = {
 			...assistant,
 			parts: assistant.parts.slice(partIndex),
@@ -800,7 +813,9 @@ const makeSplitTurnCutPoint = (
 			return {
 				activeMessages,
 				firstKeptIndex: lastUserIndex,
-				firstKeptAssistantPartIndex: partIndex,
+				firstKeptAssistantPartIndex: assistant.parts
+					.slice(0, partIndex)
+					.filter(isDurableSessionPart).length,
 				summaryMessages: [
 					...messages.slice(0, lastUserIndex),
 					user,

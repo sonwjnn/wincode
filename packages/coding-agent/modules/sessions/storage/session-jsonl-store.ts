@@ -20,6 +20,7 @@ import { z } from "zod";
 import {
 	normalizeProviderModelSelection,
 	type ProviderModelSelection,
+	providerModelSelectionForProviderModel,
 } from "@/modules/providers/provider-model-selection";
 import type { EditMode } from "@/modules/tools";
 import {
@@ -3180,7 +3181,13 @@ const inheritedUsageAtFork = (
 		) {
 			continue;
 		}
-		const model = normalizeProviderModelSelection(record.model);
+		// Record execution settings (such as ThinkingLevel) are not Model identity.
+		const model = normalizeProviderModelSelection(
+			providerModelSelectionForProviderModel(
+				record.model,
+				record.model.pluginProviderSource
+			)
+		);
 		if (model === null) {
 			throw new Error("Fork prefix contains an invalid Model identity.");
 		}
