@@ -64,14 +64,17 @@ const withTerminalSmoke = async (
 		description: string
 	): Promise<string> => {
 		const deadline = Date.now() + tmuxTimeoutMs;
+		let frame = "";
 		while (Date.now() < deadline) {
-			const frame = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
+			frame = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
 			if (predicate(frame)) {
 				return frame;
 			}
 			await Bun.sleep(100);
 		}
-		throw new Error(`Timed out waiting for ${description}.`);
+		throw new Error(
+			`Timed out waiting for ${description}.\n--- pane ---\n${frame}`
+		);
 	};
 	const sendCommand = async (command: string): Promise<void> => {
 		const descriptions: Readonly<Record<string, string>> = {
