@@ -56,8 +56,48 @@ const withTerminalSmoke = async (
 	const sendKeys = async (...keys: string[]): Promise<void> => {
 		await runTmux(["send-keys", "-t", tmuxSession, ...keys]);
 	};
+	// The composer renders before it accepts a Submission, so Enter can be
+	// swallowed on a slow host. Retry only while the draft is still visible and
+	// the message has not reached the transcript.
+	const composerBlock = (frame: string): string => {
+		const lines = frame.split("\n");
+		const start = lines.findLastIndex((line) =>
+			line.trimStart().startsWith("╭")
+		);
+		if (start < 0) {
+			return "";
+		}
+		const end = lines.findIndex(
+			(line, index) => index > start && line.trimStart().startsWith("╰")
+		);
+		return lines
+			.slice(start, end < 0 ? undefined : end)
+			.join(" ")
+			.replace(/\s+/gu, " ");
+	};
 	const sendPrompt = async (text: string): Promise<void> => {
+		const normalized = text.replace(/\s+/gu, " ");
 		await sendKeys(text, "Enter");
+		const deadline = Date.now() + 15_000;
+		await Bun.sleep(300);
+		while (Date.now() < deadline) {
+			const frame = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
+			const composer = composerBlock(frame);
+			if (!composer.includes(normalized)) {
+				return;
+			}
+			const outsideComposer = frame
+				.split("\n")
+				.filter((line) => !composer.includes(line.trim()))
+				.join(" ")
+				.replace(/\s+/gu, " ");
+			if (outsideComposer.includes(normalized)) {
+				return;
+			}
+			await sendKeys("Enter");
+			await Bun.sleep(400);
+		}
+		throw new Error(`The composer did not submit: ${text}`);
 	};
 	const waitForFrame = async (
 		predicate: (frame: string) => boolean,
