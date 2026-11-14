@@ -699,20 +699,14 @@ test("refuses a summary when Provider generation completion is unknown", async (
 	).rejects.toThrow("The model returned an incomplete response.");
 });
 
-test("refuses a nonempty summary stopped by the output-token limit", async () => {
+test.each([
+	["output-token limit", "output-limit"],
+	["provider filtering", "filtered"],
+] as const)("refuses a nonempty summary stopped by %s", async (_stoppedBy, reason) => {
 	await expect(
 		runSummary({ serializedMessages: "history" }, undefined, {
 			kind: "incomplete",
-			reason: "output-limit",
-		})
-	).rejects.toThrow("The model returned an incomplete response.");
-});
-
-test("refuses a nonempty summary stopped by provider filtering", async () => {
-	await expect(
-		runSummary({ serializedMessages: "history" }, undefined, {
-			kind: "incomplete",
-			reason: "filtered",
+			reason,
 		})
 	).rejects.toThrow("The model returned an incomplete response.");
 });
