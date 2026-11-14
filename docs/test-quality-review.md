@@ -508,3 +508,7 @@ Honest limits, so nobody reads this as full coverage:
    (see [Not reviewed](#not-reviewed)).
 3. Drain the remaining 102 fixed waits the ratchet grandfathers, starting with
    the tmux harness (10) and the provider/terminal interaction suites.
+
+Batch 2 ([test-quality-review-batch2.md](./test-quality-review-batch2.md))
+follows up at HEAD `b957995a`: item 2 is fixed (`7fa32ba3`), item 3 is at 100
+sites of which 10 were invisible to the ratchet, item 1 is still open.
