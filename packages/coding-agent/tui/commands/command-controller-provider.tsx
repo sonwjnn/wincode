@@ -27,7 +27,7 @@ import {
 	saveProjectTrustDecision,
 } from "@/modules/project-trust/project-trust";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
-import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+import { getSessionCatalog } from "@/modules/sessions/storage/get-session-storage";
 import { discoverSkills, type Skill } from "@/modules/skills";
 import { useClipboard } from "@/shared/clipboard";
 import { useConfig } from "@/shared/config/config-provider";
@@ -193,7 +193,7 @@ export function CommandControllerProvider({
 					config: promptConfig,
 					dialog,
 					getRecentModelSelections: (limit) =>
-						getSessionStore().listRecentModelSelections(limit),
+						getSessionCatalog().listRecentModelSelections(limit),
 					navigateHome: () => {
 						router.navigate({ to: "/" }).catch(() => undefined);
 					},

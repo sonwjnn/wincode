@@ -42,8 +42,9 @@ import {
 	createSessionJsonlStore,
 	type SessionLogFileIo,
 } from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionLifecycle } from "@/modules/sessions/storage/session-lifecycle";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { toSessionId } from "@/shared/identifiers";
 import {
 	agentId,
@@ -68,7 +69,7 @@ type ExportFixture = Readonly<{
 	projectionSqlite: Readonly<{ exec: (sql: string) => void }>;
 	root: string;
 	setBeforeResolve: (action: (() => Promise<void>) | undefined) => void;
-	store: SessionStore;
+	storage: SessionStorage;
 	workspace: string;
 }>;
 
@@ -140,7 +141,7 @@ const createFixture = async (
 		setBeforeResolve: (action: (() => Promise<void>) | undefined) => {
 			beforeResolve = action;
 		},
-		store,
+		storage: store,
 		workspace,
 	};
 };
@@ -157,7 +158,7 @@ const createAttachment = async (
 	});
 
 const createSessionWithRetainedAttachments = async (fixture: ExportFixture) => {
-	const created = await fixture.store.createEmptySession({
+	const created = await fixture.storage.createEmptySession({
 		id: toSessionId("bundle-export-source"),
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 	});
@@ -203,7 +204,7 @@ const createSessionWithRetainedAttachments = async (fixture: ExportFixture) => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId(turn),
 			});
-			const outcome = await fixture.store.commitSessionRecord({
+			const outcome = await fixture.storage.commitSessionRecord({
 				record,
 				sessionId,
 			});
@@ -211,7 +212,7 @@ const createSessionWithRetainedAttachments = async (fixture: ExportFixture) => {
 				throw new Error("The export fixture record was not projected.");
 			}
 		}
-		const compaction = await fixture.store.appendCompaction({
+		const compaction = await fixture.storage.appendCompaction({
 			estimatedTokensAfter: 20,
 			firstKeptUiMessageId: keptMessageId,
 			id: compactionId("bundle-export-compaction"),
@@ -254,7 +255,7 @@ test("export bundles all retained record and compaction attachments with verifie
 		const destination = path.join(fixture.root, "portable-session");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 		const result = await exportSession({
 			destination,
@@ -304,7 +305,7 @@ test("branch export includes only Selected Path attachments and records its sour
 		createAttachment(fixture, "selected.png", 13),
 	]);
 	try {
-		const { id: sessionId } = await fixture.store.createEmptySession({});
+		const { id: sessionId } = await fixture.storage.createEmptySession({});
 		const [shared, sibling, selected] = attachments;
 		if (
 			shared === undefined ||
@@ -345,25 +346,25 @@ test("branch export includes only Selected Path attachments and records its sour
 			"branch-export-selected-turn"
 		);
 		for (const record of [rootRecord, siblingRecord]) {
-			const outcome = await fixture.store.commitSessionRecord({
+			const outcome = await fixture.storage.commitSessionRecord({
 				record,
 				sessionId,
 			});
 			expect(outcome).toMatchObject({ kind: "committed", projection: "ready" });
 		}
 		const initialTree =
-			await fixture.store.readSessionHistoryTreePage(sessionId);
+			await fixture.storage.readSessionHistoryTreePage(sessionId);
 		const rootEntry = initialTree.entries.find(
 			(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
 		);
 		if (rootEntry === undefined) {
 			throw new Error("Expected the shared root history entry.");
 		}
-		await fixture.store.navigateSessionHistory(sessionId, {
+		await fixture.storage.navigateSessionHistory(sessionId, {
 			targetEntryId: rootEntry.id,
 			operationId: "branch-export-return-to-root",
 		});
-		const selectedOutcome = await fixture.store.commitSessionRecord({
+		const selectedOutcome = await fixture.storage.commitSessionRecord({
 			record: selectedRecord,
 			sessionId,
 		});
@@ -372,11 +373,11 @@ test("branch export includes only Selected Path attachments and records its sour
 			projection: "ready",
 		});
 		const sourceTree =
-			await fixture.store.readSessionHistoryTreePage(sessionId);
+			await fixture.storage.readSessionHistoryTreePage(sessionId);
 		const destination = path.join(fixture.root, "selected-path-attachments");
 		const result = await createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		)({
 			destination,
 			scope: "branch",
@@ -411,7 +412,7 @@ test("branch export includes only Selected Path attachments and records its sour
 test("branch bundle validation rejects an authoritative log with sibling history entries", async () => {
 	const fixture = await createFixture();
 	try {
-		const { id: sessionId } = await fixture.store.createEmptySession({});
+		const { id: sessionId } = await fixture.storage.createEmptySession({});
 		const rootRecord = buildUserSessionRecord({
 			agentId: agentId("branch-scope-validation"),
 			message: createSessionUserMessage("shared root"),
@@ -431,29 +432,29 @@ test("branch bundle validation rejects an authoritative log with sibling history
 			turnId: agentTurnId("branch-scope-validation-selected"),
 		});
 		for (const record of [rootRecord, firstBranchRecord]) {
-			await fixture.store.commitSessionRecord({ record, sessionId });
+			await fixture.storage.commitSessionRecord({ record, sessionId });
 		}
-		const tree = await fixture.store.readSessionHistoryTreePage(sessionId);
+		const tree = await fixture.storage.readSessionHistoryTreePage(sessionId);
 		const rootEntry = tree.entries.find(
 			(entry) => entry.kind === "record" && entry.recordId === rootRecord.id
 		);
 		if (rootEntry === undefined) {
 			throw new Error("Expected the shared root history entry.");
 		}
-		await fixture.store.navigateSessionHistory(sessionId, {
+		await fixture.storage.navigateSessionHistory(sessionId, {
 			targetEntryId: rootEntry.id,
 			operationId: "branch-scope-validation-return-to-root",
 		});
-		await fixture.store.commitSessionRecord({
+		await fixture.storage.commitSessionRecord({
 			record: selectedBranchRecord,
 			sessionId,
 		});
 		const sourceTree =
-			await fixture.store.readSessionHistoryTreePage(sessionId);
+			await fixture.storage.readSessionHistoryTreePage(sessionId);
 		const destination = path.join(fixture.root, "tree-relabelled-as-branch");
 		await createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		)({
 			destination,
 			sessionId,
@@ -485,14 +486,14 @@ test("branch bundle validation rejects an authoritative log with sibling history
 test("branch bundle validation rejects manifest source provenance that disagrees with the log", async () => {
 	const fixture = await createFixture();
 	try {
-		const { id: sessionId } = await fixture.store.createEmptySession({});
+		const { id: sessionId } = await fixture.storage.createEmptySession({});
 		const record = buildUserSessionRecord({
 			agentId: agentId("branch-provenance-validation"),
 			message: createSessionUserMessage("branch provenance source record"),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("branch-provenance-validation-turn"),
 		});
-		const write = await fixture.store.commitSessionRecord({
+		const write = await fixture.storage.commitSessionRecord({
 			record,
 			sessionId,
 		});
@@ -500,7 +501,7 @@ test("branch bundle validation rejects manifest source provenance that disagrees
 		const destination = path.join(fixture.root, "branch-provenance-bundle");
 		const exported = await createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		)({
 			destination,
 			scope: "branch",
@@ -552,7 +553,7 @@ test("export reports a missing Session log without creating a bundle", async () 
 		const sessionId = toSessionId("bundle-export-missing");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 
 		await expect(
@@ -573,7 +574,7 @@ test("export refuses an existing destination without overwriting user data", asy
 		await Bun.write(path.join(destination, "keep.txt"), "user data");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 		await expect(
 			exportSession({ destination, sessionId })
@@ -595,7 +596,7 @@ test("atomic publish preserves an empty destination created after the preflight 
 		const destination = path.join(fixture.root, "raced-empty-destination");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store,
+			fixture.storage,
 			{
 				beforePublish: async (_stagingPath, outputDirectory) => {
 					expect(outputDirectory).toBe(destination);
@@ -619,12 +620,12 @@ test("export refuses a Session Writer already held by active work instead of int
 	const fixture = await createFixture();
 	try {
 		const { sessionId } = await createSessionWithRetainedAttachments(fixture);
-		const writer = await fixture.store.acquireSessionWriter(sessionId);
+		const writer = await fixture.storage.acquireSessionWriter(sessionId);
 		try {
 			const destination = path.join(fixture.root, "busy-export");
 			const exportSession = createSessionBundleExportOperation(
 				fixture.manager,
-				fixture.store
+				fixture.storage
 			);
 			await expect(
 				exportSession({ destination, sessionId })
@@ -650,7 +651,7 @@ test("export refuses a blocked projection before publishing any bundle", async (
 		const destination = path.join(fixture.root, "blocked-projection-export");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 
 		await expect(
@@ -691,7 +692,7 @@ test("export refuses an indeterminate log write before publishing any bundle", a
 		const destination = path.join(fixture.root, "indeterminate-export");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 
 		await expect(
@@ -803,7 +804,7 @@ test("export reports sync-time source mutation with sequence and first changed b
 	};
 	const fixture = await createFixture(fileIo);
 	try {
-		const created = await fixture.store.createEmptySession({
+		const created = await fixture.storage.createEmptySession({
 			id: toSessionId("sync-race-export-session"),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
@@ -820,7 +821,7 @@ test("export reports sync-time source mutation with sequence and first changed b
 		mutateOnSync = true;
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 
 		await expect(
@@ -849,13 +850,12 @@ test("export operation preserves source corruption diagnostics", async () => {
 			"Session log contains a duplicate retained record identity.",
 			{ offset: 123, sequence: 4 }
 		);
-		const withSessionBundleExport: NonNullable<
-			SessionStore["withSessionBundleExport"]
-		> = async () => {
-			throw sourceError;
-		};
+		const withSessionBundleExport: SessionLifecycle["withSessionBundleExport"] =
+			async () => {
+				throw sourceError;
+			};
 		const exportSession = createSessionBundleExportOperation(fixture.manager, {
-			...fixture.store,
+			...fixture.storage,
 			withSessionBundleExport,
 		});
 
@@ -887,7 +887,7 @@ test("export refuses corrupt authoritative history before publishing any bundle"
 		const destination = path.join(fixture.root, "corrupt-export");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 		await expect(
 			exportSession({ destination, sessionId })
@@ -914,7 +914,7 @@ test("cancelled export removes staging output and releases attachment pins", asy
 		const destination = path.join(fixture.root, "cancelled-export");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 		const exporting = exportSession({
 			destination,
@@ -957,7 +957,7 @@ test("Session deletion is serialized behind an in-flight export writer operation
 		const completionOrder: string[] = [];
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store,
+			fixture.storage,
 			{
 				beforePublish: async () => {
 					atPublish.resolve();
@@ -971,7 +971,7 @@ test("Session deletion is serialized behind an in-flight export writer operation
 		});
 		await atPublish.promise;
 		let deletionCompleted = false;
-		deleting = fixture.store.deleteSession(sessionId).then((outcome) => {
+		deleting = fixture.storage.deleteSession(sessionId).then((outcome) => {
 			deletionCompleted = true;
 			completionOrder.push("delete");
 			return outcome;
@@ -1014,7 +1014,7 @@ test("GC cannot reclaim closure blobs while export copies pinned source attachme
 		const destination = path.join(fixture.root, "gc-race-export");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		);
 		exporting = exportSession({ destination, sessionId });
 		await started.promise;
@@ -1091,7 +1091,7 @@ test("a failed pre-publication attempt leaves the destination absent and removes
 		const destination = path.join(fixture.root, "crashed-publish");
 		const exportSession = createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store,
+			fixture.storage,
 			{
 				beforePublish: async () => {
 					throw new Error("simulated process failure before atomic rename");
@@ -1118,7 +1118,7 @@ test("bundle validation refuses symlinked members instead of following files out
 		const destination = path.join(fixture.root, "symlinked-bundle");
 		await createSessionBundleExportOperation(
 			fixture.manager,
-			fixture.store
+			fixture.storage
 		)({
 			destination,
 			sessionId,

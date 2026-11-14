@@ -40,7 +40,9 @@ import {
 	createDefaultSessionProviderCollection,
 	type InteractiveSessionProviderCollection,
 } from "@/modules/sessions/provider-collection";
-import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+import { getSessionStorage } from "@/modules/sessions/storage/get-session-storage";
+import type { SessionCatalog } from "@/modules/sessions/storage/session-catalog";
+import type { SessionLifecycle } from "@/modules/sessions/storage/session-lifecycle";
 import { CompactNameList } from "@/modules/sessions/ui/components/startup-overview";
 import { NewSessionView } from "@/modules/sessions/ui/views/new-session-view";
 import { ConfigProvider } from "@/shared/config/config-provider";
@@ -1139,7 +1141,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			fixture.credentialStorageId,
 			counters
 		);
-		const store = getSessionStore();
+		const store = getSessionStorage();
 		await store.resetSessionData();
 		const setup = await renderHomeView(createCollection, {
 			defaultAgentId: fixture.agentId,
@@ -1185,7 +1187,11 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 	test("reports committed-but-blocked Session creation and does not start Agent work", async () => {
 		const operations: string[] = [];
 		const fixture = createAgentProviderFixture({ operations });
-		const store = getSessionStore();
+		const store = getSessionStorage() as {
+			createSessionWithExternalizedMessage: SessionLifecycle["createSessionWithExternalizedMessage"];
+			resetSessionData: SessionLifecycle["resetSessionData"];
+			listSessions: SessionCatalog["listSessions"];
+		};
 		await store.resetSessionData();
 		const originalCreateSessionWithExternalizedMessage =
 			store.createSessionWithExternalizedMessage;
@@ -1239,7 +1245,11 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 	test("explains an indeterminate Session creation without claiming it was saved", async () => {
 		const operations: string[] = [];
 		const fixture = createAgentProviderFixture({ operations });
-		const store = getSessionStore();
+		const store = getSessionStorage() as {
+			createSessionWithExternalizedMessage: SessionLifecycle["createSessionWithExternalizedMessage"];
+			resetSessionData: SessionLifecycle["resetSessionData"];
+			listSessions: SessionCatalog["listSessions"];
+		};
 		await store.resetSessionData();
 		const originalCreateSessionWithExternalizedMessage =
 			store.createSessionWithExternalizedMessage;
@@ -1302,7 +1312,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			fixture.credentialStorageId,
 			counters
 		);
-		const store = getSessionStore();
+		const store = getSessionStorage();
 		await store.resetSessionData();
 		const setup = await renderHomeView(createCollection, {
 			defaultAgentId: fixture.agentId,
@@ -1343,7 +1353,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			pendingSnapshot.promise,
 			fixture.model.providerId
 		);
-		const store = getSessionStore();
+		const store = getSessionStorage();
 		await store.resetSessionData();
 		const setup = await renderHomeView(createCollection, {
 			defaultAgentId: fixture.agentId,
@@ -1396,7 +1406,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			"authoritative",
 			pendingSnapshot.promise
 		);
-		const store = getSessionStore();
+		const store = getSessionStorage();
 		await store.resetSessionData();
 		const setup = await renderHomeView(createCollection, {
 			defaultAgentId: fixture.agentId,
@@ -1428,7 +1438,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			fixture.credentialStorageId,
 			counters
 		);
-		const store = getSessionStore();
+		const store = getSessionStorage();
 		await store.resetSessionData();
 		const setup = await renderHomeView(createCollection, {
 			defaultAgentId: fixture.agentId,
@@ -1568,7 +1578,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 		const operations: string[] = [];
 		const fixture = createAgentProviderFixture({ operations });
 		const counters = { collectionConstructions: 0, storeConstructions: 0 };
-		const store = getSessionStore();
+		const store = getSessionStorage();
 		await store.resetSessionData();
 		await store.createEmptySession({ model: fixture.model });
 		const setup = await renderHomeView(
@@ -1609,7 +1619,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 			operations,
 		});
 		const counters = { collectionConstructions: 0, storeConstructions: 0 };
-		const store = getSessionStore();
+		const store = getSessionStorage();
 		await store.resetSessionData();
 		const setup = await renderHomeView(
 			createTrackedHomeProviderCollectionFactory(
@@ -1668,7 +1678,7 @@ describe("NewSessionView pinned Plugin Agent model preflight", () => {
 				credentialStore,
 				modelStore,
 			});
-		const sessionStore = getSessionStore();
+		const sessionStore = getSessionStorage();
 		await sessionStore.resetSessionData();
 		const setup = await renderHomeView(createCollection);
 		try {

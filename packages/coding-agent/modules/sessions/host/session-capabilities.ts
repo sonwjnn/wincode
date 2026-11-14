@@ -44,7 +44,7 @@ import {
 	resolveSessionDatabasePath,
 } from "../storage/path";
 import { createSessionJsonlStore } from "../storage/session-jsonl-store";
-import type { SessionStore } from "../storage/session-store";
+import type { SessionStorage } from "../storage/session-storage";
 import { createPluginCompactionLifecycle } from "./plugin-compaction-lifecycle";
 import { createSessionHostManager } from "./session-host-manager";
 import type { SessionCapabilities, SessionHostManager } from "./types";
@@ -85,7 +85,7 @@ export type SessionCapabilitiesOptions = Readonly<{
 	 */
 	plugin: SessionPluginRuntime;
 	sessionHostManager?: SessionHostManager;
-	store?: SessionStore;
+	storage?: SessionStorage;
 	turnToolResolver?: TurnToolResolver;
 	workspace: string;
 }>;
@@ -102,7 +102,7 @@ export type SessionCapabilitiesAssembly = Readonly<{
 	 */
 	getPluginRuntime: () => PluginRuntime;
 	shutdown: () => Promise<void>;
-	store: SessionStore;
+	storage: SessionStorage;
 	workspace: string;
 	workspaceId: WorkspaceId;
 }>;
@@ -218,7 +218,7 @@ export const createSessionCapabilities = async ({
 	database: providedDatabase,
 	databasePath,
 	getRegistry: providedGetRegistry,
-	store: providedStore,
+	storage: providedStorage,
 	plugin,
 	getPluginRuntime: providedGetPluginRuntime,
 	sessionHostManager: providedSessionHostManager,
@@ -279,12 +279,12 @@ export const createSessionCapabilities = async ({
 	let ownedDatabase: OpenedSessionDatabase | undefined;
 	let ownedProjectionDatabase: OpenedSessionDatabase | undefined;
 	try {
-		if (providedDatabase === undefined && providedStore === undefined) {
+		if (providedDatabase === undefined && providedStorage === undefined) {
 			ownedDatabase = await openSessionDatabase({ databasePath });
 		}
 		const database = providedDatabase ?? ownedDatabase?.db;
-		let store: SessionStore;
-		if (providedStore === undefined) {
+		let storage: SessionStorage;
+		if (providedStorage === undefined) {
 			ownedProjectionDatabase = createDatabase(
 				resolveLocalSessionProjectionPath(database?.$client.filename)
 			);
@@ -298,12 +298,12 @@ export const createSessionCapabilities = async ({
 					workspaceRoot: workspace,
 				} satisfies DrizzleSessionStoreOptions
 			);
-			store = createSessionJsonlStore(
+			storage = createSessionJsonlStore(
 				drizzleStore,
 				resolveLocalSessionLogRoot(database?.$client.filename)
 			);
 		} else {
-			store = providedStore;
+			storage = providedStorage;
 		}
 		/**
 		 * The Agent registry a capability reads. A caller that supplies a source
@@ -331,10 +331,10 @@ export const createSessionCapabilities = async ({
 			workspace,
 		});
 		const compaction: SessionCompactionModule = createSessionCompaction({
-			attachmentStore: store.attachmentStore,
+			attachments: storage,
 			estimateTokens: estimateCompactionTokens,
 			lifecycle: pluginCompactionLifecycle,
-			store,
+			store: storage,
 		});
 		const sessionHostManager = sessionHostManagerFor(
 			providedSessionHostManager,
@@ -376,7 +376,6 @@ export const createSessionCapabilities = async ({
 				}).getCompactionSettings(model, providerModel),
 			getConfig: readConfigRuntime,
 			getRegistry,
-			getStore: () => store,
 			getSessionHostManager: () => sessionHostManager,
 			...(getSessionSdk === undefined ? {} : { getSessionSdk }),
 			getPluginRuntime,
@@ -386,7 +385,7 @@ export const createSessionCapabilities = async ({
 			capabilities,
 			getPluginRuntime,
 			shutdown,
-			store,
+			storage,
 			workspace,
 			workspaceId: workspaceIdentity(workspace),
 		};

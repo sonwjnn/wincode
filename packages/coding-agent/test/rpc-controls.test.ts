@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
+import type { SessionAttachments } from "@/modules/sessions/storage/session-attachments";
+import type { SessionForkResult } from "@/modules/sessions/storage/session-lifecycle";
 import {
 	RPC_ERROR_CODES,
 	type RpcRequest,
@@ -29,11 +31,9 @@ import type {
 	SessionMessage,
 	SessionSendInput,
 	SessionSteeringAdmission,
-	SessionStore,
 	SessionSubmissionAdmission,
 } from "../modules/sessions/host/session-rpc";
 import type { SessionHostManager } from "../modules/sessions/host/types";
-import type { SessionForkResult } from "../modules/sessions/storage/session-store";
 import type { SessionSendOutcome } from "../modules/sessions/submission-types";
 import { sessionId, sessionRecordId } from "./support/identifiers";
 
@@ -77,7 +77,7 @@ const createHandler = ({
 	active?: boolean;
 	steeringAdmission?: SessionSteeringAdmission;
 	retryableSubmission?: SessionSteeringMessage;
-	attachmentStore?: NonNullable<SessionStore["attachmentStore"]>;
+	attachmentStore?: SessionAttachments;
 	send?: (
 		input: SessionSendInput,
 		emit: (event: SessionSubmissionEvent) => void
@@ -155,7 +155,10 @@ const createHandler = ({
 			? {}
 			: {
 					assembly: fromPartial<RpcAssembly>({
-						store: fromPartial<SessionStore>({ attachmentStore }),
+						storage: fromPartial<RpcAssembly["storage"]>({
+							resolveAttachmentReference: (reference: AttachmentReference) =>
+								attachmentStore.resolveAttachmentReference(reference),
+						}),
 					}),
 				}),
 		boundSessionId: "session-1" as SessionId,
@@ -437,10 +440,8 @@ test("session submit rejects missing or corrupt stored attachments before admiss
 	const attachmentId = `v1-${"a".repeat(64)}`;
 	for (const availability of ["missing", "corrupt"] as const) {
 		const controls = createHandler({
-			attachmentStore: fromPartial<
-				NonNullable<SessionStore["attachmentStore"]>
-			>({
-				resolve: async (reference: AttachmentReference) => ({
+			attachmentStore: fromPartial<SessionAttachments>({
+				resolveAttachmentReference: async (reference: AttachmentReference) => ({
 					availability,
 					reference,
 				}),
@@ -571,7 +572,7 @@ test("RPC refuses fresh Session creation before persistence when its ProviderCol
 	const selection: Selection = { agentId: "build", model };
 	let createSessionCalls = 0;
 	let externalizationCalls = 0;
-	const store = fromPartial<SessionStore>({
+	const store = fromPartial<RpcAssembly["storage"]>({
 		createSession: async () => {
 			createSessionCalls += 1;
 			return { id: "session-1" };
@@ -610,7 +611,7 @@ test("RPC refuses fresh Session creation before persistence when its ProviderCol
 						}),
 				},
 				shutdown: async () => undefined,
-				store,
+				storage: store,
 				workspace: process.cwd(),
 				workspaceId: "workspace-1",
 			}),
@@ -735,7 +736,7 @@ test("RPC rewind switches active Session only after the fork can be opened", asy
 			assembly: fromPartial<RpcAssembly>({
 				capabilities,
 				shutdown: async () => undefined,
-				store: fromPartial<SessionStore>({}),
+				storage: fromPartial<RpcAssembly["storage"]>({}),
 				workspace: process.cwd(),
 				workspaceId: "rpc-rewind-workspace",
 			}),

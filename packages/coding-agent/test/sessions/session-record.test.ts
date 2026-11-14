@@ -14,11 +14,11 @@ import type { ProviderModelSelection } from "@/modules/providers/provider-model-
 import type { SessionMessage } from "@/modules/sessions/message";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+import type { SessionProjection } from "@/modules/sessions/storage/session-projection";
 import {
 	buildUserSessionRecord,
 	SessionRecordInvariantError,
 } from "@/modules/sessions/storage/session-record";
-import type { SessionProjectionStore } from "@/modules/sessions/storage/session-store";
 import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
 import type { SessionId } from "@/shared/identifiers";
 import {
@@ -133,7 +133,7 @@ const toolRecord = (id: string): SessionRecord => ({
 
 type TestStore = {
 	databasePath: string;
-	store: SessionProjectionStore;
+	storage: SessionProjection;
 };
 
 type CreatedSession = {
@@ -147,23 +147,23 @@ const createTestStore = async (): Promise<TestStore> => {
 	);
 	const databasePath = path.join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
-	const store = createDrizzleSessionStore(db, {
+	const storage = createDrizzleSessionStore(db, {
 		attachmentRoot: path.join(dir, "attachments"),
 	});
-	return { databasePath, store };
+	return { databasePath, storage };
 };
 
 const createSession = async (
-	store: SessionProjectionStore,
+	storage: SessionProjection,
 	text = "hello"
 ): Promise<CreatedSession> => {
-	const { id } = await store.createSession({
+	const { id } = await storage.createSession({
 		agent: agentId("build"),
 		message: userMessage(text),
 		model,
 		turnId: agentTurnId(`turn-initial-${text}`),
 	});
-	const [initialRecord] = await store.listSessionRecords(id);
+	const [initialRecord] = await storage.listSessionRecords(id);
 	if (isUndefined(initialRecord)) {
 		throw new Error("The initial user record was not persisted.");
 	}
@@ -171,11 +171,11 @@ const createSession = async (
 };
 
 test("creates an SDK-ready empty Session without inventing a user Submission", async () => {
-	const { store } = await createTestStore();
-	const { id } = await store.createEmptySession({ model });
+	const { storage } = await createTestStore();
+	const { id } = await storage.createEmptySession({ model });
 
-	expect(await store.listSessionRecords(id)).toEqual([]);
-	expect(await store.getSession(id)).toMatchObject({
+	expect(await storage.listSessionRecords(id)).toEqual([]);
+	expect(await storage.getSession(id)).toMatchObject({
 		id,
 		lastMessageAt: null,
 		model,
@@ -184,8 +184,8 @@ test("creates an SDK-ready empty Session without inventing a user Submission", a
 });
 
 test("persists warm usage exactly once outside Session Records", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store, "warm-session");
+	const { storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage, "warm-session");
 	const input = {
 		costUsd: null,
 		id: sessionUsageEntryId("warm-usage-1"),
@@ -200,17 +200,17 @@ test("persists warm usage exactly once outside Session Records", async () => {
 		},
 	};
 
-	const saved = await store.createSessionUsageEntry(input);
-	const retried = await store.createSessionUsageEntry(input);
+	const saved = await storage.createSessionUsageEntry(input);
+	const retried = await storage.createSessionUsageEntry(input);
 
 	expect(retried).toEqual(saved);
-	expect(await store.listSessionUsageEntries(id)).toEqual([saved]);
-	expect(await store.listSessionRecords(id)).toEqual([initialRecord]);
+	expect(await storage.listSessionUsageEntries(id)).toEqual([saved]);
+	expect(await storage.listSessionRecords(id)).toEqual([initialRecord]);
 });
 
 test("persists the accepted user message as an ordinary record", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store, "first");
+	const { storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage, "first");
 
 	expect(initialRecord.outcome).toEqual({ kind: "user" });
 	expect(initialRecord.messages).toEqual([
@@ -220,11 +220,11 @@ test("persists the accepted user message as an ordinary record", async () => {
 			role: "user",
 		},
 	]);
-	expect(await store.listSessionRecords(id)).toEqual([initialRecord]);
+	expect(await storage.listSessionRecords(id)).toEqual([initialRecord]);
 });
 test("round-trips the logical user link for retried assistant rows", async () => {
-	const { store } = await createTestStore();
-	const { id } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id } = await createSession(storage);
 	const assistant = assistantRecord("record-retry", "retried");
 	const message = assistant.messages[0];
 	if (isUndefined(message)) {
@@ -243,12 +243,12 @@ test("round-trips the logical user link for retried assistant rows", async () =>
 		],
 	};
 
-	await store.commitSessionRecord({
+	await storage.commitSessionRecord({
 		record: retriedRecord,
 		sessionId: id,
 	});
 
-	const records = await store.listSessionRecords(id);
+	const records = await storage.listSessionRecords(id);
 	const persisted = records.find(
 		({ id: recordId }) => recordId === retriedRecord.id
 	);
@@ -261,10 +261,10 @@ test("round-trips the logical user link for retried assistant rows", async () =>
 });
 
 test("reopens durable records without reconstructing or running execution", async () => {
-	const { databasePath, store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store);
+	const { databasePath, storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage);
 	const assistant = assistantRecord("record-assistant", "done");
-	await store.commitSessionRecord({ record: assistant, sessionId: id });
+	await storage.commitSessionRecord({ record: assistant, sessionId: id });
 
 	const { db } = createDatabase(databasePath);
 	const reopened = createDrizzleSessionStore(db, {
@@ -278,15 +278,15 @@ test("reopens durable records without reconstructing or running execution", asyn
 });
 
 test("round-trips assistant and tool records independently", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage);
 	const tool = toolRecord("record-tool");
 	const assistant = assistantRecord("record-assistant", "tool result");
 
-	await store.commitSessionRecord({ record: tool, sessionId: id });
-	await store.commitSessionRecord({ record: assistant, sessionId: id });
+	await storage.commitSessionRecord({ record: tool, sessionId: id });
+	await storage.commitSessionRecord({ record: assistant, sessionId: id });
 
-	expect(await store.listSessionRecords(id)).toEqual([
+	expect(await storage.listSessionRecords(id)).toEqual([
 		initialRecord,
 		tool,
 		assistant,
@@ -294,8 +294,8 @@ test("round-trips assistant and tool records independently", async () => {
 });
 
 test("reopens effective turn records with their trusted Plugin owner provenance", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage);
 	const sourceBoundModel: ProviderModelSelection = {
 		...model,
 		pluginProviderSource: {
@@ -314,9 +314,12 @@ test("reopens effective turn records with their trusted Plugin owner provenance"
 		model: sourceBoundModel,
 	};
 
-	await store.commitSessionRecord({ record: sourceBoundRecord, sessionId: id });
+	await storage.commitSessionRecord({
+		record: sourceBoundRecord,
+		sessionId: id,
+	});
 
-	const records = await store.listSessionRecords(id);
+	const records = await storage.listSessionRecords(id);
 	expect(records).toEqual([initialRecord, sourceBoundRecord]);
 	expect(projectSessionRecords(records)[1]?.metadata?.model).toEqual(
 		sourceBoundModel
@@ -324,8 +327,8 @@ test("reopens effective turn records with their trusted Plugin owner provenance"
 });
 
 test("persists an optional Plugin tool without adding a built-in tool name", async () => {
-	const { store } = await createTestStore();
-	const { id } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id } = await createSession(storage);
 	const source = toolRecord("record-plugin-tool");
 	const message = source.messages[0];
 	const part = message?.parts[0];
@@ -342,10 +345,10 @@ test("persists an optional Plugin tool without adding a built-in tool name", asy
 		],
 	};
 
-	await store.commitSessionRecord({ record: pluginRecord, sessionId: id });
+	await storage.commitSessionRecord({ record: pluginRecord, sessionId: id });
 
 	const storedTool = projectSessionRecords(
-		await store.listSessionRecords(id)
+		await storage.listSessionRecords(id)
 	)[1]?.parts[0];
 	expect(storedTool).toMatchObject({
 		toolName: "jira:create_issue",
@@ -354,23 +357,23 @@ test("persists an optional Plugin tool without adding a built-in tool name", asy
 });
 
 test("round-trips a failed assistant record with its safe failure", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage);
 	const record = failedRecord("record-failed");
 
-	await store.commitSessionRecord({ record, sessionId: id });
+	await storage.commitSessionRecord({ record, sessionId: id });
 
-	expect(await store.listSessionRecords(id)).toEqual([initialRecord, record]);
+	expect(await storage.listSessionRecords(id)).toEqual([initialRecord, record]);
 });
 
 test("round-trips a cancelled assistant record without an interrupted badge", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage);
 	const record = cancelledRecord("record-cancelled");
 
-	await store.commitSessionRecord({ record, sessionId: id });
+	await storage.commitSessionRecord({ record, sessionId: id });
 
-	expect(await store.listSessionRecords(id)).toEqual([initialRecord, record]);
+	expect(await storage.listSessionRecords(id)).toEqual([initialRecord, record]);
 	expect(projectSessionRecords([record])[0]?.metadata).toEqual({
 		agent: agentId("build"),
 		model,
@@ -459,19 +462,19 @@ test("keeps records isolated per session and per workspace", async () => {
 });
 
 test("orders concurrently committed records by their allocated position", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage);
 	const first = assistantRecord("record-1", "one");
 	const second = assistantRecord("record-2", "two");
 	const third = failedRecord("record-3");
 
 	await Promise.all([
-		store.commitSessionRecord({ record: first, sessionId: id }),
-		store.commitSessionRecord({ record: second, sessionId: id }),
-		store.commitSessionRecord({ record: third, sessionId: id }),
+		storage.commitSessionRecord({ record: first, sessionId: id }),
+		storage.commitSessionRecord({ record: second, sessionId: id }),
+		storage.commitSessionRecord({ record: third, sessionId: id }),
 	]);
 
-	expect(await store.listSessionRecords(id)).toEqual([
+	expect(await storage.listSessionRecords(id)).toEqual([
 		initialRecord,
 		first,
 		second,
@@ -480,36 +483,36 @@ test("orders concurrently committed records by their allocated position", async 
 });
 
 test("rejects malformed records without partial durable state", async () => {
-	const { store } = await createTestStore();
-	const { id, initialRecord } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id, initialRecord } = await createSession(storage);
 	const malformed: SessionRecord = fromAny({
 		...assistantRecord("record-invalid", "bad"),
 		outcome: { kind: "assistant", terminal: { finishedAt: 1, kind: "failed" } },
 	});
 
 	await expect(
-		store.commitSessionRecord({ record: malformed, sessionId: id })
+		storage.commitSessionRecord({ record: malformed, sessionId: id })
 	).rejects.toBeInstanceOf(SessionRecordInvariantError);
-	expect(await store.listSessionRecords(id)).toEqual([initialRecord]);
+	expect(await storage.listSessionRecords(id)).toEqual([initialRecord]);
 
-	await store.commitSessionRecord({
+	await storage.commitSessionRecord({
 		record: assistantRecord("record-valid", "good"),
 		sessionId: id,
 	});
-	expect(await store.listSessionRecords(id)).toHaveLength(2);
+	expect(await storage.listSessionRecords(id)).toHaveLength(2);
 });
 
 test("deletes Conversation Records with their session", async () => {
-	const { store } = await createTestStore();
-	const { id } = await createSession(store);
-	await store.commitSessionRecord({
+	const { storage } = await createTestStore();
+	const { id } = await createSession(storage);
+	await storage.commitSessionRecord({
 		record: assistantRecord("record-1", "hello"),
 		sessionId: id,
 	});
 
-	await store.deleteSession(id);
+	await storage.deleteSession(id);
 
-	expect(await store.listSessionRecords(id)).toEqual([]);
+	expect(await storage.listSessionRecords(id)).toEqual([]);
 });
 
 test("projects user attachments and metadata into stable transcript messages", () => {
@@ -615,7 +618,7 @@ test("projects a failed assistant row as its safe transcript message", () => {
 });
 
 test("restores a Plugin Provider selection with its trusted source owner", async () => {
-	const { store } = await createTestStore();
+	const { storage } = await createTestStore();
 	const ownerBoundModel: ProviderModelSelection = {
 		modelId: modelId("shared-model"),
 		pluginProviderSource: {
@@ -624,8 +627,8 @@ test("restores a Plugin Provider selection with its trusted source owner", async
 		},
 		providerId: "shared_provider",
 	};
-	const { id } = await store.createEmptySession({ model: ownerBoundModel });
-	const restored = await store.getSession(id);
+	const { id } = await storage.createEmptySession({ model: ownerBoundModel });
+	const restored = await storage.getSession(id);
 	expect(restored.model).toEqual(ownerBoundModel);
 
 	const record = buildUserSessionRecord({
@@ -637,8 +640,8 @@ test("restores a Plugin Provider selection with its trusted source owner", async
 		model: ownerBoundModel,
 		turnId: agentTurnId("turn-plugin-owner"),
 	});
-	await store.commitSessionRecord({ record, sessionId: id });
-	const [persisted] = await store.listSessionRecords(id);
+	await storage.commitSessionRecord({ record, sessionId: id });
+	const [persisted] = await storage.listSessionRecords(id);
 	expect(persisted?.messages[0]?.metadata?.model).toEqual(ownerBoundModel);
 	expect(projectSessionRecords([record])[0]?.metadata?.model).toEqual(
 		ownerBoundModel
@@ -646,8 +649,8 @@ test("restores a Plugin Provider selection with its trusted source owner", async
 });
 
 test("round-trips the Agent Turn a Steering Message joined", async () => {
-	const { store } = await createTestStore();
-	const { id } = await createSession(store);
+	const { storage } = await createTestStore();
+	const { id } = await createSession(storage);
 	const steering: SessionRecord = {
 		...buildUserSessionRecord({
 			agentId: agentId("build"),
@@ -661,9 +664,9 @@ test("round-trips the Agent Turn a Steering Message joined", async () => {
 			turnId: agentTurnId("turn-joined"),
 		}),
 	};
-	await store.commitSessionRecord({ record: steering, sessionId: id });
+	await storage.commitSessionRecord({ record: steering, sessionId: id });
 
-	const records = await store.listSessionRecords(id);
+	const records = await storage.listSessionRecords(id);
 	const persisted = records.find(
 		({ id: recordId }) => recordId === steering.id
 	);

@@ -16,7 +16,7 @@ test("legacy prompt history restores unique markers and drops ambiguous literal 
 
 	try {
 		for (const text of [uniqueText, ambiguousText]) {
-			await store.recordPrompt({
+			await store.promptHistory.recordPrompt({
 				files: [],
 				pastedText: [{ start: 0, text: "first\nsecond\nthird", token }],
 				text,
@@ -42,7 +42,7 @@ test("legacy prompt history restores unique markers and drops ambiguous literal 
 				.run(JSON.stringify(entry), row.id);
 		}
 
-		expect(await store.getPromptHistory()).toEqual([
+		expect(await store.promptHistory.getPromptHistory()).toEqual([
 			{ files: [], pastedText: [], text: ambiguousText },
 			{
 				files: [],

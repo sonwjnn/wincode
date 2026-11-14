@@ -37,7 +37,7 @@ import {
 import { createEnvironmentRestorer } from "../support/environment";
 import { modelId } from "../support/identifiers";
 import { createEmptyPluginRuntime } from "../support/plugin-runtime";
-import { sessionStoreWithSuccessfulWrites } from "../support/session-write-store";
+import { sessionStorageWithSuccessfulWrites } from "../support/session-facets";
 
 const workspace = path.join(testDirectory, "workspace");
 const homeRoot = path.join(testDirectory, "home");
@@ -70,7 +70,7 @@ const registry: AgentRegistry = buildAgentRegistry(
 	})
 );
 const database = createDatabase(path.join(testDirectory, "sessions.db"));
-const store = sessionStoreWithSuccessfulWrites(
+const store = sessionStorageWithSuccessfulWrites(
 	createDrizzleSessionStore(database.db, { workspaceRoot: workspace })
 );
 
@@ -90,7 +90,7 @@ const resetLifecycleLog = async (): Promise<void> => {
 const sources = {
 	configRuntime: () => configRuntime,
 	registry: () => null,
-	store: () => store,
+	storage: () => store,
 };
 
 afterAll(async () => {
@@ -139,7 +139,7 @@ test("binds a Session SDK that writes through the services' Session Store", asyn
 	});
 
 	const sessionId = await services.sessionSdk.createEmptySession();
-	expect(await services.store.getSession(sessionId)).toBeDefined();
+	expect(await services.storage.getSession(sessionId)).toBeDefined();
 	await services.shutdown();
 });
 
@@ -330,7 +330,7 @@ test("runs without Plugins when the caller supplies neither a runtime nor a poli
 		policy: { cwd: workspace, workspace },
 		sources: {
 			configRuntime: () => configRuntime,
-			store: () => store,
+			storage: () => store,
 		},
 	});
 

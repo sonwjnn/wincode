@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { act } from "react";
-import type { SessionForkProvenance } from "@/modules/sessions/storage/session-store";
+import type { SessionForkProvenance } from "@/modules/sessions/storage/session-lifecycle";
 import { StoredSessionHistoryView } from "@/modules/sessions/ui/views/stored-session-history-view";
 import type { SessionStatistics } from "@/modules/sessions/usage/session-statistics";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";

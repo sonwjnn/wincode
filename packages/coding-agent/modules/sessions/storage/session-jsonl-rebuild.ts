@@ -1,15 +1,15 @@
 import { omitUndefined } from "@wincode/utils";
 import { isValidSessionId, type SessionId } from "@/shared/identifiers";
+import type { SessionCatalogIssue } from "./session-catalog";
 import {
 	SessionLogError,
 	type SessionProjectionMaintenanceState,
 } from "./session-jsonl-codec";
 import type {
-	SessionCatalogIssue,
 	SessionProjectionMaintenanceGate,
 	SessionProjectionRebuildResult,
 	SessionProjectionRebuildScope,
-} from "./session-store";
+} from "./session-lifecycle";
 import type { SessionWriterLock } from "./session-writer-lock";
 
 export type SessionJsonlCatalogSnapshot = Readonly<{

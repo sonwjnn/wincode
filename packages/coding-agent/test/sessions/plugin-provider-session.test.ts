@@ -375,6 +375,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		let host = await manager.openHost({
 			autoContinue: false,
 			capabilities: services.capabilities,
+			storage: services.storage,
 			sessionId,
 			view: false,
 		});
@@ -547,14 +548,14 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 			"authorized:owner-b"
 		);
 		const latestEffectiveModel = (
-			await services.store.listSessionRecords(sessionId)
+			await services.storage.listSessionRecords(sessionId)
 		)
 			.reverse()
 			.flatMap(({ messages }) => messages)
 			.find(({ role, metadata }) => role === "assistant" && metadata?.model)
 			?.metadata?.model;
 		expect(latestEffectiveModel).toEqual(selectedB);
-		expect((await services.store.getSession(sessionId))?.model).toEqual(
+		expect((await services.storage.getSession(sessionId))?.model).toEqual(
 			selectedB
 		);
 
@@ -566,6 +567,7 @@ test("Interactive Session connects and sends through the owner-scoped Plugin Pro
 		host = await manager.openHost({
 			autoContinue: false,
 			capabilities: services.capabilities,
+			storage: services.storage,
 			sessionId,
 			view: false,
 		});
@@ -724,6 +726,7 @@ test("a Plugin disabled by Session start failure has no Provider in that Session
 		const host = await manager.openHost({
 			autoContinue: false,
 			capabilities: services.capabilities,
+			storage: services.storage,
 			sessionId,
 			view: true,
 		});

@@ -5,8 +5,8 @@ import type {
 	Session,
 	SessionCatalogPage,
 	SessionPageOptions,
-	SessionStore,
-} from "@/modules/sessions/storage/session-store";
+} from "@/modules/sessions/session-pagination-types";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { sessionId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 import { renderSessionPicker } from "../support/session-picker-harness";
@@ -26,10 +26,10 @@ test("the Session picker asks for a destination before exporting the selected Se
 	};
 	const pageResult = Promise.withResolvers<SessionCatalogPage>();
 	const listSessionsPage = mock(async () => await pageResult.promise);
-	const store = fromPartial<SessionStore>({ listSessionsPage });
-	const { getStoreSpy, setup } = await renderSessionPicker({
+	const store = fromPartial<SessionStorage>({ listSessionsPage });
+	const { getSessionStorageSpy, setup } = await renderSessionPicker({
 		kittyKeyboard: true,
-		store,
+		storage: store,
 	});
 
 	try {
@@ -48,7 +48,7 @@ test("the Session picker asks for a destination before exporting the selected Se
 		expect(frame).toContain("./session-bundle");
 		expect(frame).toContain("export");
 	} finally {
-		getStoreSpy.mockRestore();
+		getSessionStorageSpy.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });
@@ -82,10 +82,10 @@ test("the stored Session list loads from its cursor and refreshes to a new snaps
 				: refreshedPageResult.promise;
 		}
 	);
-	const store = fromPartial<SessionStore>({ listSessionsPage });
-	const { getStoreSpy, setup } = await renderSessionPicker({
+	const store = fromPartial<SessionStorage>({ listSessionsPage });
+	const { getSessionStorageSpy, setup } = await renderSessionPicker({
 		kittyKeyboard: true,
-		store,
+		storage: store,
 	});
 
 	try {
@@ -120,7 +120,7 @@ test("the stored Session list loads from its cursor and refreshes to a new snaps
 		expect(setup.captureCharFrame()).toContain("Refreshed session");
 		expect(setup.captureCharFrame()).not.toContain("Second session");
 	} finally {
-		getStoreSpy.mockRestore();
+		getSessionStorageSpy.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });

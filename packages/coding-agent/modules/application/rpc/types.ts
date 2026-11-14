@@ -17,7 +17,6 @@ import type {
 	SessionMessage,
 	SessionMessageMetadata,
 	SessionServices,
-	SessionStore,
 } from "../../../modules/sessions/host/session-rpc";
 import type { SessionFilePart } from "../../../modules/sessions/message";
 import type { SessionSubmissionComposition } from "../../../modules/sessions/submission-types";
@@ -105,12 +104,14 @@ export type OutputWriter = {
 
 /**
  * What RPC Mode needs from Session Services: their capabilities, their
- * teardown, their workspace, and the store they may still attach through.
+ * teardown, their workspace, and the Session storage it resolves once.
  * Session Services satisfy it as-is.
  */
-export type RpcAssembly = Pick<SessionServices, "capabilities" | "shutdown"> &
+export type RpcAssembly = Pick<
+	SessionServices,
+	"capabilities" | "shutdown" | "storage"
+> &
 	Readonly<{
-		store?: SessionStore;
 		workspace: string;
 		workspaceId: string;
 	}>;
@@ -146,6 +147,7 @@ export type RuntimeModules = Readonly<{
 		providerCollection?: ProviderCollection;
 		providerModel?: ProviderModelSelection;
 		sessionId: SessionId;
+		storage: RpcAssembly["storage"];
 	}) => Promise<SessionHost>;
 	openSessionServices: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	createSessionUserMessage: (

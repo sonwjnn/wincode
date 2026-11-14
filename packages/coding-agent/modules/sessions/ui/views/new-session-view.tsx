@@ -51,7 +51,11 @@ import {
 } from "@/shared/runtime-context";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import { nextChatSelection } from "../../selection";
-import { getSessionStore } from "../../storage/get-session-store";
+import {
+	getSessionCatalog,
+	getSessionLifecycle,
+	getSessionRecords,
+} from "../../storage/get-session-storage";
 import { projectSessionRecords } from "../../transcript-projection";
 import { type ChatPromptSubmission, getMostRecentSession } from "../../utils";
 import { ChatTextArea } from "../components/chat-text-area";
@@ -402,15 +406,16 @@ export function NewSessionView({
 
 		const restoreLatestSessionConfig = async () => {
 			try {
-				const store = getSessionStore();
-				const session = getMostRecentSession(await store.listSessions());
+				const session = getMostRecentSession(
+					await getSessionCatalog().listSessions()
+				);
 				if (!session) {
 					return;
 				}
 
 				const selection = nextChatSelection({
 					messages: projectSessionRecords(
-						await store.listSessionRecords(session.id)
+						await getSessionRecords().listSessionRecords(session.id)
 					),
 					resolveAgent: (agentId) => resolveActiveAgentId(registry, agentId),
 					row: session,
@@ -574,14 +579,14 @@ export function NewSessionView({
 			fileMentions,
 			files
 		);
-		const store = getSessionStore();
-		const created = await store.createSessionWithExternalizedMessage({
-			agent: effective.agent,
-			message: initialMessage,
-			model: effective.model,
-			turnId: createAgentTurnId(),
-			thinkingLevel: effective.thinkingLevel,
-		});
+		const created =
+			await getSessionLifecycle().createSessionWithExternalizedMessage({
+				agent: effective.agent,
+				message: initialMessage,
+				model: effective.model,
+				turnId: createAgentTurnId(),
+				thinkingLevel: effective.thinkingLevel,
+			});
 		const writeError = sessionCreationWriteError(
 			created.id,
 			created.writeOutcome

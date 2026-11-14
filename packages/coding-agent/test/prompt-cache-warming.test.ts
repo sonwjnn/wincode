@@ -13,11 +13,11 @@ import {
 	createSessionCacheWarming,
 	expectedCacheWarmSavingsUsd,
 } from "@/modules/prompt-cache/cache-warming";
+import type { SessionWriteOutcome } from "@/modules/sessions/session-write-outcome";
 import type {
 	CreateSessionUsageEntryInput,
 	SessionUsageEntry,
-	SessionWriteOutcome,
-} from "@/modules/sessions/storage/session-store";
+} from "@/modules/sessions/storage/session-catalog";
 import { createSessionUsageLedger } from "@/modules/sessions/usage/session-usage-ledger";
 import { sessionId } from "./support/identifiers";
 

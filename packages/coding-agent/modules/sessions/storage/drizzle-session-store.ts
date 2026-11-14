@@ -56,6 +56,7 @@ import type {
 } from "../compaction/types";
 import { type SessionMessage, withSubmissionStatus } from "../message";
 import { restorePastedTextMarkers } from "../pasted-text";
+import type { Session } from "../session-pagination-types";
 import type {
 	SessionStatisticsCompaction,
 	SessionStatisticsRecord,
@@ -80,6 +81,7 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSnapshotRoot,
 } from "./path";
+import type { PromptHistory, PromptHistoryEntry } from "./prompt-history";
 import { createDrizzleRecoveryStore } from "./recovery-store";
 import {
 	localSessionBinding,
@@ -100,12 +102,21 @@ import {
 	sessionUsageEntry,
 	sessionWorkspace,
 } from "./schema";
+import type {
+	CreateSessionUsageEntryInput,
+	SessionUsageEntry,
+} from "./session-catalog";
 import {
 	type SessionForkedPayload,
 	type SessionJsonlProjection,
 	SessionLogError,
 } from "./session-jsonl-codec";
 import { createSessionJsonlProjection } from "./session-jsonl-projection";
+import type {
+	CreateSessionInput,
+	UpdateSessionInput,
+} from "./session-lifecycle";
+import { UNTITLED_SESSION_TITLE } from "./session-lifecycle";
 import {
 	type SessionCatalogPageCursor,
 	type SessionCatalogPageKey,
@@ -116,24 +127,17 @@ import {
 	sessionCatalogReadPoint,
 	sessionHistoryReadPoint,
 } from "./session-pagination";
+import type { SessionProjection } from "./session-projection";
 import {
 	getSessionRecordStatisticsValidationError,
 	getSessionRecordValidationError,
 	SessionRecordInvariantError,
 	toDurableSessionMessageRecord,
 } from "./session-record";
-import {
-	type CommitSessionRecordInput,
-	type CreateSessionInput,
-	type CreateSessionUsageEntryInput,
-	type PromptHistoryEntry,
-	type Session,
-	type SessionProjectionStore,
-	type SessionUsageEntry,
-	UNTITLED_SESSION_TITLE,
-	type UpdateSessionInput,
-	type UpdateSessionSubmissionInput,
-} from "./session-store";
+import type {
+	CommitSessionRecordInput,
+	UpdateSessionSubmissionInput,
+} from "./session-records";
 import { acquireSessionWriterLock } from "./session-writer-lock";
 import {
 	createDrizzleFileObservationStore,
@@ -405,12 +409,7 @@ export const createPromptHistory = (
 		})();
 	};
 
-	const clear = (): Promise<void> => {
-		db.delete(promptHistory).run();
-		return Promise.resolve();
-	};
-
-	return { clear, get, migrate, record };
+	return { get, migrate, record };
 };
 type SessionRow = typeof session.$inferSelect;
 type CompactionRow = typeof sessionCompaction.$inferSelect;
@@ -1922,11 +1921,12 @@ const readSessionStatisticsProjection = (
 		};
 	});
 
-export type DrizzleSessionStore = SessionProjectionStore &
+export type DrizzleSessionStore = SessionProjection &
 	Readonly<{
 		assertResetAllowed: () => Promise<void>;
 		jsonlProjection: SessionJsonlProjection;
 		markSessionDeleted: (sessionId: SessionId) => void;
+		promptHistory: PromptHistory;
 		readSessionCatalogPageProjection: (
 			input: SessionCatalogPageProjectionInput
 		) => SessionCatalogPageProjection;
@@ -1987,7 +1987,7 @@ export const createDrizzleSessionStore = (
 		attachmentStore
 			? attachmentStore.hydrateMessages(messages, hydrationOptions)
 			: Promise.resolve([...messages]);
-	const promptHistoryStore = createPromptHistory(
+	const promptHistoryOperations = createPromptHistory(
 		operationalDb,
 		attachmentStore
 	);
@@ -2102,14 +2102,12 @@ export const createDrizzleSessionStore = (
 		},
 		appendCompaction: (input) =>
 			Promise.resolve(appendCompaction(db, operationalDb, workspace.id, input)),
-		getPromptHistory: () => promptHistoryStore.migrate(),
-		recordPrompt: async (entry) => {
-			await promptHistoryStore.record(entry);
-			await collectAttachments().catch(() => undefined);
-		},
-		clearPromptHistory: async () => {
-			await promptHistoryStore.clear();
-			await collectAttachments().catch(() => undefined);
+		promptHistory: {
+			getPromptHistory: () => promptHistoryOperations.migrate(),
+			recordPrompt: async (entry) => {
+				await promptHistoryOperations.record(entry);
+				await collectAttachments().catch(() => undefined);
+			},
 		},
 		createSession: async ({
 			createdAt,

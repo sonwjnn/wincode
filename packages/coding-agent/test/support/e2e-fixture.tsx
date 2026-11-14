@@ -29,7 +29,7 @@ import {
 } from "@/modules/sessions/storage/path";
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SessionSurface } from "@/modules/sessions/ui/views/session-surface";
 import type { SessionInitialSubmission } from "@/modules/sessions/ui/views/session-view";
@@ -179,7 +179,7 @@ const RegistryReadyProbe = ({ onReady }: { onReady: () => void }) => {
 	return null;
 };
 
-export const createE2eStore = (): SessionStore => {
+export const createE2eStore = (): SessionStorage => {
 	const databasePath = process.env.WINCODE_LOCAL_DB_PATH;
 	if (!databasePath) {
 		throw new Error(
@@ -205,7 +205,7 @@ export const createE2eStore = (): SessionStore => {
  * a user turn, and a completed assistant turn for each turn count.
  */
 export const seedCompactionHistory = async (
-	store: SessionStore,
+	store: SessionStorage,
 	turnCount = 10,
 	identifierPrefix = ""
 ): Promise<{ sessionId: SessionId }> => {

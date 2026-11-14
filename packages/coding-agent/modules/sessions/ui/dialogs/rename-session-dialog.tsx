@@ -13,7 +13,7 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
-import { getSessionStore } from "../../storage/get-session-store";
+import { getSessionLifecycle } from "../../storage/get-session-storage";
 import {
 	projectSessionStorageError,
 	requireSessionWriteReady,
@@ -51,7 +51,7 @@ export function RenameSessionDialog({
 
 		try {
 			requireSessionWriteReady(
-				await getSessionStore().updateSession(session.id, {
+				await getSessionLifecycle().updateSession(session.id, {
 					title: trimmed,
 				})
 			);

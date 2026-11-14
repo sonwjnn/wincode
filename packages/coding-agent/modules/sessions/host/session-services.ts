@@ -19,7 +19,7 @@ import {
 	type SessionSdkRuntimeOptions,
 } from "../sdk";
 import type { SessionSdkOperations } from "../sdk-contract";
-import type { SessionStore } from "../storage/session-store";
+import type { SessionStorage } from "../storage/session-storage";
 import {
 	createSessionCapabilities,
 	type SessionCapabilitiesAssembly,
@@ -54,7 +54,7 @@ export type SessionServicesPolicy = Readonly<{
  * current — configuration, pricing data, and the Plugin
  * runtime Interactive Mode replaces on Resource Reload — are read when that
  * work runs, because a Session outlives the render, reload, or reconnect that
- * supplied them. The Session Store, Session Host Manager, and turn tool
+ * supplied them. The Session storage, Session Host Manager, and turn tool
  * resolver are process-scoped and resolved once at open; and the Agent
  * registry is resolved once at open when the caller supplies no source, read
  * per use when it does.
@@ -62,7 +62,7 @@ export type SessionServicesPolicy = Readonly<{
 export type SessionServicesSources = Readonly<{
 	configRuntime?: () => ConfigRuntime;
 	registry?: () => AgentRegistry | null;
-	store?: () => SessionStore;
+	storage?: () => SessionStorage;
 	sessionHostManager?: () => SessionHostManager;
 	/** Reads the current Plugin runtime; undefined while the caller has none yet. */
 	pluginRuntime?: () => PluginRuntime | undefined;
@@ -80,7 +80,7 @@ export type SessionServicesSources = Readonly<{
 export type SessionServices = Readonly<{
 	capabilities: SessionCapabilities;
 	sessionSdk: SessionSdkOperations;
-	store: SessionStore;
+	storage: SessionStorage;
 	/** Waits for the Plugin work one Session still owes, as Print Mode must. */
 	waitForBackgroundWork: (sessionId: string) => Promise<void>;
 	workspace: string;
@@ -157,7 +157,7 @@ export const openSessionServices = async ({
 	/**
 	 * The Session SDK operations and the capabilities reference each other: the
 	 * capability that hands Plugin Tools their SDK needs the operations, and the
-	 * operations need the Session Store and Host Manager the capabilities own.
+	 * operations need the Session storage and Host Manager the capabilities own.
 	 * One deferred reference resolves it, here, instead of in every caller.
 	 */
 	let sessionSdk: SessionSdkOperations | undefined;
@@ -182,7 +182,7 @@ export const openSessionServices = async ({
 				createProviderCollection: sources.createProviderCollection,
 				getRegistry: sources.registry,
 				sessionHostManager: sources.sessionHostManager?.(),
-				store: sources.store?.(),
+				storage: sources.storage?.(),
 				turnToolResolver: sources.turnToolResolver?.(),
 			}),
 			workspace,
@@ -215,7 +215,7 @@ export const openSessionServices = async ({
 						);
 				},
 				getRegistry: () => capabilities.getRegistry(),
-				store: assembly.store,
+				storage: assembly.storage,
 				...omitUndefined({
 					createProviderCollection: sources.createProviderCollection,
 					turnToolResolver: capabilities.getTurnToolResolver?.(),
@@ -223,12 +223,12 @@ export const openSessionServices = async ({
 				workspace,
 			} satisfies SessionSdkRuntimeOptions,
 			capabilities.getSessionHostManager(),
-			assembly.store
+			assembly.storage
 		);
 		return Object.freeze({
 			capabilities,
 			sessionSdk,
-			store: assembly.store,
+			storage: assembly.storage,
 			waitForBackgroundWork: (sessionId) =>
 				assembly.getPluginRuntime().waitForBackgroundWork(sessionId),
 			workspace,

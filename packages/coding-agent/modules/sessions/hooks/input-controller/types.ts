@@ -3,10 +3,11 @@ import type {
 	CommandSuggestion,
 } from "@/modules/commands/command-controller";
 import type { FileMentionOption } from "@/modules/file-mentions";
+import type { PromptHistoryStore } from "@/modules/sessions/storage/prompt-history";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import type { ComposerDocument } from "../../ui/composer-document";
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
-import type { PromptHistoryEntry, PromptHistoryStore } from "./history";
+import type { PromptHistoryEntry } from "./history";
 import type { SubmitSnapshot } from "./submit";
 
 export type InputOverlayState =

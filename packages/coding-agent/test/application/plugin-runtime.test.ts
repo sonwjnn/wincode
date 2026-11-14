@@ -7,7 +7,7 @@ import {
 import type { PluginSessionHistoryPersistence } from "@/modules/sessions/session-plugin-history";
 import { toSessionHistoryEntryId } from "@/shared/identifiers";
 import { createEmptyPluginRuntime } from "../support/plugin-runtime";
-import { successfulSessionWriteOutcome } from "../support/session-write-store";
+import { successfulSessionWriteOutcome } from "../support/session-facets";
 
 const pluginSource = "/plugins/jira.ts";
 const workspace = "/workspace";

@@ -102,7 +102,7 @@ The observable state of one assigned task, distinct from whether its child Sessi
 An explicit tool action the parent Agent may choose to stop one delegated task or all active descendant tasks without aborting its own turn. A user prompt does not itself cancel child work, and cancellation does not delete child Sessions or their history. _Avoid_: automatic cancellation on parent prompt, closing a child Session
 
 **Agent Session**:
-The application-level conversation boundary that connects the Stateful Agent to durable session history and coding-specific policies. It owns composition, attachment preparation, durable status and presentation, while projecting the Stateful Agent's transient queue without maintaining a second queue authority. _Avoid_: Stateful Agent, Session Store
+The application-level conversation boundary that connects the Stateful Agent to durable session history and coding-specific policies. It owns composition, attachment preparation, durable status and presentation, while projecting the Stateful Agent's transient queue without maintaining a second queue authority. _Avoid_: Stateful Agent, Session storage
 
 **Session SDK**:
 The public Coding-Agent interface for creating, reopening, driving, observing, and disposing Agent Sessions. A caller may choose Session capabilities and storage without taking ownership of the Stateful Agent's internal state. _Avoid_: Subagents runtime, raw Session object
@@ -114,10 +114,10 @@ A portable directory containing one Session's validated JSONL history and its re
 The application-level composition that opens one Session and connects its Stateful Agent to the Session Capabilities assembled for it. Its lifetime is independent of which conversation the UI displays; it may release an idle runtime without deleting durable history. _Avoid_: UI view, Session Store, Stateful Agent
 
 **Session Capabilities**:
-The lazy accessors a Session Host reads for one Session: its configuration, ProviderCollection factory, Agent registry, Session Store, Session Host Manager, Plugin runtime, Session Compaction module and settings, Skill catalog, turn tools, and Session SDK operations. An assembly resolves them; a Host reads one when the work that needs it runs. _Avoid_: capability bag, Session Services
+The lazy accessors a Session Host reads for one Session: its configuration, ProviderCollection factory, Agent registry, Session Host Manager, Plugin runtime, Session Compaction module and settings, Skill catalog, turn tools, and Session SDK operations. Session storage is not one of them: a composition root resolves the facets and hands each host module the one it uses. An assembly resolves them; a Host reads one when the work that needs it runs. _Avoid_: capability bag, Session Services
 
 **Session Services**:
-The mode-, process-, or view-scoped assembly of what a Session Host runs on: the Plugin runtime they may close or only borrow, the durable Session Store, the Session Capabilities a Host reads lazily, and the Session SDK bound to them. They are not owned by any one Session, close only the resources they created, and never become a second Session writer. _Avoid_: Session Host, Session Environment, application runtime, capability bag
+The mode-, process-, or view-scoped assembly of what a Session Host runs on: the Plugin runtime they may close or only borrow, the durable Session storage it resolved, the Session Capabilities a Host reads lazily, and the Session SDK bound to them. They are not owned by any one Session, close only the resources they created, and never become a second Session writer. _Avoid_: Session Host, Session Environment, application runtime, capability bag
 
 **Session Writer**:
 The single live authority to write one Session ID, even when both delegation and a user submit input to it. Multiple callers may send commands through that authority, but another writable runtime for the same Session ID cannot run concurrently. _Avoid_: one input source, Session Lease, workspace writer
@@ -148,6 +148,12 @@ Thao tác tạo một Session Fork tại checkpoint cũ rồi chuyển người 
 
 **Inherited Session History**:
 Phần lịch sử một Session Fork kế thừa từ nguồn, khác với nội dung và chi phí phát sinh trong Session mới. Nó là ngữ cảnh hội thoại, không phải hàng đợi hay nghĩa vụ giao nhận input của nguồn. _Avoid_: pending Steering Lane, new usage
+
+**Session Catalog**:
+The local Sessions one workspace holds, used to list and open them: identity, title, pin, model, and last-activity metadata. It is distinct from Stored Session History, which is the contents of one Session, and it never carries a transcript. _Avoid_: Session Store, session list cache
+
+**Prompt History**:
+A workspace-wide record of the prompts already sent, used for composer recall. It carries no `sessionId`, survives a projection rebuild, and is therefore not part of any one Session's history. _Avoid_: Session Context, Session Transcript, chat history
 
 **Session Transcript**:
 The ordered messages a session presents to the user. A steered Submission enters the Transcript when its durable record is committed, before the Agent Turn processes it; an unsteered Queued Submission does not. Compaction summaries stay out of the Transcript even when they are part of the Session Context. _Avoid_: chat history, display messages, message log

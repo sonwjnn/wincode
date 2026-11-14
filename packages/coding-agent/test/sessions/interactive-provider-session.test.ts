@@ -188,7 +188,7 @@ test("Interactive Session connects OpenRouter, refreshes offline-safe Known Mode
 			modelId: "vendor/stable-model",
 		});
 		expect(
-			(await services.store.listSessionRecords(sessionId)).some(({ model }) =>
+			(await services.storage.listSessionRecords(sessionId)).some(({ model }) =>
 				isSameProviderModelIdentity(model, selectedModel)
 			)
 		).toBe(true);

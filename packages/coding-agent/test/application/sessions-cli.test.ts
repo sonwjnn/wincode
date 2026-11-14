@@ -14,6 +14,12 @@ import type {
 } from "@/modules/sessions/session-bundle-contract";
 import { SessionBundleExportError } from "@/modules/sessions/session-bundle-export";
 import { SessionBundleImportError } from "@/modules/sessions/session-bundle-import";
+import type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+} from "@/modules/sessions/session-pagination-types";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
@@ -28,21 +34,19 @@ import {
 	createSessionJsonlStore,
 	type SessionLogFileIo,
 } from "@/modules/sessions/storage/session-jsonl-store";
-import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import type {
-	Session,
-	SessionCatalogPage,
 	SessionForkResult,
-	SessionHistoryPage,
-	SessionPageOptions,
 	SessionProjectionMaintenanceGate,
 	SessionProjectionRebuildResult,
 	SessionProjectionRebuildScope,
+} from "@/modules/sessions/storage/session-lifecycle";
+import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
+import { SessionInUseError } from "@/modules/sessions/storage/session-writer-lock";
+import type {
 	SessionStatistics,
 	SessionStatisticsOptions,
-	SessionStore,
-} from "@/modules/sessions/storage/session-store";
-import { SessionInUseError } from "@/modules/sessions/storage/session-writer-lock";
+} from "@/modules/sessions/usage/session-statistics";
 import { toSessionId } from "@/shared/identifiers";
 import {
 	agentTurnId,
@@ -270,7 +274,7 @@ const createPersistence = (
 			operational.sqlite.close();
 			projection.sqlite.close();
 		},
-		store: createSessionJsonlStore(projectionStore, logRoot, fileIo),
+		storage: createSessionJsonlStore(projectionStore, logRoot, fileIo),
 	};
 };
 
@@ -423,10 +427,10 @@ test("Sessions fork gates a source checkpoint and emits durable fork identity as
 		sourceSessionId: string;
 	}> = [];
 	const idleSources: string[] = [];
-	const forkSession: SessionStore["forkSession"] = async () => {
+	const forkSession: SessionStorage["forkSession"] = async () => {
 		throw new Error("The CLI must route through the open Session Host.");
 	};
-	const store = fromPartial<SessionStore>({ forkSession });
+	const store = fromPartial<SessionStorage>({ forkSession });
 	const hostForkSession: SessionHost["forkSession"] = async (
 		checkpoint,
 		operationId
@@ -451,7 +455,7 @@ test("Sessions fork gates a source checkpoint and emits durable fork identity as
 		},
 		undefined,
 		{
-			store,
+			storage: store,
 			withForkGate: async (requestedSourceId, operation) => {
 				idleSources.push(requestedSourceId);
 				return operation(forkHost);
@@ -480,10 +484,10 @@ test("Sessions fork gates a source checkpoint and emits durable fork identity as
 
 test("Sessions fork preserves session_busy when Host admission refuses the source", async () => {
 	const sourceSessionId = toSessionId("cli-busy-fork-source");
-	const forkSession: SessionStore["forkSession"] = async () => {
+	const forkSession: SessionStorage["forkSession"] = async () => {
 		throw new Error("The fork store must not run for a busy Host.");
 	};
-	const store = fromPartial<SessionStore>({ forkSession });
+	const store = fromPartial<SessionStorage>({ forkSession });
 	const stdout: string[] = [];
 	const stderr: string[] = [];
 	const code = await runSessionsCli(
@@ -494,7 +498,7 @@ test("Sessions fork preserves session_busy when Host admission refuses the sourc
 		},
 		undefined,
 		{
-			store,
+			storage: store,
 			withForkGate: async () => {
 				throw new SessionForkBusyError(
 					sourceSessionId,
@@ -515,10 +519,10 @@ test("Sessions fork preserves session_busy when Host admission refuses the sourc
 
 test("Sessions fork preserves session_in_use for a foreign writer", async () => {
 	const sourceSessionId = toSessionId("cli-writer-busy-fork-source");
-	const forkSession: SessionStore["forkSession"] = async () => {
+	const forkSession: SessionStorage["forkSession"] = async () => {
 		throw new SessionInUseError();
 	};
-	const store = fromPartial<SessionStore>({ forkSession });
+	const store = fromPartial<SessionStorage>({ forkSession });
 	const stdout: string[] = [];
 	const stderr: string[] = [];
 	const code = await runSessionsCli(
@@ -535,7 +539,7 @@ test("Sessions fork preserves session_in_use for a foreign writer", async () => 
 		},
 		undefined,
 		{
-			store,
+			storage: store,
 			withForkGate: async (_requestedSourceId, operation) =>
 				operation(undefined),
 		}
@@ -557,7 +561,7 @@ test("Sessions fork JSON failure retains the operation ID for indeterminate publ
 		new Error("Fork publication may have completed."),
 		{ code: "session_commit_indeterminate" }
 	);
-	const forkSession: SessionStore["forkSession"] = async () => {
+	const forkSession: SessionStorage["forkSession"] = async () => {
 		throw failure;
 	};
 	const stdout: string[] = [];
@@ -570,7 +574,7 @@ test("Sessions fork JSON failure retains the operation ID for indeterminate publ
 		},
 		undefined,
 		{
-			store: fromPartial<SessionStore>({ forkSession }),
+			storage: fromPartial<SessionStorage>({ forkSession }),
 			withForkGate: async (_requestedSourceId, operation) =>
 				operation(undefined),
 		}
@@ -612,7 +616,7 @@ test("Sessions list and history preserve the shared cursor snapshot contract", a
 		options?: SessionPageOptions;
 		sessionId: string;
 	}> = [];
-	const store = fromPartial<SessionStore>({
+	const store = fromPartial<SessionStorage>({
 		listSessionsPage: async (options?: SessionPageOptions) => {
 			listOptions.push(options ?? {});
 			if (options?.limit === 201) {
@@ -643,7 +647,7 @@ test("Sessions list and history preserve the shared cursor snapshot contract", a
 				stdout: { write: (text) => stdout.push(text) },
 			},
 			undefined,
-			{ sessionsCliDependencies: { store } }
+			{ sessionsCliDependencies: { storage: store } }
 		);
 		return { code, stderr, stdout };
 	};
@@ -783,7 +787,7 @@ test("Sessions stats forwards the captured point and keeps unknown cost distinct
 		options?: SessionStatisticsOptions;
 		sessionId: string;
 	}> = [];
-	const store = fromPartial<SessionStore>({
+	const store = fromPartial<SessionStorage>({
 		getSessionStatistics: async (
 			sessionId: string,
 			options?: SessionStatisticsOptions
@@ -804,7 +808,7 @@ test("Sessions stats forwards the captured point and keeps unknown cost distinct
 				stdout: { write: (text) => stdout.push(text) },
 			},
 			undefined,
-			{ sessionsCliDependencies: { store } }
+			{ sessionsCliDependencies: { storage: store } }
 		);
 		return { code, stderr: stderr.join(""), stdout: stdout.join("") };
 	};
@@ -911,11 +915,11 @@ test("Sessions verify is read-only and does not acquire writer authority", async
 	const persistence = createPersistence(databasePath, logRoot, fileIo);
 
 	try {
-		await persistence.store.createEmptySession({ id: sessionId });
+		await persistence.storage.createEmptySession({ id: sessionId });
 		logPath = resolveSessionLogFilePath(await fs.realpath(logRoot), sessionId);
 		const committedLog = await Bun.file(logPath).bytes();
 		failAppend = true;
-		const uncertain = await persistence.store.updateSession(sessionId, {
+		const uncertain = await persistence.storage.updateSession(sessionId, {
 			operationId: "verify-recovery-operation",
 			title: "private session title",
 		});
@@ -926,7 +930,7 @@ test("Sessions verify is read-only and does not acquire writer authority", async
 		).json()) as { timestamp?: string };
 
 		const beforeVerify = await Bun.file(logPath).bytes();
-		const writer = await persistence.store.acquireSessionWriter(sessionId);
+		const writer = await persistence.storage.acquireSessionWriter(sessionId);
 		let result: Readonly<{ code: number; stderr: string; stdout: string }>;
 		try {
 			result = await runVerify(logRoot, sessionId);
@@ -944,7 +948,7 @@ test("Sessions verify is read-only and does not acquire writer authority", async
 		expect(await Bun.file(logPath).bytes()).toEqual(beforeVerify);
 		expect(beforeVerify).toEqual(committedLog);
 
-		const recovered = await persistence.store.updateSession(sessionId, {
+		const recovered = await persistence.storage.updateSession(sessionId, {
 			operationId: "verify-recovery-operation",
 			title: "private session title",
 		});
@@ -976,7 +980,7 @@ test("Sessions verify reports complete-line corruption with identity and offset 
 	const persistence = createPersistence(databasePath, logRoot);
 
 	try {
-		await persistence.store.createEmptySession({ id: sessionId });
+		await persistence.storage.createEmptySession({ id: sessionId });
 		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
 			sessionId
@@ -1027,7 +1031,7 @@ test("human verification diagnostics cannot emit terminal controls from corrupt 
 	const persistence = createPersistence(databasePath, logRoot);
 
 	try {
-		await persistence.store.createEmptySession({ id: sessionId });
+		await persistence.storage.createEmptySession({ id: sessionId });
 		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
 			sessionId
@@ -1078,14 +1082,14 @@ test("Sessions verify reports a truncated suffix without repairing or quarantini
 	const persistence = createPersistence(databasePath, logRoot);
 
 	try {
-		await persistence.store.createEmptySession({ id: sessionId });
+		await persistence.storage.createEmptySession({ id: sessionId });
 		const logPath = resolveSessionLogFilePath(
 			await fs.realpath(logRoot),
 			sessionId
 		);
 		await fs.appendFile(logPath, '{"text":"private-message-needle');
 		const bytesBeforeVerify = await Bun.file(logPath).bytes();
-		const writer = await persistence.store.acquireSessionWriter(sessionId);
+		const writer = await persistence.storage.acquireSessionWriter(sessionId);
 		let result: Readonly<{ code: number; stderr: string; stdout: string }>;
 		try {
 			result = await runVerify(logRoot, sessionId);
@@ -1144,7 +1148,10 @@ test("Sessions rebuild runs under the maintenance gate and emits one JSON result
 		},
 		undefined,
 		{
-			sessionsCliDependencies: { store, withMaintenanceGate },
+			sessionsCliDependencies: {
+				storage: { rebuildProjection: store.rebuildProjection },
+				withMaintenanceGate,
+			},
 		}
 	);
 
@@ -1193,7 +1200,7 @@ test("Sessions rebuild targets one validated Session through the maintenance gat
 		undefined,
 		{
 			sessionsCliDependencies: {
-				store,
+				storage: store,
 				withMaintenanceGate: async (operation) => {
 					gateEntered = true;
 					return operation();
@@ -1244,7 +1251,7 @@ test("Sessions rebuild refuses unsafe IDs before accessing the store", async () 
 			stdout: { write: (text) => stdout.push(text) },
 		},
 		undefined,
-		{ sessionsCliDependencies: { store, withMaintenanceGate } }
+		{ sessionsCliDependencies: { storage: store, withMaintenanceGate } }
 	);
 
 	expect(code).toBe(2);
@@ -1290,7 +1297,7 @@ test("Sessions rebuild reports partial failures and sanitizes diagnostics", asyn
 		undefined,
 		{
 			sessionsCliDependencies: {
-				store,
+				storage: store,
 				withMaintenanceGate: async (operation) => await operation(),
 			},
 		}

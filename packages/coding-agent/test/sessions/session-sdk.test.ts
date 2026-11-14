@@ -49,6 +49,12 @@ import type {
 	SessionSdk,
 	SessionSdkHandle,
 } from "@/modules/sessions/sdk-contract";
+import type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+} from "@/modules/sessions/session-pagination-types";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
@@ -56,15 +62,11 @@ import {
 	resolveLocalSessionProjectionPath,
 } from "@/modules/sessions/storage/path";
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import type {
-	Session,
-	SessionCatalogPage,
-	SessionHistoryPage,
-	SessionPageOptions,
 	SessionStatistics,
 	SessionStatisticsOptions,
-	SessionStore,
-} from "@/modules/sessions/storage/session-store";
+} from "@/modules/sessions/usage/session-statistics";
 import {
 	type ConfigSnapshot,
 	createConfigStore,
@@ -277,7 +279,7 @@ const createImplicitDefaultAgentPinSdk = async (
 			getRegistry: () => registry,
 			pluginPaths,
 			projectTrust,
-			store,
+			storage: store,
 			workspace: pluginRoot,
 		});
 	} catch (error) {
@@ -684,8 +686,11 @@ test("createSession rejects a stale Host Plugin snapshot before reserving a buil
 			yield { type: "finish" };
 		},
 	};
-	const originalExternalizeAttachments = store.externalizeAttachments;
-	store.externalizeAttachments = async (...args) => {
+	const mutableStore = store as {
+		externalizeAttachments: SessionStorage["externalizeAttachments"];
+	};
+	const originalExternalizeAttachments = mutableStore.externalizeAttachments;
+	mutableStore.externalizeAttachments = async (...args) => {
 		activity.externalizations += 1;
 		return originalExternalizeAttachments(...args);
 	};
@@ -738,7 +743,7 @@ test("createSession rejects a stale Host Plugin snapshot before reserving a buil
 		cwd: workspace,
 		getRegistry: () => null,
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	try {
@@ -764,7 +769,7 @@ test("createSession rejects a stale Host Plugin snapshot before reserving a buil
 			streams: 0,
 		});
 	} finally {
-		store.externalizeAttachments = originalExternalizeAttachments;
+		mutableStore.externalizeAttachments = originalExternalizeAttachments;
 		await sdk.dispose();
 	}
 });
@@ -844,7 +849,7 @@ test("Session SDK prompt rejects an unrelated stale Plugin snapshot before avail
 		},
 		cwd: workspace,
 		getRegistry: () => null,
-		store,
+		storage: store,
 		workspace,
 	});
 	let handle: SessionSdkHandle | undefined;
@@ -939,7 +944,7 @@ test("Session SDK forwards opaque page cursors without opening a Host", async ()
 			selectedPath: emptyUsage,
 		},
 	};
-	const sdkStore = fromPartial<SessionStore>({
+	const sdkStore = fromPartial<SessionStorage>({
 		listSessionsPage: async (options?: SessionPageOptions) => {
 			catalogOptions = options;
 			return catalogPage;
@@ -960,7 +965,7 @@ test("Session SDK forwards opaque page cursors without opening a Host", async ()
 		},
 	});
 	const sdk = createSessionSdkOperations(
-		{ cwd: workspace, getRegistry: () => null, store: sdkStore, workspace },
+		{ cwd: workspace, getRegistry: () => null, storage: sdkStore, workspace },
 		createSessionHostManager(),
 		sdkStore
 	);
@@ -1039,7 +1044,7 @@ test("Session SDK holds a reload-blocking lease through Provider availability an
 			},
 			cwd: workspace,
 			getRegistry: () => null,
-			store,
+			storage: store,
 			workspace,
 		},
 		manager,
@@ -1245,7 +1250,7 @@ const createSdkPinnedAgentRuntime = async (
 		cwd: workspace,
 		getRegistry: () => registry,
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	return { providerCollection, providerCollectionFactoryCalls, sdk };
@@ -1788,7 +1793,7 @@ test("Session SDK rejects unavailable initialPrompt models before persistence wh
 				})
 			),
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	const unavailableModel = {
@@ -1848,7 +1853,7 @@ test("an injected Session SDK creates an empty durable Session and reopens it", 
 		cwd: workspace,
 		database: database.db,
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	try {
@@ -2150,7 +2155,7 @@ test("an injected Session SDK reserves an empty Session before opening it", asyn
 		cwd: workspace,
 		database: database.db,
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	try {
@@ -2180,7 +2185,7 @@ test("an injected Session SDK creates a Session runtime with an explicit Plugin 
 			database: database.db,
 			pluginPaths: [subagentsPluginPath],
 			projectTrust: "trust",
-			store,
+			storage: store,
 			workspace,
 		});
 		const childSdk = await sdk.createSessionRuntime({ pluginPaths: [] });
@@ -2254,7 +2259,7 @@ test("child Session SDK reloads a selected project Plugin only when child trust 
 			getRegistry: () => registry,
 			pluginPaths: [pluginPath],
 			projectTrust: "trust",
-			store,
+			storage: store,
 			workspace: trustWorkspace,
 		});
 		expect(pluginLoadCalls).toEqual(["loaded"]);
@@ -2342,7 +2347,7 @@ test("child Session SDK rejects a project Plugin symlink that escapes its truste
 			database: database.db,
 			getRegistry: () => registry,
 			projectTrust: "trust",
-			store,
+			storage: store,
 			workspace: trustWorkspace,
 		});
 		expect(pluginLoadCalls).toEqual(["loaded"]);
@@ -2446,7 +2451,7 @@ test("child Session SDK pins an authorized Plugin target before loading it", asy
 			database: database.db,
 			getRegistry: () => registry,
 			projectTrust: "trust",
-			store,
+			storage: store,
 			workspace: raceWorkspace,
 		});
 		expect(pluginLoadCalls).toEqual(["trusted"]);
@@ -2519,7 +2524,7 @@ test("child Session SDK rejects dangling explicit Plugin symlinks before loading
 			database: database.db,
 			getRegistry: () => registry,
 			projectTrust: "trust",
-			store,
+			storage: store,
 			workspace: childWorkspace,
 		});
 		const originalPluginSourceIdentity =
@@ -2658,7 +2663,7 @@ export default (api) => {
 		cwd: workspace,
 		getRegistry: () => registry,
 		pluginPaths: [selectedPluginPath, unselectedPluginPath],
-		store,
+		storage: store,
 		workspace,
 	});
 	let childSdk: SessionSdk | undefined;
@@ -2761,7 +2766,7 @@ test("ownerless non-built-in Provider restore fails before Host or Provider cons
 		cwd: workspace,
 		getRegistry: () => null,
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	try {
@@ -2892,7 +2897,7 @@ export default (api) => {
 		getRegistry: () => registry,
 		pluginPaths: [currentPluginPath],
 		projectTrust: "trust",
-		store,
+		storage: store,
 		workspace,
 	});
 	let childSdk: SessionSdk | undefined;
@@ -2950,7 +2955,7 @@ test("a runtime catalog rejects Agents whose required tools exceed its effective
 		cwd: workspace,
 		getRegistry: () => registry,
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	try {
@@ -3159,7 +3164,7 @@ test("a Session runtime snapshots its tool ceiling so later changes cannot expos
 		createProviderCollection: () => createFakeProviderCollection(recorder),
 		pluginPaths: [],
 		getRegistry: () => registry,
-		store,
+		storage: store,
 		workspace,
 	});
 	const allowedTools = ["read"];
@@ -3298,7 +3303,7 @@ test("Subagents use the public Session SDK for explicitly selected child Session
 			pluginPaths: [subagentsPluginPath],
 			getRegistry: () => registry,
 			projectTrust: "trust",
-			store,
+			storage: store,
 			workspace,
 		});
 		const parent = await sdk.createSession();
@@ -3355,7 +3360,7 @@ test("SDK deliveries preserve FIFO order behind earlier queued Submissions", asy
 		createProviderCollection: () => createFakeProviderCollection(recorder),
 		cwd: workspace,
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	const handle = await sdk.createSession({
@@ -3426,7 +3431,7 @@ test("the public Session SDK durably delivers a message and streams its Agent Tu
 		createProviderCollection: () => createFakeProviderCollection(recorder),
 		cwd: workspace,
 		pluginPaths: [],
-		store,
+		storage: store,
 		workspace,
 	});
 	const handle = await sdk.createSession({

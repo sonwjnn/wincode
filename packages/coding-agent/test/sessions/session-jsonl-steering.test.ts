@@ -59,7 +59,7 @@ test("committed steering leaves its queue reservation settled when the projectio
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
 			createProviderCollection: () => createFakeProviderCollection(recorder),
-			store: () => store,
+			storage: () => store,
 		},
 	});
 	let host: SessionHost | undefined;
@@ -77,6 +77,7 @@ test("committed steering leaves its queue reservation settled when the projectio
 			.openHost({
 				autoContinue: false,
 				capabilities: services.capabilities,
+				storage: services.storage,
 				sessionId: created.id,
 				view: true,
 			});
@@ -191,7 +192,7 @@ test("a durably committed prompt is accepted when projection failure blocks mode
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
 			createProviderCollection: () => createFakeProviderCollection(recorder),
-			store: () => store,
+			storage: () => store,
 		},
 	});
 	let host: SessionHost | undefined;
@@ -205,6 +206,7 @@ test("a durably committed prompt is accepted when projection failure blocks mode
 		host = await services.capabilities.getSessionHostManager().openHost({
 			autoContinue: false,
 			capabilities: services.capabilities,
+			storage: services.storage,
 			sessionId: created.id,
 			view: true,
 		});
@@ -295,7 +297,7 @@ test("an indeterminate steering write keeps its queue entry reserved until recon
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
 			createProviderCollection: () => createFakeProviderCollection(recorder),
-			store: () => store,
+			storage: () => store,
 		},
 	});
 	let host: SessionHost | undefined;
@@ -311,6 +313,7 @@ test("an indeterminate steering write keeps its queue entry reserved until recon
 			.openHost({
 				autoContinue: false,
 				capabilities: services.capabilities,
+				storage: services.storage,
 				sessionId: created.id,
 				view: true,
 			});
@@ -421,7 +424,7 @@ test("an unsteered queued Submission is neither logged nor replayed after reopen
 		policy: { cwd: workspace, databasePath, workspace },
 		sources: {
 			createProviderCollection: () => createFakeProviderCollection(recorder),
-			store: () => store,
+			storage: () => store,
 		},
 	});
 	let host: SessionHost | undefined;
@@ -436,6 +439,7 @@ test("an unsteered queued Submission is neither logged nor replayed after reopen
 		const openedHost = await manager.openHost({
 			autoContinue: false,
 			capabilities: services.capabilities,
+			storage: services.storage,
 			sessionId: created.id,
 			view: true,
 		});
@@ -487,6 +491,7 @@ test("an unsteered queued Submission is neither logged nor replayed after reopen
 		const reopenedHost = await manager.openHost({
 			autoContinue: false,
 			capabilities: services.capabilities,
+			storage: services.storage,
 			sessionId: created.id,
 			view: true,
 		});

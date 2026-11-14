@@ -22,6 +22,7 @@ import {
 	createSessionBundleImportOperation,
 	SessionBundleImportError,
 } from "@/modules/sessions/session-bundle-import";
+import type { Session } from "@/modules/sessions/session-pagination-types";
 import {
 	type AttachmentMaintenanceReport,
 	createDrizzleAttachmentMetadataRepository,
@@ -49,10 +50,7 @@ import {
 	type SessionLogFileIo,
 } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
-import type {
-	Session,
-	SessionStore,
-} from "@/modules/sessions/storage/session-store";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
 import {
@@ -80,7 +78,7 @@ type ImportFixture = Readonly<{
 	getProjectedSession: (sessionId: SessionId) => Promise<Session>;
 	manager: SessionHostManager;
 	root: string;
-	store: SessionStore;
+	storage: SessionStorage;
 	workspace: string;
 }>;
 
@@ -131,7 +129,7 @@ const createFixture = async (
 		logRoot,
 		manager,
 		root,
-		store,
+		storage: store,
 		workspace,
 	};
 };
@@ -141,7 +139,7 @@ const exportEmptySession = async (
 	id: string,
 	destination: string
 ): Promise<void> => {
-	const created = await fixture.store.createEmptySession({
+	const created = await fixture.storage.createEmptySession({
 		id: toSessionId(id),
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 	});
@@ -150,7 +148,7 @@ const exportEmptySession = async (
 	}
 	await createSessionBundleExportOperation(
 		fixture.manager,
-		fixture.store
+		fixture.storage
 	)({
 		destination,
 		sessionId: created.id,
@@ -279,7 +277,7 @@ test("import rejects an incomplete attachment closure without publishing a parti
 	const source = await createFixture("session-import-missing-source");
 	const target = await createFixture("session-import-missing-target");
 	try {
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: toSessionId("bundle-import-missing-blob"),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
@@ -305,7 +303,7 @@ test("import rejects an incomplete attachment closure without publishing a parti
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("bundle-import-missing-blob-turn"),
 			});
-			const outcome = await source.store.commitSessionRecord({
+			const outcome = await source.storage.commitSessionRecord({
 				record,
 				sessionId: created.id,
 			});
@@ -318,7 +316,7 @@ test("import rejects an incomplete attachment closure without publishing a parti
 		const bundlePath = path.join(source.root, "bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({
 			destination: bundlePath,
 			sessionId: created.id,
@@ -329,11 +327,11 @@ test("import rejects an incomplete attachment closure without publishing a parti
 		const attachmentPath = path.join(bundlePath, manifest.attachments[0].path);
 		await fs.unlink(attachmentPath);
 
-		const importBundle = createSessionBundleImportOperation(target.store);
+		const importBundle = createSessionBundleImportOperation(target.storage);
 		await expect(importBundle({ bundlePath })).rejects.toMatchObject({
 			code: "session_bundle_invalid",
 		});
-		expect(await target.store.listSessions()).toEqual([]);
+		expect(await target.storage.listSessions()).toEqual([]);
 		expect(
 			await Bun.file(
 				resolveSessionLogFilePath(target.logRoot, created.id)
@@ -354,7 +352,7 @@ test("bundle rejects attachment metadata that disagrees with log references befo
 	);
 	const sessionId = toSessionId("bundle-import-attachment-metadata");
 	try {
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: sessionId,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
@@ -379,7 +377,7 @@ test("bundle rejects attachment metadata that disagrees with log references befo
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("bundle-import-attachment-metadata-turn"),
 			});
-			const committed = await source.store.commitSessionRecord({
+			const committed = await source.storage.commitSessionRecord({
 				record,
 				sessionId,
 			});
@@ -391,7 +389,7 @@ test("bundle rejects attachment metadata that disagrees with log references befo
 		const bundlePath = path.join(source.root, "bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({ destination: bundlePath, sessionId });
 		const manifestPath = path.join(bundlePath, "manifest.json");
 		const manifest = (await Bun.file(
@@ -401,7 +399,7 @@ test("bundle rejects attachment metadata that disagrees with log references befo
 		if (attachmentEntry === undefined) {
 			throw new Error("The exported bundle has no attachment entry.");
 		}
-		const importBundle = createSessionBundleImportOperation(target.store);
+		const importBundle = createSessionBundleImportOperation(target.storage);
 		for (const metadata of [
 			{ filename: "different.png" },
 			{ width: 1 },
@@ -417,7 +415,7 @@ test("bundle rejects attachment metadata that disagrees with log references befo
 			await expect(importBundle({ bundlePath })).rejects.toMatchObject({
 				code: "session_bundle_invalid",
 			});
-			expect(await target.store.listSessions()).toEqual([]);
+			expect(await target.storage.listSessions()).toEqual([]);
 			expect(
 				await Bun.file(
 					resolveSessionLogFilePath(target.logRoot, sessionId)
@@ -437,22 +435,22 @@ test("a deleted Session ID remains reserved against repeated bundle imports", as
 	const bundlePath = path.join(source.root, "bundle");
 	try {
 		await exportEmptySession(source, sessionId, bundlePath);
-		const created = await target.store.createEmptySession({
+		const created = await target.storage.createEmptySession({
 			id: sessionId,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
 		if (created.writeOutcome.kind !== "committed") {
 			throw new Error("The deleted import target was not committed.");
 		}
-		const deletion = await target.store.deleteSession(sessionId);
+		const deletion = await target.storage.deleteSession(sessionId);
 		expect(deletion.kind).toBe("committed");
 
-		const importBundle = createSessionBundleImportOperation(target.store);
+		const importBundle = createSessionBundleImportOperation(target.storage);
 		for (let attempt = 0; attempt < 2; attempt += 1) {
 			await expect(importBundle({ bundlePath })).rejects.toMatchObject({
 				code: "session_import_conflict",
 			});
-			expect(await target.store.listSessions()).toEqual([]);
+			expect(await target.storage.listSessions()).toEqual([]);
 			expect(
 				await Bun.file(
 					resolveSessionLogFilePath(target.logRoot, sessionId)
@@ -472,7 +470,7 @@ test("identical imports are no-ops, while a same-ID prefix extension is a confli
 		const sessionId = "bundle-import-identity";
 		const originalBundle = path.join(source.root, "original-bundle");
 		await exportEmptySession(source, sessionId, originalBundle);
-		const importBundle = createSessionBundleImportOperation(target.store);
+		const importBundle = createSessionBundleImportOperation(target.storage);
 		const first = await importBundle({ bundlePath: originalBundle });
 		const repeated = await importBundle({ bundlePath: originalBundle });
 		expect(first.status).toBe("imported");
@@ -483,7 +481,7 @@ test("identical imports are no-ops, while a same-ID prefix extension is a confli
 		});
 
 		const sourceId = toSessionId(sessionId);
-		const confirmActivation = target.store.confirmSessionImportActivation;
+		const confirmActivation = target.storage.confirmSessionImportActivation;
 		if (confirmActivation === undefined) {
 			throw new Error("Session import activation storage is unavailable.");
 		}
@@ -495,13 +493,13 @@ test("identical imports are no-ops, while a same-ID prefix extension is a confli
 			status: "unchanged",
 		});
 
-		await target.store.updateSession(sourceId, {
+		await target.storage.updateSession(sourceId, {
 			title: "Continued locally after import",
 		});
 		const localSubmissionId = toSubmissionId(
 			"bundle-import-identity-local-submission"
 		);
-		const localInput = await target.store.commitSessionRecord({
+		const localInput = await target.storage.commitSessionRecord({
 			record: buildUserSessionRecord({
 				agentId: agentId("build"),
 				message: {
@@ -528,13 +526,13 @@ test("identical imports are no-ops, while a same-ID prefix extension is a confli
 			status: "unchanged",
 		});
 
-		await source.store.updateSession(sourceId, {
+		await source.storage.updateSession(sourceId, {
 			title: "Extended after the imported cut",
 		});
 		const extendedBundle = path.join(source.root, "extended-bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({
 			destination: extendedBundle,
 			sessionId: sourceId,
@@ -547,7 +545,7 @@ test("identical imports are no-ops, while a same-ID prefix extension is a confli
 		).rejects.toMatchObject({
 			code: "session_import_conflict",
 		});
-		expect(await target.store.getSession(sourceId)).toMatchObject({
+		expect(await target.storage.getSession(sourceId)).toMatchObject({
 			title: "Continued locally after import",
 		});
 	} finally {
@@ -568,7 +566,7 @@ test("a forked imported Session keeps attachments live after deleting and collec
 		});
 		try {
 			const attachmentReference = attachmentLease.reference;
-			const created = await source.store.createSession({
+			const created = await source.storage.createSession({
 				agent: agentId("build"),
 				message: createSessionUserMessage(
 					"Keep the portable attachment in a fork.",
@@ -586,29 +584,31 @@ test("a forked imported Session keeps attachments live after deleting and collec
 			const bundlePath = path.join(source.root, "fork-source-bundle");
 			await createSessionBundleExportOperation(
 				source.manager,
-				source.store
+				source.storage
 			)({
 				destination: bundlePath,
 				sessionId: created.id,
 			});
-			const imported = await createSessionBundleImportOperation(target.store)({
-				bundlePath,
-			});
-			const importedRecords = await target.store.listSessionRecords(
+			const imported = await createSessionBundleImportOperation(target.storage)(
+				{
+					bundlePath,
+				}
+			);
+			const importedRecords = await target.storage.listSessionRecords(
 				imported.sessionId
 			);
 			const importedUserRecord = importedRecords[0];
 			if (importedUserRecord === undefined) {
 				throw new Error("The imported Session has no accepted user record.");
 			}
-			const forked = await target.store.forkSession(
+			const forked = await target.storage.forkSession(
 				imported.sessionId,
 				{ recordId: importedUserRecord.id },
 				"session-import-fork-delete-source"
 			);
 			expect(forked.created).toBe(true);
 
-			const deletion = await target.store.deleteSession(imported.sessionId);
+			const deletion = await target.storage.deleteSession(imported.sessionId);
 			expect(deletion).toMatchObject({
 				kind: "committed",
 				projection: "ready",
@@ -626,11 +626,11 @@ test("a forked imported Session keeps attachments live after deleting and collec
 				);
 			}
 			expect(resolved.bytes).toEqual(attachmentBytes);
-			expect((await target.store.listSessions()).map(({ id }) => id)).toEqual([
-				forked.id,
-			]);
+			expect((await target.storage.listSessions()).map(({ id }) => id)).toEqual(
+				[forked.id]
+			);
 			expect(
-				await target.store.getSessionForkProvenance(forked.id)
+				await target.storage.getSessionForkProvenance(forked.id)
 			).toMatchObject({ sourceSessionId: imported.sessionId });
 		} finally {
 			await attachmentLease.release();
@@ -650,7 +650,7 @@ test("import requires the destination to configure the historical Agent identity
 	let configuredAgentSdk: SessionSdk | undefined;
 	let handle: SessionSdkHandle | undefined;
 	try {
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: sessionId,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
@@ -679,7 +679,7 @@ test("import requires the destination to configure the historical Agent identity
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("bundle-import-agent-turn"),
 		});
-		const committed = await source.store.commitSessionRecord({
+		const committed = await source.storage.commitSessionRecord({
 			record,
 			sessionId,
 		});
@@ -689,23 +689,23 @@ test("import requires the destination to configure the historical Agent identity
 		const bundlePath = path.join(source.root, "bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({ destination: bundlePath, sessionId });
-		await createSessionBundleImportOperation(target.store)({ bundlePath });
+		await createSessionBundleImportOperation(target.storage)({ bundlePath });
 
 		missingAgentSdk = await createSessionSdkWithRuntime({
 			createProviderCollection: () =>
 				createFakeProviderCollection(createFakeProviderRecorder()),
 			cwd: target.workspace,
 			pluginPaths: [],
-			store: target.store,
+			storage: target.storage,
 			workspace: target.workspace,
 		});
 		await expect(
 			missingAgentSdk.openSession(sessionId, { autoContinue: true })
 		).rejects.toThrow(missingDestinationAgentMessage);
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(true);
 		await missingAgentSdk.dispose();
 		missingAgentSdk = undefined;
@@ -733,7 +733,7 @@ test("import requires the destination to configure the historical Agent identity
 			cwd: target.workspace,
 			getRegistry: () => targetRegistry,
 			pluginPaths: [],
-			store: target.store,
+			storage: target.storage,
 			workspace: target.workspace,
 		});
 		handle = await configuredAgentSdk.openSession(sessionId, {
@@ -752,7 +752,7 @@ test("import requires the destination to configure the historical Agent identity
 			unsubscribe();
 		}
 		expect(recorder.requests).toHaveLength(1);
-		const records = await target.store.listSessionRecords(sessionId);
+		const records = await target.storage.listSessionRecords(sessionId);
 		expect(records.at(-1)?.agentId).toBe(sourceAgent);
 
 		await handle.dispose();
@@ -764,11 +764,11 @@ test("import requires the destination to configure the historical Agent identity
 				createFakeProviderCollection(createFakeProviderRecorder()),
 			cwd: target.workspace,
 			pluginPaths: [],
-			store: target.store,
+			storage: target.storage,
 			workspace: target.workspace,
 		});
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(false);
 		await expect(
 			missingAgentSdk.openSession(sessionId, { autoContinue: false })
@@ -804,7 +804,7 @@ test("an unavailable imported Provider Model cannot fall back from its historica
 	let sdk: SessionSdk | undefined;
 	let handle: SessionSdkHandle | undefined;
 	try {
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: sessionId,
 			model: sourceModel,
 		});
@@ -827,7 +827,7 @@ test("an unavailable imported Provider Model cannot fall back from its historica
 			model: sourceModel,
 			turnId: agentTurnId("bundle-import-provider-turn"),
 		});
-		const committed = await source.store.commitSessionRecord({
+		const committed = await source.storage.commitSessionRecord({
 			record,
 			sessionId,
 		});
@@ -837,9 +837,9 @@ test("an unavailable imported Provider Model cannot fall back from its historica
 		const bundlePath = path.join(source.root, "bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({ destination: bundlePath, sessionId });
-		await createSessionBundleImportOperation(target.store)({ bundlePath });
+		await createSessionBundleImportOperation(target.storage)({ bundlePath });
 
 		const targetRegistry = buildAgentRegistry(
 			fromPartial<ConfigSnapshot>({
@@ -864,12 +864,12 @@ test("an unavailable imported Provider Model cannot fall back from its historica
 			cwd: target.workspace,
 			getRegistry: () => targetRegistry,
 			pluginPaths: [],
-			store: target.store,
+			storage: target.storage,
 			workspace: target.workspace,
 		});
 		handle = await sdk.openSession(sessionId, { autoContinue: true });
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(true);
 		expect(recorder.requests).toEqual([]);
 
@@ -902,7 +902,7 @@ test("an unavailable imported Provider Model cannot fall back from its historica
 			providerId: destinationProviderModel.providerId,
 		});
 		expect(
-			(await target.store.listSessionRecords(sessionId)).at(-1)
+			(await target.storage.listSessionRecords(sessionId)).at(-1)
 		).toMatchObject({
 			agentId: sourceAgent,
 			model: destinationModel,
@@ -921,19 +921,19 @@ test("import activation remains pending across projection rebuild and is logged 
 	try {
 		const bundlePath = path.join(source.root, "bundle");
 		await exportEmptySession(source, "bundle-import-activation", bundlePath);
-		const imported = await createSessionBundleImportOperation(target.store)({
+		const imported = await createSessionBundleImportOperation(target.storage)({
 			bundlePath,
 		});
 		const sessionId = toSessionId(imported.sessionId);
-		const activationPending = target.store.isSessionImportActivationPending;
-		const confirmActivation = target.store.confirmSessionImportActivation;
+		const activationPending = target.storage.isSessionImportActivationPending;
+		const confirmActivation = target.storage.confirmSessionImportActivation;
 		expect(activationPending).toBeDefined();
 		expect(confirmActivation).toBeDefined();
 		if (activationPending === undefined || confirmActivation === undefined) {
 			throw new Error("Session import activation storage is unavailable.");
 		}
 		expect(await activationPending(sessionId)).toBe(true);
-		await target.store.rebuildProjection(
+		await target.storage.rebuildProjection(
 			{ kind: "all" },
 			async (operation) => await operation()
 		);
@@ -961,7 +961,7 @@ test("imported pending work stays idle until explicit SDK continuation records a
 	let autoContinueHandle: SessionSdkHandle | undefined;
 	try {
 		const sessionId = toSessionId("bundle-import-gated-work");
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: sessionId,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
@@ -990,7 +990,7 @@ test("imported pending work stays idle until explicit SDK continuation records a
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("bundle-import-gated-turn"),
 		});
-		const recordOutcome = await source.store.commitSessionRecord({
+		const recordOutcome = await source.storage.commitSessionRecord({
 			record: pendingRecord,
 			sessionId,
 		});
@@ -1000,7 +1000,7 @@ test("imported pending work stays idle until explicit SDK continuation records a
 		const bundlePath = path.join(source.root, "bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({
 			destination: bundlePath,
 			sessionId,
@@ -1024,11 +1024,11 @@ test("imported pending work stays idle until explicit SDK continuation records a
 			createProviderCollection: () => createFakeProviderCollection(recorder),
 			cwd: target.workspace,
 			pluginPaths: [],
-			store: target.store,
+			storage: target.storage,
 			workspace: target.workspace,
 		});
 		await sdk.importSessionBundle(bundlePath);
-		await target.store.rebuildProjection(
+		await target.storage.rebuildProjection(
 			{ kind: "all" },
 			async (operation) => await operation()
 		);
@@ -1037,7 +1037,7 @@ test("imported pending work stays idle until explicit SDK continuation records a
 			autoContinue: true,
 		});
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(true);
 		expect(recorder.requests).toEqual([]);
 
@@ -1060,7 +1060,7 @@ test("a crash after marker durability is retryable without exposing a half-writt
 	try {
 		const bundlePath = path.join(source.root, "bundle");
 		await exportEmptySession(source, "bundle-import-crash", bundlePath);
-		const failingImport = createSessionBundleImportOperation(target.store, {
+		const failingImport = createSessionBundleImportOperation(target.storage, {
 			afterActivationMarker: async () => {
 				throw new Error("injected crash after marker sync");
 			},
@@ -1069,19 +1069,19 @@ test("a crash after marker durability is retryable without exposing a half-writt
 			code: "session_import_failed",
 		});
 		const sessionId = toSessionId("bundle-import-crash");
-		expect(await target.store.listSessions()).toEqual([]);
+		expect(await target.storage.listSessions()).toEqual([]);
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(true);
 
-		const retried = await createSessionBundleImportOperation(target.store)({
+		const retried = await createSessionBundleImportOperation(target.storage)({
 			bundlePath,
 		});
 		expect(retried.status).toBe("imported");
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(true);
-		expect(await target.store.listSessions()).toHaveLength(1);
+		expect(await target.storage.listSessions()).toHaveLength(1);
 	} finally {
 		await source.close();
 		await target.close();
@@ -1094,40 +1094,43 @@ test("a fresh catalog page and retry recover a durable imported log after projec
 	try {
 		const bundlePath = path.join(source.root, "bundle");
 		const sessionId = toSessionId("bundle-import-published-crash");
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: sessionId,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
 		if (created.writeOutcome.kind !== "committed") {
 			throw new Error("The import source Session was not committed.");
 		}
-		await source.store.updateSession(sessionId, {
+		await source.storage.updateSession(sessionId, {
 			title: "Crash recovery title",
 		});
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({
 			destination: bundlePath,
 			sessionId,
 		});
-		const interruptedImport = createSessionBundleImportOperation(target.store, {
-			afterPublish: async () => {
-				throw new Error("injected crash after durable log publication");
-			},
-		});
+		const interruptedImport = createSessionBundleImportOperation(
+			target.storage,
+			{
+				afterPublish: async () => {
+					throw new Error("injected crash after durable log publication");
+				},
+			}
+		);
 		await expect(interruptedImport({ bundlePath })).rejects.toMatchObject({
 			code: "session_import_indeterminate",
 		});
 		await expect(target.getProjectedSession(sessionId)).rejects.toThrow();
 
-		const page = await target.store.listSessionsPage({ limit: 10 });
+		const page = await target.storage.listSessionsPage({ limit: 10 });
 		expect(page.sessions.find(({ id }) => id === sessionId)).toMatchObject({
 			id: sessionId,
 			title: "Crash recovery title",
 		});
 
-		const retry = await createSessionBundleImportOperation(target.store)({
+		const retry = await createSessionBundleImportOperation(target.storage)({
 			bundlePath,
 		});
 		expect(retry).toMatchObject({
@@ -1148,7 +1151,7 @@ test("bundle rejects an unresolved submission status reference before publishing
 	const target = await createFixture("session-import-status-reference-target");
 	try {
 		const sessionId = toSessionId("bundle-import-status-reference");
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: sessionId,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
@@ -1178,14 +1181,14 @@ test("bundle rejects an unresolved submission status reference before publishing
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("bundle-import-status-turn"),
 		});
-		const committed = await source.store.commitSessionRecord({
+		const committed = await source.storage.commitSessionRecord({
 			record,
 			sessionId,
 		});
 		if (committed.kind !== "committed") {
 			throw new Error("The import source submission was not committed.");
 		}
-		const statusUpdated = await source.store.updateSessionSubmission({
+		const statusUpdated = await source.storage.updateSessionSubmission({
 			messageId,
 			recordId: record.id,
 			sessionId,
@@ -1198,21 +1201,21 @@ test("bundle rejects an unresolved submission status reference before publishing
 		const bundlePath = path.join(source.root, "bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({ destination: bundlePath, sessionId });
 		await rewriteBundleWithMissingSubmissionStatusReference(bundlePath);
 
 		await expect(
-			createSessionBundleImportOperation(target.store)({ bundlePath })
+			createSessionBundleImportOperation(target.storage)({ bundlePath })
 		).rejects.toMatchObject({ code: "session_bundle_invalid" });
-		expect(await target.store.listSessions()).toEqual([]);
+		expect(await target.storage.listSessions()).toEqual([]);
 		expect(
 			await Bun.file(
 				resolveSessionLogFilePath(target.logRoot, sessionId)
 			).exists()
 		).toBe(false);
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(false);
 	} finally {
 		await source.close();
@@ -1225,7 +1228,7 @@ test("bundle rejects processed Submission status returning to pending before imp
 	const target = await createFixture("session-import-status-transition-target");
 	try {
 		const sessionId = toSessionId("bundle-import-status-transition");
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: sessionId,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
@@ -1256,7 +1259,7 @@ test("bundle rejects processed Submission status returning to pending before imp
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("bundle-import-status-transition-turn"),
 		});
-		const committed = await source.store.commitSessionRecord({
+		const committed = await source.storage.commitSessionRecord({
 			record,
 			sessionId,
 		});
@@ -1269,7 +1272,7 @@ test("bundle rejects processed Submission status returning to pending before imp
 			"processing",
 			"processed",
 		] as const) {
-			const updated = await source.store.updateSessionSubmission({
+			const updated = await source.storage.updateSessionSubmission({
 				messageId,
 				recordId: record.id,
 				sessionId,
@@ -1286,7 +1289,7 @@ test("bundle rejects processed Submission status returning to pending before imp
 		const bundlePath = path.join(source.root, "bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({
 			destination: bundlePath,
 			sessionId,
@@ -1294,16 +1297,16 @@ test("bundle rejects processed Submission status returning to pending before imp
 		await appendBundleSubmissionStatus(bundlePath, "pending");
 
 		await expect(
-			createSessionBundleImportOperation(target.store)({ bundlePath })
+			createSessionBundleImportOperation(target.storage)({ bundlePath })
 		).rejects.toMatchObject({ code: "session_bundle_invalid" });
-		expect(await target.store.listSessions()).toEqual([]);
+		expect(await target.storage.listSessions()).toEqual([]);
 		expect(
 			await Bun.file(
 				resolveSessionLogFilePath(target.logRoot, sessionId)
 			).exists()
 		).toBe(false);
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(false);
 	} finally {
 		await source.close();
@@ -1343,14 +1346,14 @@ test("partial activation-marker writes are cleaned so a retry can publish", asyn
 		const bundlePath = path.join(source.root, "bundle");
 		const sessionId = toSessionId("bundle-import-marker-write");
 		await exportEmptySession(source, sessionId, bundlePath);
-		const importBundle = createSessionBundleImportOperation(target.store);
+		const importBundle = createSessionBundleImportOperation(target.storage);
 
 		await expect(importBundle({ bundlePath })).rejects.toMatchObject({
 			code: "session_import_failed",
 		});
-		expect(await target.store.listSessions()).toEqual([]);
+		expect(await target.storage.listSessions()).toEqual([]);
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(false);
 		expect(
 			await Bun.file(
@@ -1373,7 +1376,7 @@ test("partial activation-marker writes are cleaned so a retry can publish", asyn
 			activationPending: true,
 			status: "imported",
 		});
-		expect(await target.store.listSessions()).toHaveLength(1);
+		expect(await target.storage.listSessions()).toHaveLength(1);
 	} finally {
 		await source.close();
 		await target.close();
@@ -1405,20 +1408,20 @@ test("a published activation marker survives directory-sync failure for retry re
 		const bundlePath = path.join(source.root, "bundle");
 		const sessionId = toSessionId("bundle-import-marker-sync");
 		await exportEmptySession(source, sessionId, bundlePath);
-		const importBundle = createSessionBundleImportOperation(target.store);
+		const importBundle = createSessionBundleImportOperation(target.storage);
 
 		await expect(importBundle({ bundlePath })).rejects.toMatchObject({
 			code: "session_import_failed",
 		});
-		expect(await target.store.listSessions()).toEqual([]);
+		expect(await target.storage.listSessions()).toEqual([]);
 		expect(
-			await target.store.isSessionImportActivationPending?.(sessionId)
+			await target.storage.isSessionImportActivationPending?.(sessionId)
 		).toBe(true);
 		await expect(importBundle({ bundlePath })).resolves.toMatchObject({
 			activationPending: true,
 			status: "imported",
 		});
-		expect(await target.store.listSessions()).toHaveLength(1);
+		expect(await target.storage.listSessions()).toHaveLength(1);
 	} finally {
 		await source.close();
 		await target.close();
@@ -1430,7 +1433,7 @@ test("attachment collection during import staging and publication preserves impo
 	const target = await createFixture("session-import-attachment-gc-target");
 	try {
 		const sessionId = toSessionId("bundle-import-attachment-gc");
-		const created = await source.store.createEmptySession({
+		const created = await source.storage.createEmptySession({
 			id: sessionId,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		});
@@ -1454,7 +1457,7 @@ test("attachment collection during import staging and publication preserves impo
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("bundle-import-attachment-gc-turn"),
 			});
-			const committed = await source.store.commitSessionRecord({
+			const committed = await source.storage.commitSessionRecord({
 				record,
 				sessionId,
 			});
@@ -1467,7 +1470,7 @@ test("attachment collection during import staging and publication preserves impo
 		const bundlePath = path.join(source.root, "bundle");
 		await createSessionBundleExportOperation(
 			source.manager,
-			source.store
+			source.storage
 		)({
 			destination: bundlePath,
 			sessionId,
@@ -1475,7 +1478,7 @@ test("attachment collection during import staging and publication preserves impo
 		const attachmentsStaged = Promise.withResolvers<void>();
 		const continuePublication = Promise.withResolvers<void>();
 		let publicationCollection: Promise<AttachmentMaintenanceReport> | undefined;
-		const importBundle = createSessionBundleImportOperation(target.store, {
+		const importBundle = createSessionBundleImportOperation(target.storage, {
 			afterAttachmentsStaged: async () => {
 				attachmentsStaged.resolve();
 				await continuePublication.promise;
@@ -1510,7 +1513,7 @@ test("attachment collection during import staging and publication preserves impo
 			await expect(publicationCollection).resolves.toMatchObject({
 				reclaimedCount: 0,
 			});
-			expect(await target.store.listSessions()).toHaveLength(1);
+			expect(await target.storage.listSessions()).toHaveLength(1);
 			await expect(
 				target.attachmentStore.resolve(reference)
 			).resolves.toMatchObject({
@@ -1540,9 +1543,9 @@ test("bundle resource budgets reject oversized declared logs before import publi
 		await Bun.write(manifestPath, JSON.stringify(manifest));
 
 		await expect(
-			createSessionBundleImportOperation(target.store)({ bundlePath })
+			createSessionBundleImportOperation(target.storage)({ bundlePath })
 		).rejects.toMatchObject({ code: "session_bundle_invalid" });
-		expect(await target.store.listSessions()).toEqual([]);
+		expect(await target.storage.listSessions()).toEqual([]);
 	} finally {
 		await source.close();
 		await target.close();

@@ -19,7 +19,7 @@ import {
 	createSessionBundleExportOperation,
 	SessionBundleExportError,
 } from "../../session-bundle-export";
-import { getSessionStore } from "../../storage/get-session-store";
+import { getSessionLifecycle } from "../../storage/get-session-storage";
 
 export const formatSessionBundleExportFailure = (error: unknown): string => {
 	const message = getErrorMessage(error, "Failed to export Session bundle");
@@ -71,7 +71,7 @@ export function ExportSessionDialog({ session }: ExportSessionDialogProps) {
 		try {
 			const exportSessionBundle = createSessionBundleExportOperation(
 				getInteractiveSessionHostManager(),
-				getSessionStore()
+				getSessionLifecycle()
 			);
 			const scope: SessionBundleExportScope =
 				scopeIndex === 0 ? "tree" : "branch";

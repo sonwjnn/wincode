@@ -1,4 +1,8 @@
-import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
+import type {
+	SessionMessageRecord,
+	SessionRecord,
+	SessionRecordOutcome,
+} from "@wincode/agent-core";
 import type { ModelUsage, ThinkingLevel } from "@wincode/ai";
 import { asc, desc } from "drizzle-orm";
 import {
@@ -14,12 +18,10 @@ import type { Jsonify } from "type-fest";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { EditMode, FileVersion } from "@/modules/tools";
 import type { SessionCompaction } from "../compaction/types";
+import type { PromptHistoryEntry } from "./prompt-history";
+import type { SessionUsageEntry } from "./session-catalog";
 import type { SessionForkedPayload } from "./session-jsonl-codec";
-import type {
-	PromptHistoryEntry,
-	SessionRecordStorageOutcome,
-	SessionUsageEntry,
-} from "./session-store";
+
 export type SerializedJson<T> = Jsonify<T>;
 
 export const sessionProjectionState = sqliteTable("session_projection_state", {
@@ -604,7 +606,7 @@ export const sessionRecord = sqliteTable(
 			.$type<SerializedJson<SessionRecord["model"]>>()
 			.notNull(),
 		outcomeJson: text("outcome_json", { mode: "json" })
-			.$type<SerializedJson<SessionRecordStorageOutcome>>()
+			.$type<SerializedJson<SessionRecordOutcome>>()
 			.notNull(),
 		messagesJson: text("messages_json", { mode: "json" })
 			.$type<SerializedJson<SessionMessageRecord[]>>()

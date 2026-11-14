@@ -20,6 +20,7 @@ import {
 	forkSessionThroughIdleHost,
 	forkSessionThroughIdleHostAndThen,
 } from "@/modules/sessions/session-fork-routing";
+import type { SessionAttachments } from "@/modules/sessions/storage/session-attachments";
 import { SessionLogError } from "@/modules/sessions/storage/session-jsonl-codec";
 import {
 	SessionForkError,
@@ -208,14 +209,15 @@ const mapSessionPaginationError = (
 		: undefined;
 
 const createAttachmentReferenceResolver = (
-	attachmentStore: NonNullable<RpcAssembly["store"]>["attachmentStore"]
+	attachments: SessionAttachments | undefined
 ): AttachmentReferenceResolver | undefined => {
-	if (attachmentStore === undefined) {
+	if (attachments === undefined) {
 		return;
 	}
 	return {
 		resolve: async (reference) => {
-			const resolution = await attachmentStore.resolve(reference);
+			const resolution =
+				await attachments.resolveAttachmentReference(reference);
 			if (resolution.availability !== "available") {
 				return { availability: "unavailable" };
 			}
@@ -378,7 +380,7 @@ export const createRpcRequestHandler = (
 		}
 		requireInitialized();
 		if (request.method === "session/listPage") {
-			const store = state.assembly?.store;
+			const store = state.assembly?.storage;
 			if (store === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
@@ -394,7 +396,7 @@ export const createRpcRequestHandler = (
 			}
 		}
 		if (request.method === "session/getHistoryPage") {
-			const store = state.assembly?.store;
+			const store = state.assembly?.storage;
 			if (store === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
@@ -424,7 +426,7 @@ export const createRpcRequestHandler = (
 		}
 		if (request.method === "session/navigateHistory") {
 			const assembly = state.assembly;
-			if (assembly?.store === undefined) {
+			if (assembly?.storage === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
 			const params = paramsOf(request);
@@ -487,7 +489,7 @@ export const createRpcRequestHandler = (
 			}
 		}
 		if (request.method === "session/getStatistics") {
-			const store = state.assembly?.store;
+			const store = state.assembly?.storage;
 			if (store === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
@@ -519,7 +521,7 @@ export const createRpcRequestHandler = (
 		}
 		if (request.method === "session/exportBundle") {
 			const assembly = state.assembly;
-			const store = assembly?.store;
+			const store = assembly?.storage;
 			if (assembly === undefined || store === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
@@ -578,7 +580,7 @@ export const createRpcRequestHandler = (
 		}
 		if (request.method === "session/importBundle") {
 			const assembly = state.assembly;
-			const store = assembly?.store;
+			const store = assembly?.storage;
 			if (assembly === undefined || store === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
@@ -607,10 +609,10 @@ export const createRpcRequestHandler = (
 			request.method === "session/rewind"
 		) {
 			const activeAssembly = state.assembly;
-			if (activeAssembly?.store === undefined) {
+			if (activeAssembly?.storage === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
-			const store = activeAssembly.store;
+			const store = activeAssembly.storage;
 			const runtime = await getRuntime();
 			const input = readSessionForkInput(paramsOf(request));
 			const sourceSessionId = runtime.toSessionId(input.sourceSessionId);
@@ -643,6 +645,7 @@ export const createRpcRequestHandler = (
 							targetHost = await runtime.createSessionHost({
 								capabilities: activeAssembly.capabilities,
 								sessionId: targetSessionId,
+								storage: activeAssembly.storage,
 							});
 							if (
 								state.signalRequested ||
@@ -683,7 +686,10 @@ export const createRpcRequestHandler = (
 			}
 		}
 		if (request.method === "session/create") {
-			if (state.assembly === undefined || state.assembly.store === undefined) {
+			if (
+				state.assembly === undefined ||
+				state.assembly.storage === undefined
+			) {
 				throw appError(
 					"not_initialized",
 					"Initialize before creating a Session."
@@ -691,10 +697,10 @@ export const createRpcRequestHandler = (
 			}
 			const activeAssembly = state.assembly;
 			const activeRuntime = await getRuntime();
-			if (activeAssembly.store === undefined) {
+			if (activeAssembly.storage === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
-			const store = activeAssembly.store;
+			const store = activeAssembly.storage;
 			const params = paramsOf(request);
 			if (params.selection === undefined) {
 				throw appError(
@@ -743,7 +749,7 @@ export const createRpcRequestHandler = (
 				const draft = await readSubmission(
 					params,
 					"initialSubmission",
-					createAttachmentReferenceResolver(store.attachmentStore)
+					createAttachmentReferenceResolver(store)
 				);
 				const submission = await prepareSubmission(draft);
 				const turnId = activeRuntime.createAgentTurnId();
@@ -802,6 +808,7 @@ export const createRpcRequestHandler = (
 					const restoredHost = await activeRuntime.createSessionHost({
 						capabilities: activeAssembly.capabilities,
 						sessionId: previousSessionId,
+						storage: activeAssembly.storage,
 					});
 					bind(restoredHost, previousSessionId);
 				};
@@ -813,6 +820,7 @@ export const createRpcRequestHandler = (
 						providerCollection,
 						providerModel: selection.model,
 						sessionId: createdId,
+						storage: activeAssembly.storage,
 					});
 					if (
 						state.signalRequested ||
@@ -885,7 +893,10 @@ export const createRpcRequestHandler = (
 			}
 		}
 		if (request.method === "session/open") {
-			if (state.assembly === undefined || state.assembly.store === undefined) {
+			if (
+				state.assembly === undefined ||
+				state.assembly.storage === undefined
+			) {
 				throw appError(
 					"not_initialized",
 					"Initialize before opening a Session."
@@ -893,10 +904,10 @@ export const createRpcRequestHandler = (
 			}
 			const activeAssembly = state.assembly;
 			const activeRuntime = await getRuntime();
-			if (activeAssembly.store === undefined) {
+			if (activeAssembly.storage === undefined) {
 				throw appError("not_initialized", "Session storage is unavailable.");
 			}
-			const store = activeAssembly.store;
+			const store = activeAssembly.storage;
 			const requestedSessionId = stringValue(paramsOf(request).sessionId);
 			if (requestedSessionId === undefined) {
 				throw rpcInvalidParams("sessionId is required.");
@@ -921,6 +932,7 @@ export const createRpcRequestHandler = (
 				const openedHost = await activeRuntime.createSessionHost({
 					capabilities: activeAssembly.capabilities,
 					sessionId,
+					storage: activeAssembly.storage,
 				});
 				if (
 					state.signalRequested ||
@@ -958,9 +970,7 @@ export const createRpcRequestHandler = (
 			const draft = await readSubmission(
 				params,
 				"submission",
-				createAttachmentReferenceResolver(
-					state.assembly?.store?.attachmentStore
-				)
+				createAttachmentReferenceResolver(state.assembly?.storage)
 			);
 			const submission = await prepareSubmission(draft);
 			const selection =

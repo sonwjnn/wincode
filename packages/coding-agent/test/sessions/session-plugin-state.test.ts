@@ -18,7 +18,7 @@ import type {
 } from "@/modules/sessions/sdk-contract";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { createConfigStore } from "@/shared/config/config-store";
 import checklistPlugin from "../../examples/checklist-plugin";
 import {
@@ -30,9 +30,9 @@ import {
 	toolCallId,
 } from "../support/identifiers";
 import {
-	sessionStoreWithSuccessfulWrites,
+	sessionStorageWithSuccessfulWrites,
 	successfulSessionWriteOutcome,
-} from "../support/session-write-store";
+} from "../support/session-facets";
 import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-plugin-state-"));
@@ -53,8 +53,8 @@ const createStoreWithBlockedPluginStateWrites = (
 	const projectionStore = createDrizzleSessionStore(database.db, {
 		workspaceRoot: workspace,
 	});
-	const store: SessionStore = {
-		...sessionStoreWithSuccessfulWrites(projectionStore),
+	const storage: SessionStorage = {
+		...sessionStorageWithSuccessfulWrites(projectionStore),
 		mutatePluginSessionState: async (_sessionId, _pluginId, mutation) => {
 			onMutation?.(mutation.operationId);
 			return {
@@ -66,7 +66,7 @@ const createStoreWithBlockedPluginStateWrites = (
 			};
 		},
 	};
-	return { database, store };
+	return { database, storage };
 };
 
 afterAll(async () => {
@@ -901,7 +901,7 @@ test("a committed-but-blocked Plugin state write prevents later Session scheduli
 	const databasePath = await databasePathFor(
 		"session-state-projection-blocked"
 	);
-	const { database, store } =
+	const { database, storage } =
 		createStoreWithBlockedPluginStateWrites(databasePath);
 	const model = providerModelSelectionFixture("openai/gpt-5.6-luna");
 	const recorder = createFakeProviderRecorder();
@@ -930,7 +930,7 @@ test("a committed-but-blocked Plugin state write prevents later Session scheduli
 			{ factory: pluginFactory, id: "plugin_state_blocked_test_253" },
 		],
 		pluginPaths: [],
-		store,
+		storage,
 		workspace,
 	});
 	let handle: SessionSdkHandle | undefined;
@@ -961,7 +961,7 @@ test("a committed-but-blocked Plugin state write prevents later Session scheduli
 test("a blocked Plugin Tool state write prevents the next model step", async () => {
 	const databasePath = await databasePathFor("session-state-tool-blocked");
 	const mutationStarted = Promise.withResolvers<string>();
-	const { database, store } = createStoreWithBlockedPluginStateWrites(
+	const { database, storage } = createStoreWithBlockedPluginStateWrites(
 		databasePath,
 		() => mutationStarted.resolve("attempted")
 	);
@@ -1016,7 +1016,7 @@ test("a blocked Plugin Tool state write prevents the next model step", async () 
 		model,
 		pluginFactories: [{ factory: pluginFactory, id: "state_tool_barrier_253" }],
 		pluginPaths: [],
-		store,
+		storage,
 		workspace,
 	});
 	let handle: SessionSdkHandle | undefined;

@@ -53,20 +53,30 @@ import {
 	restorableSelectionModel,
 	restoreSelection,
 } from "@/modules/sessions/selection";
-import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
-import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
+import type { SessionPageOptions } from "@/modules/sessions/session-pagination-types";
+import {
+	getSessionAttachments,
+	getSessionCatalog,
+	getSessionHistory,
+	getSessionLifecycle,
+	getSessionRecords,
+} from "@/modules/sessions/storage/get-session-storage";
+import type { SessionAttachments } from "@/modules/sessions/storage/session-attachments";
+import type { SessionCatalog } from "@/modules/sessions/storage/session-catalog";
 import type {
 	SessionForkProvenance,
-	SessionPageOptions,
-	SessionStatistics,
-	SessionStore,
-} from "@/modules/sessions/storage/session-store";
+	SessionLifecycle,
+} from "@/modules/sessions/storage/session-lifecycle";
+import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import {
 	SessionInUseError,
 	type SessionWriterLockOwner,
 } from "@/modules/sessions/storage/session-writer-lock";
 import { projectSessionRecords } from "@/modules/sessions/transcript-projection";
-import type { SessionStatisticsUsageTotals } from "@/modules/sessions/usage/session-statistics";
+import type {
+	SessionStatistics,
+	SessionStatisticsUsageTotals,
+} from "@/modules/sessions/usage/session-statistics";
 import type { SessionId } from "@/shared/identifiers";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -172,14 +182,9 @@ const handleSessionOpenFailure = (
 
 const transcriptForDisplay = (
 	host: SessionHost,
-	store: SessionStore
-): Promise<readonly SessionMessage[]> => {
-	const transcript = host.getSnapshot().transcript;
-	return (
-		store.attachmentStore?.annotateMessagesForDisplay(transcript) ??
-		Promise.resolve(transcript)
-	);
-};
+	attachments: SessionAttachments
+): Promise<readonly SessionMessage[]> =>
+	attachments.annotateMessagesForDisplay(host.getSnapshot().transcript);
 
 const createProviderReselection = async (
 	capabilities: SessionCapabilities,
@@ -242,14 +247,17 @@ const createProviderReselection = async (
 };
 
 const loadSessionForkSummary = async (
-	store: SessionStore,
+	facets: Readonly<{
+		catalog: SessionCatalog;
+		lifecycle: Pick<SessionLifecycle, "getSessionForkProvenance">;
+	}>,
 	sessionId: SessionId
 ): Promise<SessionForkSummary | undefined> => {
-	const provenance = await store.getSessionForkProvenance(sessionId);
+	const provenance = await facets.lifecycle.getSessionForkProvenance(sessionId);
 	if (provenance === undefined) {
 		return;
 	}
-	const statistics = await store.getSessionStatistics(sessionId);
+	const statistics = await facets.catalog.getSessionStatistics(sessionId);
 	return { inheritedUsage: statistics.usage.inherited, provenance };
 };
 
@@ -257,20 +265,19 @@ const loadStoredSessionHistory = async (
 	sessionId: SessionId,
 	options?: SessionPageOptions
 ): Promise<StoredSessionHistory> => {
-	const store = getSessionStore();
+	const history = getSessionHistory();
 	const [page, forkProvenance] = await Promise.all([
-		store.readSessionHistoryPage(sessionId, options),
-		store.getSessionForkProvenance(sessionId),
+		history.readSessionHistoryPage(sessionId, options),
+		getSessionLifecycle().getSessionForkProvenance(sessionId),
 	]);
-	const statistics = await store.getSessionStatistics(sessionId, {
+	const statistics = await getSessionCatalog().getSessionStatistics(sessionId, {
 		readPoint: page.readPoint,
 	});
 	const savedTranscript = sanitizeInterruptedSessionMessages(
 		projectSessionRecords(page.records)
 	);
-	const transcript = store.attachmentStore
-		? await store.attachmentStore.annotateMessagesForDisplay(savedTranscript)
-		: savedTranscript;
+	const transcript =
+		await getSessionAttachments().annotateMessagesForDisplay(savedTranscript);
 	return {
 		compactions: page.compactions,
 		forkProvenance,
@@ -328,10 +335,10 @@ const resolveCurrentAgentPin = async ({
 	readonly thinkingSelection: ThinkingSelection;
 	readonly trustedRegistrations: readonly PluginProviderOwnerRegistration[];
 }): Promise<ProviderModelSelection | undefined> => {
-	const store = getSessionStore();
+	const catalog = getSessionCatalog();
 	const [row, records] = await Promise.all([
-		store.getSession(sessionId),
-		store.listSessionRecords(sessionId),
+		catalog.getSession(sessionId),
+		getSessionRecords().listSessionRecords(sessionId),
 	]);
 	const transcript = projectSessionRecords(records);
 	const storedSelection = restoreSelection({
@@ -467,15 +474,19 @@ export function SessionSurface({
 			if (sessionSdk === undefined) {
 				throw new Error("Session Fork is unavailable.");
 			}
-			const store = getSessionStore();
+			const lifecycle = getSessionLifecycle();
 			const checkpoint = { recordId };
-			const operationId = await store.getOrCreateSessionForkActionId(
+			const operationId = await lifecycle.getOrCreateSessionForkActionId(
 				sessionId,
 				checkpoint
 			);
 			return createSessionForkAction({
 				complete: () =>
-					store.completeSessionForkAction(sessionId, checkpoint, operationId),
+					lifecycle.completeSessionForkAction(
+						sessionId,
+						checkpoint,
+						operationId
+					),
 				createFork: () =>
 					sessionSdk.forkSession(sessionId, checkpoint, operationId),
 			});
@@ -612,6 +623,7 @@ export function SessionSurface({
 				executionMode: "interactive",
 				...providerSelection,
 				sessionId,
+				storage: services.storage,
 				view: true,
 			});
 			viewAcquired = true;
@@ -620,11 +632,14 @@ export function SessionSurface({
 				return null;
 			}
 			try {
-				const store = getSessionStore();
+				const catalog = getSessionCatalog();
 				const [row, transcript, forkSummary] = await Promise.all([
-					store.getSession(sessionId),
-					transcriptForDisplay(host, store),
-					loadSessionForkSummary(store, sessionId),
+					catalog.getSession(sessionId),
+					transcriptForDisplay(host, getSessionAttachments()),
+					loadSessionForkSummary(
+						{ catalog, lifecycle: getSessionLifecycle() },
+						sessionId
+					),
 				]);
 				if (ignore) {
 					return null;

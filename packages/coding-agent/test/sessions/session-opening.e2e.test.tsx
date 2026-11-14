@@ -32,7 +32,7 @@ import {
 } from "@/modules/sessions/provider-collection";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+import { getSessionStorage } from "@/modules/sessions/storage/get-session-storage";
 import {
 	resolveLocalAttachmentRoot,
 	resolveLocalSessionLogRoot,
@@ -40,6 +40,7 @@ import {
 	resolveLocalSnapshotRoot,
 } from "@/modules/sessions/storage/path";
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import {
 	SessionInUseError,
 	SessionWriterLockFailureError,
@@ -1163,7 +1164,9 @@ test("closing stored history leaves the other process writer lock held", async (
 });
 
 test("does not offer history when acquiring the OS writer lock fails", async () => {
-	const appStore = getSessionStore();
+	const appStore = getSessionStorage() as {
+		acquireSessionWriter: SessionStorage["acquireSessionWriter"];
+	};
 	const acquireSessionWriter = appStore.acquireSessionWriter;
 	appStore.acquireSessionWriter = async () => {
 		throw new SessionWriterLockFailureError(new Error("lock setup failed"));

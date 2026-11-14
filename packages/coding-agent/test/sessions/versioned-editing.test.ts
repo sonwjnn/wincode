@@ -7,7 +7,7 @@ import { resolveTurnTools } from "@/modules/sessions/hooks/runtime-turn";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import { fileLease } from "@/modules/sessions/storage/schema";
-import type { SessionProjectionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionProjection } from "@/modules/sessions/storage/session-projection";
 import {
 	createDrizzleFileObservationStore,
 	type FileObservationClock,
@@ -32,7 +32,7 @@ import {
 
 type OpenedSessionStore = {
 	database: { sqlite: SqliteDatabase };
-	store: SessionProjectionStore;
+	store: SessionProjection;
 };
 
 const model = {
@@ -51,7 +51,7 @@ const openStore = (root: string, databasePath: string): OpenedSessionStore => {
 };
 
 const observationStoreFor = (
-	store: SessionProjectionStore
+	store: SessionProjection
 ): FileObservationStore => {
 	if (store.fileObservationStore === undefined) {
 		throw new Error("The session store has no file observation store.");

@@ -2,6 +2,10 @@
 
 Status: accepted
 
+Partially superseded: the factory now returns the six Session storage facets as
+`storage`, and the Session Capabilities no longer carry a `getStore()` accessor
+(issue #267). Everything below still holds; read `store` as `storage`.
+
 The capabilities a Session runs with were assembled at every call site that
 needed them: Print and JSON Mode, the RPC runtime, the Session SDK, Interactive
 Mode, and the SDK's child runtimes each resolved plugins, wired the store,
@@ -24,7 +28,7 @@ the raw one.
 - Split the input. `policy` is what the caller asks opening Session Services to create —
   cwd, workspace, database path, and Plugin policy.
   `sources` is what the caller already owns: configuration, Agent registry,
-  ProviderCollection factory, Session Store, Session Host Manager, Plugin
+  ProviderCollection factory, Session storage, Session Host Manager, Plugin
   runtime, and turn tool resolver. The sources a Session's later work must see
   current — configuration, pricing data, and the Plugin runtime Interactive
   Mode replaces on Resource Reload — are read when that work runs.
@@ -34,7 +38,7 @@ the raw one.
   per use when it does.
 - Bind the Session SDK inside the factory, and resolve its mutual reference
   with the capabilities exactly once. The Plugin-facing `SessionSdkOperations`
-  need the Session Store and Session Host Manager the capabilities own, while
+  need the Session storage and Session Host Manager the capabilities own, while
   the capability that hands Plugin Tools those operations needs the operations,
   so one deferred reference resolves it — in the factory, not in every
   caller. `createSessionSdkInternal` keeps a second, structural one, where the
@@ -42,7 +46,7 @@ the raw one.
   function and the reference cannot be hoisted.
 - Own only what was created. Session Services close the Plugin runtime they
   loaded from `policy.plugins`, the SQLite database they opened, and the Session
-  Host Manager they created. An injected Plugin runtime, Session Store, or
+  Host Manager they created. An injected Plugin runtime, Session storage, or
   Manager stays the caller's, and `shutdown()` is idempotent, returning the
   same promise. Interactive Mode's Plugin runtime is process-scoped and
   replaced on Resource Reload, so a session-scoped shutdown must not close it;

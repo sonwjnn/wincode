@@ -8,7 +8,7 @@ import type {
 } from "@/modules/sessions/agent-session/types";
 import type { CompactSessionResult } from "@/modules/sessions/compaction/compaction";
 import type { SessionHost } from "@/modules/sessions/host/types";
-import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-catalog";
 import type {
 	SessionSendInput,
 	SessionSendOutcome,

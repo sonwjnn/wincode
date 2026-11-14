@@ -19,23 +19,33 @@ import {
 } from "@/modules/sessions/session-bundle-import";
 import { forkSessionThroughIdleHost } from "@/modules/sessions/session-fork-routing";
 import { isValidSessionLogIdentifier } from "@/modules/sessions/session-log-identifiers";
-import { getSessionStore } from "@/modules/sessions/storage/get-session-store";
+import type {
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+} from "@/modules/sessions/session-pagination-types";
+import {
+	getSessionCatalog,
+	getSessionHistory,
+	getSessionLifecycle,
+} from "@/modules/sessions/storage/get-session-storage";
 import { resolveLocalSessionLogRoot } from "@/modules/sessions/storage/path";
+import type { SessionCatalog } from "@/modules/sessions/storage/session-catalog";
+import type { SessionHistory } from "@/modules/sessions/storage/session-history";
 import { SessionLogError } from "@/modules/sessions/storage/session-jsonl-codec";
 import type { SessionLogVerification } from "@/modules/sessions/storage/session-jsonl-store";
 import { verifySessionJsonlLog } from "@/modules/sessions/storage/session-jsonl-store";
 import type {
-	SessionCatalogPage,
 	SessionForkResult,
-	SessionHistoryPage,
-	SessionPageOptions,
+	SessionLifecycle,
 	SessionProjectionMaintenanceGate,
 	SessionProjectionRebuildResult,
 	SessionProjectionRebuildScope,
+} from "@/modules/sessions/storage/session-lifecycle";
+import type {
 	SessionStatistics,
 	SessionStatisticsOptions,
-	SessionStore,
-} from "@/modules/sessions/storage/session-store";
+} from "@/modules/sessions/usage/session-statistics";
 import {
 	isValidSessionId,
 	type SessionId,
@@ -81,21 +91,30 @@ export type SessionsCliIo = Readonly<{
 	stdout: TextWriter;
 }>;
 
-type SessionsCliStore = Pick<SessionStore, "rebuildProjection"> &
+/** The facets the Session CLI reads; a caller may inject its own. */
+type SessionsCliStorage = Pick<SessionLifecycle, "rebuildProjection"> &
 	Partial<
-		Pick<
-			SessionStore,
-			| "forkSession"
-			| "getSessionStatistics"
-			| "listSessionsPage"
-			| "readSessionHistoryPage"
-		>
+		Pick<SessionCatalog, "getSessionStatistics" | "listSessionsPage"> &
+			Pick<SessionHistory, "readSessionHistoryPage"> &
+			Pick<SessionLifecycle, "forkSession">
 	>;
+
+/** The same facets from the shared value, so the CLI never holds a merged handle. */
+const sessionCliStorage = (
+	dependencies: SessionsCliDependencies
+): SessionsCliStorage =>
+	dependencies.storage ?? {
+		forkSession: getSessionLifecycle().forkSession,
+		getSessionStatistics: getSessionCatalog().getSessionStatistics,
+		listSessionsPage: getSessionCatalog().listSessionsPage,
+		readSessionHistoryPage: getSessionHistory().readSessionHistoryPage,
+		rebuildProjection: getSessionLifecycle().rebuildProjection,
+	};
 
 export type SessionsCliDependencies = Readonly<{
 	exportSessionBundle?: SessionBundleExportOperation;
 	importSessionBundle?: SessionBundleImportOperation;
-	store?: SessionsCliStore;
+	storage?: SessionsCliStorage;
 	withForkGate?: <Result>(
 		sessionId: SessionId,
 		operation: (host: SessionHost | undefined) => Promise<Result>
@@ -1089,7 +1108,7 @@ const runSessionPageCommand = async (
 	io: SessionsCliIo,
 	dependencies: SessionsCliDependencies
 ): Promise<number> => {
-	const store = dependencies.store ?? getSessionStore();
+	const store = sessionCliStorage(dependencies);
 	try {
 		if (command.kind === "list") {
 			if (store.listSessionsPage === undefined) {
@@ -1122,7 +1141,7 @@ const runSessionStatisticsCommand = async (
 	io: SessionsCliIo,
 	dependencies: SessionsCliDependencies
 ): Promise<number> => {
-	const store = dependencies.store ?? getSessionStore();
+	const store = sessionCliStorage(dependencies);
 	try {
 		if (store.getSessionStatistics === undefined) {
 			throw new Error("Session statistics are unavailable.");
@@ -1213,7 +1232,7 @@ const runSessionBundleExportCommand = async (
 		dependencies.exportSessionBundle ??
 		createSessionBundleExportOperation(
 			getInteractiveSessionHostManager(),
-			getSessionStore()
+			getSessionLifecycle()
 		);
 	try {
 		return writeSessionBundleExport(
@@ -1264,7 +1283,7 @@ const runSessionBundleImportCommand = async (
 ): Promise<number> => {
 	const importSessionBundle =
 		dependencies.importSessionBundle ??
-		createSessionBundleImportOperation(getSessionStore());
+		createSessionBundleImportOperation(getSessionLifecycle());
 	try {
 		return writeSessionBundleImport(
 			await importSessionBundle({ bundlePath: command.bundlePath }),
@@ -1308,7 +1327,7 @@ const runSessionForkCommand = async (
 	io: SessionsCliIo,
 	dependencies: SessionsCliDependencies
 ): Promise<number> => {
-	const store = dependencies.store ?? getSessionStore();
+	const store = sessionCliStorage(dependencies);
 	const sourceSessionId = toSessionId(command.sessionId);
 	try {
 		const forkSession = store.forkSession;
@@ -1350,9 +1369,8 @@ const runSessionRebuildCommand = async (
 					sessionId: toSessionId(command.scope.sessionId),
 				};
 	try {
-		const result = await (
-			dependencies.store ?? getSessionStore()
-		).rebuildProjection(
+		const store = sessionCliStorage(dependencies);
+		const result = await store.rebuildProjection(
 			scope,
 			dependencies.withMaintenanceGate ?? withInteractiveMaintenanceGate
 		);

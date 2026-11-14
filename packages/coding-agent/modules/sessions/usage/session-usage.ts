@@ -15,7 +15,7 @@ import type {
 	SessionMessage,
 	SessionMessageUsage,
 } from "@/modules/sessions/message";
-import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-catalog";
 import type { ConfigSnapshot } from "@/shared/config/config-store";
 import {
 	estimateSessionContextTokens,

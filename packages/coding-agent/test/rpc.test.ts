@@ -2,6 +2,20 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { logger } from "@wincode/utils";
+import type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryPage,
+	SessionPageOptions,
+} from "@/modules/sessions/session-pagination-types";
+import type {
+	SessionForkCheckpoint,
+	SessionForkResult,
+} from "@/modules/sessions/storage/session-lifecycle";
+import type {
+	SessionStatistics,
+	SessionStatisticsOptions,
+} from "@/modules/sessions/usage/session-statistics";
 import { toSessionHistoryEntryId } from "@/shared/identifiers";
 import {
 	createLoggerHome,
@@ -42,18 +56,9 @@ import type {
 import type { SessionBundleExportScope } from "../modules/sessions/session-bundle-contract";
 import { SessionBundleImportError } from "../modules/sessions/session-bundle-import";
 import { SessionLogError } from "../modules/sessions/storage/session-jsonl-codec";
+import type { SessionLifecycle } from "../modules/sessions/storage/session-lifecycle";
 import { SessionPaginationError } from "../modules/sessions/storage/session-pagination";
-import type {
-	Session,
-	SessionCatalogPage,
-	SessionForkCheckpoint,
-	SessionForkResult,
-	SessionHistoryPage,
-	SessionPageOptions,
-	SessionStatistics,
-	SessionStatisticsOptions,
-	SessionStore,
-} from "../modules/sessions/storage/session-store";
+import type { SessionStorage } from "../modules/sessions/storage/session-storage";
 import { SessionInUseError } from "../modules/sessions/storage/session-writer-lock";
 import { agentTurnId, sessionId, sessionRecordId } from "./support/identifiers";
 
@@ -140,14 +145,14 @@ test("RPC preserves committed-blocked and indeterminate history navigation outco
 	const manager = fromPartial<SessionHostManager>({
 		withIdleForSessionNavigation,
 	});
-	const store = fromPartial<SessionStore>({});
+	const store = fromPartial<SessionStorage>({});
 	const capabilities = fromPartial<SessionCapabilities>({
 		getSessionHostManager: () => manager,
 	});
 	const assembly: RpcAssembly = {
 		capabilities,
 		shutdown: async () => undefined,
-		store,
+		storage: store,
 		workspace: process.cwd(),
 		workspaceId: "rpc-history-navigation-workspace",
 	};
@@ -232,6 +237,7 @@ test("JSONL RPC initialize is the first readiness frame and shutdown is clean", 
 		composeServices: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
+			storage: fromPartial<SessionStorage>({}),
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),
@@ -304,7 +310,7 @@ test("RPC fork dispatch validates identifiers and runs against an idle source Se
 		sourceSessionId: string;
 	}> = [];
 	const idleSources: string[] = [];
-	const forkSession: SessionStore["forkSession"] = async (
+	const forkSession: SessionStorage["forkSession"] = async (
 		requestedSourceId,
 		checkpoint,
 		operationId
@@ -333,7 +339,7 @@ test("RPC fork dispatch validates identifiers and runs against an idle source Se
 		});
 		return forkResult;
 	};
-	const store = fromPartial<SessionStore>({ forkSession });
+	const store = fromPartial<SessionStorage>({ forkSession });
 	const hostForkCalls: Array<{
 		checkpoint: SessionForkCheckpoint;
 		operationId: string;
@@ -374,7 +380,7 @@ test("RPC fork dispatch validates identifiers and runs against an idle source Se
 		composeServices: async () => ({
 			capabilities,
 			shutdown: async () => undefined,
-			store,
+			storage: store,
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),
@@ -515,7 +521,7 @@ test("RPC Session read methods forward snapshot read points and reject unknown s
 		readPoint: "history-read-point",
 		sessionId: session.id,
 	});
-	const store = fromPartial<SessionStore>({
+	const store = fromPartial<SessionStorage>({
 		listSessionsPage: async (options?: SessionPageOptions) => {
 			catalogOptions.push(options ?? {});
 			if (options?.limit === 201) {
@@ -564,7 +570,7 @@ test("RPC Session read methods forward snapshot read points and reject unknown s
 		composeServices: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
-			store,
+			storage: store,
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),
@@ -690,16 +696,15 @@ test("RPC Session export passes branch scope through the shared operation", asyn
 	} as SessionCapabilities;
 	const exportedSessionId = sessionId("rpc-export-session");
 	let requestedScope: SessionBundleExportScope | undefined;
-	const withSessionBundleExport: NonNullable<
-		SessionStore["withSessionBundleExport"]
-	> = async (_sessionId, _operation, options) => {
-		requestedScope = options.scope;
-		throw new SessionLogError(
-			"session_not_found",
-			exportedSessionId,
-			"Session not found."
-		);
-	};
+	const withSessionBundleExport: SessionLifecycle["withSessionBundleExport"] =
+		async (_sessionId, _operation, options) => {
+			requestedScope = options.scope;
+			throw new SessionLogError(
+				"session_not_found",
+				exportedSessionId,
+				"Session not found."
+			);
+		};
 	const request = (
 		id: string,
 		method: string,
@@ -711,7 +716,7 @@ test("RPC Session export passes branch scope through the shared operation", asyn
 		composeServices: async () => ({
 			capabilities,
 			shutdown: () => manager.shutdownAll(),
-			store: fromPartial<SessionStore>({ withSessionBundleExport }),
+			storage: fromPartial<SessionStorage>({ withSessionBundleExport }),
 			workspace: process.cwd(),
 			workspaceId: "workspace-export-test",
 		}),
@@ -759,15 +764,14 @@ test("RPC Session import delegates to the shared operation and preserves conflic
 	} as SessionCapabilities;
 	const bundlePath = path.join(process.cwd(), "rpc-import-bundle");
 	let requestedPath: string | undefined;
-	const withSessionBundleImport: NonNullable<
-		SessionStore["withSessionBundleImport"]
-	> = async (requestedBundlePath) => {
-		requestedPath = requestedBundlePath;
-		throw new SessionBundleImportError(
-			"session_import_conflict",
-			"The imported Session conflicts with local history."
-		);
-	};
+	const withSessionBundleImport: SessionLifecycle["withSessionBundleImport"] =
+		async (requestedBundlePath) => {
+			requestedPath = requestedBundlePath;
+			throw new SessionBundleImportError(
+				"session_import_conflict",
+				"The imported Session conflicts with local history."
+			);
+		};
 	const request = (
 		id: string,
 		method: string,
@@ -779,7 +783,7 @@ test("RPC Session import delegates to the shared operation and preserves conflic
 		composeServices: async () => ({
 			capabilities,
 			shutdown: () => manager.shutdownAll(),
-			store: fromPartial<SessionStore>({ withSessionBundleImport }),
+			storage: fromPartial<SessionStorage>({ withSessionBundleImport }),
 			workspace: process.cwd(),
 			workspaceId: "workspace-import-test",
 		}),
@@ -822,19 +826,18 @@ test("RPC bundle export preserves source corruption sequence and byte offset", a
 	} as SessionCapabilities;
 	const exportedSessionId = sessionId("rpc-corrupt-export-session");
 	const reason = "Session log contains a duplicate retained record identity.";
-	const withSessionBundleExport: NonNullable<
-		SessionStore["withSessionBundleExport"]
-	> = async () => {
-		throw new SessionLogError(
-			"session_log_corrupt",
-			exportedSessionId,
-			reason,
-			{
-				offset: 123,
-				sequence: 4,
-			}
-		);
-	};
+	const withSessionBundleExport: SessionLifecycle["withSessionBundleExport"] =
+		async () => {
+			throw new SessionLogError(
+				"session_log_corrupt",
+				exportedSessionId,
+				reason,
+				{
+					offset: 123,
+					sequence: 4,
+				}
+			);
+		};
 	const request = (
 		id: string,
 		method: string,
@@ -846,7 +849,7 @@ test("RPC bundle export preserves source corruption sequence and byte offset", a
 		composeServices: async () => ({
 			capabilities,
 			shutdown: () => manager.shutdownAll(),
-			store: fromPartial<SessionStore>({ withSessionBundleExport }),
+			storage: fromPartial<SessionStorage>({ withSessionBundleExport }),
 			workspace: process.cwd(),
 			workspaceId: "workspace-corrupt-export-test",
 		}),
@@ -898,16 +901,15 @@ test("RPC bundle export preserves unsupported-version sequence and byte offset",
 	} as SessionCapabilities;
 	const exportedSessionId = sessionId("rpc-unsupported-export-session");
 	const reason = "Session log format version is not supported.";
-	const withSessionBundleExport: NonNullable<
-		SessionStore["withSessionBundleExport"]
-	> = async () => {
-		throw new SessionLogError(
-			"session_log_version_unsupported",
-			exportedSessionId,
-			reason,
-			{ offset: 256, sequence: 7 }
-		);
-	};
+	const withSessionBundleExport: SessionLifecycle["withSessionBundleExport"] =
+		async () => {
+			throw new SessionLogError(
+				"session_log_version_unsupported",
+				exportedSessionId,
+				reason,
+				{ offset: 256, sequence: 7 }
+			);
+		};
 	const request = (
 		id: string,
 		method: string,
@@ -919,7 +921,7 @@ test("RPC bundle export preserves unsupported-version sequence and byte offset",
 		composeServices: async () => ({
 			capabilities,
 			shutdown: () => manager.shutdownAll(),
-			store: fromPartial<SessionStore>({ withSessionBundleExport }),
+			storage: fromPartial<SessionStorage>({ withSessionBundleExport }),
 			workspace: process.cwd(),
 			workspaceId: "workspace-unsupported-export-test",
 		}),
@@ -1019,6 +1021,7 @@ describe("RPC framing errors", () => {
 			composeServices: async () => ({
 				capabilities: emptyCapabilities(),
 				shutdown: async () => undefined,
+				storage: fromPartial<SessionStorage>({}),
 				workspace: process.cwd(),
 				workspaceId: "workspace-test",
 			}),
@@ -1116,6 +1119,7 @@ test("lifecycle guards use stable application and JSON-RPC errors", async () => 
 		composeServices: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
+			storage: fromPartial<SessionStorage>({}),
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),
@@ -1441,6 +1445,7 @@ test("a stdout failure during shutdown response remains fatal", async () => {
 		composeServices: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
+			storage: fromPartial<SessionStorage>({}),
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),
@@ -1535,6 +1540,7 @@ test("a response beyond the exact output bound emits output_overflow", async () 
 		composeServices: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: async () => undefined,
+			storage: fromPartial<SessionStorage>({}),
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),
@@ -1615,6 +1621,7 @@ test("ignored aborts finish cleanup at one bounded deadline", async () => {
 				shutdownCalls += 1;
 				await shutdownGate.promise;
 			},
+			storage: fromPartial<SessionStorage>({}),
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),
@@ -1665,6 +1672,7 @@ test("a zero shutdown budget reports the overrun without awaiting shutdown", asy
 		composeServices: async () => ({
 			capabilities: emptyCapabilities(),
 			shutdown: () => shutdownGate.promise,
+			storage: fromPartial<SessionStorage>({}),
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),
@@ -1728,6 +1736,7 @@ test("records shutdown failures without writing diagnostics to RPC stderr", asyn
 			shutdown: async () => {
 				throw shutdownFailure;
 			},
+			storage: fromPartial<SessionStorage>({}),
 			workspace: process.cwd(),
 			workspaceId: "workspace-test",
 		}),

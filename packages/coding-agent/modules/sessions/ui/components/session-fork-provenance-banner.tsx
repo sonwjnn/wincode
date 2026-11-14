@@ -1,6 +1,6 @@
+import type { SessionForkProvenance } from "@/modules/sessions/storage/session-lifecycle";
 import type { SessionId } from "@/shared/identifiers";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import type { SessionForkProvenance } from "../../storage/session-store";
 import type { SessionStatisticsUsageTotals } from "../../usage/session-statistics";
 
 type SessionForkProvenanceBannerProps = Readonly<{

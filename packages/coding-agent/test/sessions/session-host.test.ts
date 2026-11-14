@@ -87,7 +87,7 @@ import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
 import type { SessionSdkEvent } from "@/modules/sessions/session-events";
 import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import {
 	SessionInUseError,
 	type SessionWriterLock,
@@ -140,8 +140,10 @@ import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
 	failedSessionWriteOutcome,
-	sessionStoreWithSuccessfulWrites,
-} from "../support/session-write-store";
+	sessionStorageOf,
+	sessionStorageWithSuccessfulWrites,
+	withSessionStorage,
+} from "../support/session-facets";
 
 const createSessionHostManager = () => createSessionHostManagerWithRuntime();
 const sessionHostManager = createSessionHostManager();
@@ -260,7 +262,7 @@ const installCacheWarmingStepScript = (): (() => void) => {
 };
 const buildId = agentId("build");
 const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
-const store = sessionStoreWithSuccessfulWrites(
+const store = sessionStorageWithSuccessfulWrites(
 	createDrizzleSessionStore(
 		createDatabase(path.join(testDirectory, "sessions.db")).db,
 		{
@@ -510,7 +512,7 @@ const bundledPluginRuntime = await loadPlugins({
 });
 
 const createCapabilities = (
-	sessionStore: SessionStore = store,
+	sessionStore: SessionStorage = store,
 	document: ConfigSnapshot["document"] = {},
 	manager: SessionHostManager = sessionHostManager,
 	options: SessionHostTestCapabilitiesOptions = {}
@@ -583,7 +585,6 @@ const createCapabilities = (
 		getConfig: () => config,
 		createProviderCollection: createHostProviderCollection,
 		getRegistry: () => registry,
-		getStore: () => sessionStore,
 		getSessionHostManager: () => manager,
 		getSessionSdk: () => sessionSdk,
 		getPluginRuntime: () => pluginRuntime,
@@ -595,20 +596,20 @@ const createCapabilities = (
 			cwd: workspace,
 			createProviderCollection: capabilities.createProviderCollection,
 			getRegistry: () => registry,
-			store: sessionStore,
+			storage: sessionStore,
 			workspace,
 		},
 		manager,
 		sessionStore
 	);
-	return capabilities;
+	return withSessionStorage(capabilities, sessionStore);
 };
 
-const createDelayedTerminalStore = (base: SessionStore) => {
+const createDelayedTerminalStore = (base: SessionStorage) => {
 	const terminalCommitStarted = Promise.withResolvers<void>();
 	const allowTerminalCommit = Promise.withResolvers<void>();
 	let blocksTerminalCommit = true;
-	const delayed: SessionStore = {
+	const delayed: SessionStorage = {
 		...base,
 		commitSessionRecord: async (input) => {
 			if (blocksTerminalCommit && input.record.outcome.kind === "assistant") {
@@ -673,7 +674,11 @@ test("SDK Session Host refuses a missing ProviderCollection instead of legacy ex
 	};
 
 	await expect(
-		createSessionHost({ capabilities, sessionId: seeded.sessionId })
+		createSessionHost({
+			capabilities,
+			storage: sessionStorageOf(capabilities),
+			sessionId: seeded.sessionId,
+		})
 	).rejects.toThrow(
 		"Session Host could not be initialized because its ProviderCollection is unavailable."
 	);
@@ -703,7 +708,7 @@ test("explicit Host continuation commits imported activation before provider wor
 	let importActivationPending = true;
 	let activationConfirmations = 0;
 	let activationWasDurableBeforeProvider = false;
-	const importedStore: SessionStore = {
+	const importedStore: SessionStorage = {
 		...store,
 		confirmSessionImportActivation: async (sessionId) => {
 			expect(sessionId).toBe(seeded.sessionId);
@@ -724,6 +729,7 @@ test("explicit Host continuation commits imported activation before provider wor
 	try {
 		host = await manager.openHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 			view: true,
 		});
@@ -743,7 +749,7 @@ test("imported Host refuses manual compaction until explicit activation", async 
 	const compactionsBefore = await store.getCompactions(seeded.sessionId);
 	let importActivationPending = true;
 	let activationConfirmations = 0;
-	const importedStore: SessionStore = {
+	const importedStore: SessionStorage = {
 		...store,
 		confirmSessionImportActivation: async (sessionId) => {
 			expect(sessionId).toBe(seeded.sessionId);
@@ -758,6 +764,7 @@ test("imported Host refuses manual compaction until explicit activation", async 
 	try {
 		host = await manager.openHost({
 			capabilities: createCapabilities(importedStore, {}, manager),
+			storage: sessionStorageOf(createCapabilities(importedStore, {}, manager)),
 			sessionId: seeded.sessionId,
 			view: true,
 		});
@@ -828,7 +835,7 @@ test("Session Host rejects a missing Plugin Provider registration before model r
 		},
 	};
 	let recordCommits = 0;
-	const trackedStore: SessionStore = {
+	const trackedStore: SessionStorage = {
 		...store,
 		commitSessionRecord: async (input) => {
 			recordCommits += 1;
@@ -842,7 +849,11 @@ test("Session Host rejects a missing Plugin Provider registration before model r
 	const requestsBefore = recorder.requests.length;
 	try {
 		await expect(
-			createSessionHost({ capabilities, sessionId: selected.sessionId })
+			createSessionHost({
+				capabilities,
+				storage: sessionStorageOf(capabilities),
+				sessionId: selected.sessionId,
+			})
 		).rejects.toThrow(
 			"Session ProviderCollection Plugin Provider registrations do not match the current trusted registrations."
 		);
@@ -960,7 +971,11 @@ test("Session Host rejects a stale Plugin Provider snapshot before built-in rest
 	const requestsBefore = recorder.requests.length;
 	try {
 		await expect(
-			createSessionHost({ capabilities, sessionId: selected.sessionId })
+			createSessionHost({
+				capabilities,
+				storage: sessionStorageOf(capabilities),
+				sessionId: selected.sessionId,
+			})
 		).rejects.toThrow(
 			"Session ProviderCollection Plugin Provider registrations do not match the current trusted registrations."
 		);
@@ -1033,7 +1048,7 @@ test("Session Host rejects a missing or stale Plugin snapshot before reconciling
 			({ id }) => id === submissionRecord.id
 		);
 		let reconciliationWrites = 0;
-		const trackedStore: SessionStore = {
+		const trackedStore: SessionStorage = {
 			...store,
 			updateSessionSubmission: async (input) => {
 				reconciliationWrites += 1;
@@ -1062,7 +1077,11 @@ test("Session Host rejects a missing or stale Plugin snapshot before reconciling
 		};
 		try {
 			await expect(
-				createSessionHost({ capabilities, sessionId: seeded.sessionId })
+				createSessionHost({
+					capabilities,
+					storage: sessionStorageOf(capabilities),
+					sessionId: seeded.sessionId,
+				})
 			).rejects.toThrow(
 				"Session ProviderCollection Plugin Provider registrations do not match the current trusted registrations."
 			);
@@ -1103,7 +1122,11 @@ test("Session Host Manager rejects restored ownerless Providers before ProviderC
 	};
 	try {
 		await expect(
-			manager.openHost({ capabilities, sessionId: restored.id })
+			manager.openHost({
+				capabilities,
+				storage: sessionStorageOf(capabilities),
+				sessionId: restored.id,
+			})
 		).rejects.toThrow("re-select it in Interactive Mode");
 		expect(providerCollectionCreations).toBe(0);
 	} finally {
@@ -1234,6 +1257,7 @@ test("delegated Session Hosts load only the Plugin Provider selected in the chil
 	);
 	const host = await createSessionHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: seeded.sessionId,
 	});
 	try {
@@ -1297,6 +1321,7 @@ test("retains an idle Session Host until registered Plugin background work finis
 	pluginRuntime.registerBackgroundWork(parentSessionId, background.promise);
 	const host = await manager.openHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: parentSessionId,
 		view: true,
 	});
@@ -1304,6 +1329,7 @@ test("retains an idle Session Host until registered Plugin background work finis
 	await manager.releaseView(parentSessionId);
 	const reopenedHost = await manager.openHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: parentSessionId,
 	});
 	expect(reopenedHost).toBe(host);
@@ -1320,7 +1346,7 @@ test("retains an idle Session Host until registered Plugin background work finis
 test("projection-blocked Host refuses fork admission until it reopens", async () => {
 	const manager = createSessionHostManager();
 	let blockAssistantRecord = true;
-	const blockedStore: SessionStore = {
+	const blockedStore: SessionStorage = {
 		...store,
 		commitSessionRecord: async (input) => {
 			const outcome = await store.commitSessionRecord(input);
@@ -1350,6 +1376,7 @@ test("projection-blocked Host refuses fork admission until it reopens", async ()
 	});
 	const host = await manager.openHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: openedSessionId,
 		view: true,
 	});
@@ -1381,6 +1408,7 @@ test("projection-blocked Host refuses fork admission until it reopens", async ()
 		await manager.releaseView(openedSessionId);
 		const reopenedHost = await manager.openHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: openedSessionId,
 			view: true,
 		});
@@ -1444,6 +1472,7 @@ test("reload rejects while Session Plugin registration is still opening", async 
 	const opening = manager.openHost({
 		autoContinue: false,
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: openedSessionId,
 		view: true,
 	});
@@ -1525,6 +1554,7 @@ test("resource reload keeps an open Session Host and restarts only its Plugin Se
 		const host = await manager.openHost({
 			autoContinue: false,
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: openedSessionId,
 			view: true,
 		});
@@ -1537,6 +1567,7 @@ test("resource reload keeps an open Session Host and restarts only its Plugin Se
 		const reopened = await manager.openHost({
 			autoContinue: false,
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: openedSessionId,
 		});
 		expect(reopened).toBe(host);
@@ -1553,7 +1584,11 @@ test("resource reload keeps an open Session Host and restarts only its Plugin Se
 			await manager.replacePluginRuntime(newRuntime);
 		});
 		expect(
-			await manager.openHost({ capabilities, sessionId: openedSessionId })
+			await manager.openHost({
+				capabilities,
+				storage: sessionStorageOf(capabilities),
+				sessionId: openedSessionId,
+			})
 		).toBe(host);
 		expect(events.slice(-2)).toEqual([
 			`stop:new:${openedSessionId}`,
@@ -1611,6 +1646,7 @@ test("interactive reload preserves the displayed Session Host while changing Plu
 		const host = await manager.openHost({
 			autoContinue: false,
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: openedSessionId,
 			view: true,
 		});
@@ -1625,6 +1661,7 @@ test("interactive reload preserves the displayed Session Host while changing Plu
 			await manager.openHost({
 				autoContinue: false,
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: openedSessionId,
 			})
 		).toBe(host);
@@ -1654,8 +1691,12 @@ test("Host opening rejects imported Sessions whose Agent is unavailable instead 
 		model,
 		turnId: agentTurnId("imported-host-agent-turn"),
 	});
-	const importAwareStore: SessionStore = {
+	const importAwareStore: SessionStorage = {
 		...store,
+		// The real store reports an activation-pending Session as imported; the
+		// fake reports both facets so the destination check sees the same fact.
+		isSessionImported: async (requestedSessionId) =>
+			requestedSessionId === sessionId,
 		isSessionImportActivationPending: async (requestedSessionId) =>
 			requestedSessionId === sessionId,
 	};
@@ -1667,6 +1708,7 @@ test("Host opening rejects imported Sessions whose Agent is unavailable instead 
 			manager.openHost({
 				autoContinue: false,
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId,
 			})
 		).rejects.toThrow(
@@ -1696,7 +1738,11 @@ test("reload gate blocks new Session Host opens until its action settles", async
 	try {
 		await reloadStarted.promise;
 		await expect(
-			manager.openHost({ capabilities, sessionId: openedSessionId })
+			manager.openHost({
+				capabilities,
+				storage: sessionStorageOf(capabilities),
+				sessionId: openedSessionId,
+			})
 		).rejects.toThrow("resources are reloading");
 
 		finishReload.resolve();
@@ -1704,6 +1750,7 @@ test("reload gate blocks new Session Host opens until its action settles", async
 		await expect(
 			manager.openHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: openedSessionId,
 				view: true,
 			})
@@ -1743,6 +1790,7 @@ test("reload gate rejects work submitted through an existing Session Host", asyn
 	const capabilities = createCapabilities(store, {}, manager);
 	const host = await manager.openHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: openedSessionId,
 		view: true,
 	});
@@ -1812,12 +1860,14 @@ test("Plugin lifecycle restarts for a reopened Session runtime", async () => {
 	await pluginRuntime.start();
 	await manager.openHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: openedSessionId,
 		view: true,
 	});
 	await manager.releaseView(openedSessionId);
 	await manager.openHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: openedSessionId,
 		view: true,
 	});
@@ -1874,6 +1924,7 @@ test("Session Host keeps Skill activation separate from coding-tool selection", 
 	});
 	const host = await manager.openHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: openedSessionId,
 	});
 	const previousStepScript = recorder.stepScript;
@@ -1927,7 +1978,11 @@ test("Session Host reports an unavailable Skill target without activating it", a
 		model,
 		turnId: agentTurnId("unavailable-skill-turn"),
 	});
-	const host = await manager.openHost({ capabilities, sessionId });
+	const host = await manager.openHost({
+		capabilities,
+		storage: sessionStorageOf(capabilities),
+		sessionId,
+	});
 	const previousStepScript = recorder.stepScript;
 	let modelStep = 0;
 	let skillToolVisible = false;
@@ -1987,7 +2042,7 @@ const createLongLoopHost = async (
 	prefix: string,
 	summarize: () => Promise<string> = async () =>
 		"Earlier steps read files successfully. Continue the task.",
-	storePort: SessionStore = store,
+	storePort: SessionStorage = store,
 	options: {
 		autoCompact?: boolean;
 		overflowAtStep?: number;
@@ -2080,6 +2135,7 @@ const createLongLoopHost = async (
 	};
 	const host = await createSessionHost({
 		capabilities,
+		storage: sessionStorageOf(capabilities),
 		sessionId: seeded.sessionId,
 	});
 	return { counts, requests, previousScript, seeded, capabilities, host };
@@ -2180,6 +2236,7 @@ describe("Session Host opening", () => {
 		}
 		const reopened = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		try {
@@ -2350,6 +2407,7 @@ describe("Session Host opening", () => {
 		};
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const recovered = Promise.withResolvers<void>();
@@ -2409,6 +2467,7 @@ describe("Session Host opening", () => {
 			await host.shutdown();
 			const reopened = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			try {
@@ -2433,7 +2492,7 @@ describe("Session Host opening", () => {
 
 	for (const failure of ["summary", "persistence", "checkpoint"] as const) {
 		test(`between-step ${failure} failure preserves settled tools and sends no next model request`, async () => {
-			const storePort: SessionStore = {
+			const storePort: SessionStorage = {
 				...store,
 				commitSessionRecord: async (input) => {
 					if (
@@ -2527,7 +2586,7 @@ describe("Session Host opening", () => {
 		test(`cancellation during ${boundary} persistence reconciles the durable winner without duplicate assistant IDs`, async () => {
 			const writeStarted = Promise.withResolvers<void>();
 			const releaseWrite = Promise.withResolvers<void>();
-			const storePort: SessionStore = {
+			const storePort: SessionStorage = {
 				...store,
 				commitSessionRecord: async (input) => {
 					if (
@@ -2578,6 +2637,7 @@ describe("Session Host opening", () => {
 			}
 			const reopened = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			try {
@@ -2670,6 +2730,7 @@ describe("Session Host opening", () => {
 		};
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		try {
@@ -2728,6 +2789,7 @@ describe("Session Host opening", () => {
 		};
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const before = host.getSelection();
@@ -2833,6 +2895,7 @@ describe("Session Host opening", () => {
 		try {
 			host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			const transcriptBefore = host
@@ -2893,6 +2956,7 @@ describe("Session Host opening", () => {
 
 			reopenedHost = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			expect(reopenedHost.getSnapshot().compactions.at(-1)).toEqual(
@@ -2976,6 +3040,7 @@ describe("Session Host opening", () => {
 		try {
 			host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			const contextBefore = host.getSnapshot().context;
@@ -3002,6 +3067,7 @@ describe("Session Host opening", () => {
 
 			reopenedHost = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			expect(reopenedHost.getSessionUsageEntries()).toEqual(usageEntries);
@@ -3020,6 +3086,7 @@ describe("Session Host opening", () => {
 		const capabilities = createCapabilities();
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 
@@ -3064,7 +3131,7 @@ describe("Session Host opening", () => {
 		const secondDatabase = createDatabase(
 			path.join(testDirectory, "sessions.db")
 		);
-		const secondStore = sessionStoreWithSuccessfulWrites(
+		const secondStore = sessionStorageWithSuccessfulWrites(
 			createDrizzleSessionStore(secondDatabase.db, {
 				attachmentRoot: path.join(testDirectory, "second-attachments"),
 				snapshotRoot: path.join(testDirectory, "second-snapshots"),
@@ -3073,6 +3140,7 @@ describe("Session Host opening", () => {
 		);
 		const firstHost = await createSessionHost({
 			capabilities: createCapabilities(),
+			storage: sessionStorageOf(createCapabilities()),
 			sessionId: seeded.sessionId,
 		});
 
@@ -3080,6 +3148,7 @@ describe("Session Host opening", () => {
 			await expect(
 				createSessionHost({
 					capabilities: createCapabilities(secondStore),
+					storage: sessionStorageOf(createCapabilities(secondStore)),
 					sessionId: seeded.sessionId,
 				})
 			).rejects.toMatchObject({ code: "session_in_use" });
@@ -3122,6 +3191,7 @@ describe("Session Host lifetime", () => {
 		try {
 			host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			expect(host.getSelection()?.model).toEqual(model);
@@ -3150,6 +3220,7 @@ describe("Session Host lifetime", () => {
 		});
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const previousBeforeStep = recorder.beforeChat;
@@ -3181,6 +3252,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(store, {}, sessionHostManager, {});
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const restoreModelScript = installCacheWarmingStepScript();
@@ -3228,6 +3300,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(store, {}, sessionHostManager, {});
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const restoreModelScript = installCacheWarmingStepScript();
@@ -3257,6 +3330,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(store, {}, sessionHostManager, {});
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const restoreModelScript = installCacheWarmingStepScript();
@@ -3342,6 +3416,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities();
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const previousBeforeStep = recorder.beforeChat;
@@ -3446,6 +3521,7 @@ describe("Session Host lifetime", () => {
 		try {
 			host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			const outcome = await host.agentSession.send({
@@ -3582,10 +3658,12 @@ describe("Session Host lifetime", () => {
 		};
 		const firstHost = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: firstSession.sessionId,
 		});
 		const secondHost = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: secondSession.sessionId,
 		});
 		const sendToHost = (host: SessionHost, userText: string) =>
@@ -3648,6 +3726,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities();
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const events: SessionSdkEvent[] = [];
@@ -3717,6 +3796,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities();
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: openedSessionId,
 		});
 		const assistantTextReachedSnapshot = Promise.withResolvers<void>();
@@ -3819,7 +3899,7 @@ describe("Session Host lifetime", () => {
 			model,
 			turnId: agentTurnId("failed-stream-order-initial-turn"),
 		});
-		const failingStore: SessionStore = {
+		const failingStore: SessionStorage = {
 			...store,
 			commitSessionRecord: async (input) => {
 				if (input.record.outcome.kind === "assistant") {
@@ -3835,6 +3915,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(failingStore);
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: openedSessionId,
 		});
 		const assistantTextReachedSnapshot = Promise.withResolvers<void>();
@@ -3894,7 +3975,7 @@ describe("Session Host lifetime", () => {
 		const seeded = await seedSession("durable-steer");
 		const attachmentExternalizationStarted = Promise.withResolvers<void>();
 		const releaseAttachmentExternalization = Promise.withResolvers<void>();
-		const delayedAttachmentStore: SessionStore = {
+		const delayedAttachmentStore: SessionStorage = {
 			...store,
 			externalizeAttachments: async (messages, signal, options) => {
 				const hasQueuedImage = messages.some(({ parts }) =>
@@ -3913,6 +3994,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(delayedAttachmentStore);
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const queuedTexts = [
@@ -4123,6 +4205,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities();
 		let host: SessionHost = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const activeStepStarted = Promise.withResolvers<void>();
@@ -4186,6 +4269,7 @@ describe("Session Host lifetime", () => {
 			const callsBeforeReopen = recorder.requests.length;
 			host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 
@@ -4230,6 +4314,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities();
 		let host: SessionHost = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const activeStepStarted = Promise.withResolvers<void>();
@@ -4304,6 +4389,7 @@ describe("Session Host lifetime", () => {
 
 			host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			unsubscribeResumed = host.agentSession.onSubmissionEvent((event) => {
@@ -4356,6 +4442,7 @@ describe("Session Host lifetime", () => {
 			await withDebugProject(testDirectory, async () => {
 				const host = await createSessionHost({
 					capabilities,
+					storage: sessionStorageOf(capabilities),
 					sessionId: seeded.sessionId,
 				});
 				try {
@@ -4408,6 +4495,7 @@ describe("Session Host lifetime", () => {
 		});
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		let competingWriter: SessionWriterLock | undefined;
@@ -4459,6 +4547,7 @@ describe("Session Host lifetime", () => {
 		const delayed = createDelayedTerminalStore(store);
 		const host = await createSessionHost({
 			capabilities: createCapabilities(delayed.delayed),
+			storage: sessionStorageOf(createCapabilities(delayed.delayed)),
 			sessionId: seeded.sessionId,
 		});
 		const send = host.agentSession.send(
@@ -4468,6 +4557,7 @@ describe("Session Host lifetime", () => {
 		const shutdown = host.shutdown();
 		const remount = createSessionHost({
 			capabilities: createCapabilities(),
+			storage: sessionStorageOf(createCapabilities()),
 			sessionId: seeded.sessionId,
 		});
 		const probe = Promise.withResolvers<"probe">();
@@ -4491,7 +4581,7 @@ describe("Session Host lifetime", () => {
 			const seeded = await seedSession("prompt-persistence");
 			const turnId = agentTurnId("prompt-persistence-turn");
 			const failureMessage = "private database detail";
-			const failingStore: SessionStore = {
+			const failingStore: SessionStorage = {
 				...store,
 				commitSessionRecord: async () => {
 					throw Object.assign(new Error(failureMessage), { code: "EIO" });
@@ -4500,6 +4590,7 @@ describe("Session Host lifetime", () => {
 			const capabilities = createCapabilities(failingStore);
 			const host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 
@@ -4598,6 +4689,7 @@ describe("Session Host lifetime", () => {
 		};
 		const host = await createSessionHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 		});
 		const compacted = Promise.withResolvers<void>();
@@ -4674,6 +4766,7 @@ describe("Session Host lifetime", () => {
 		await withLoggerHome(async (home) => {
 			const host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			const unsubscribe = host.subscribe(() => {
@@ -4744,6 +4837,7 @@ describe("Session Host lifetime", () => {
 		await withLoggerHome(async (home) => {
 			const host = await createSessionHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 			});
 			expect(await host.agentSession.send(sendInput(capabilities))).toEqual({
@@ -4770,11 +4864,13 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(store, {}, manager);
 		const host = await manager.openHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 			view: true,
 		});
 		await manager.openHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: otherSession.sessionId,
 			view: true,
 		});
@@ -4805,6 +4901,7 @@ describe("Session Host lifetime", () => {
 						await expect(
 							manager.openHost({
 								capabilities,
+								storage: sessionStorageOf(capabilities),
 								sessionId: seeded.sessionId,
 								view: true,
 							})
@@ -4818,6 +4915,7 @@ describe("Session Host lifetime", () => {
 			expect(
 				await manager.openHost({
 					capabilities,
+					storage: sessionStorageOf(capabilities),
 					sessionId: seeded.sessionId,
 					view: true,
 				})
@@ -4837,6 +4935,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(store, {}, manager);
 		const host = await manager.openHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: source.sessionId,
 			view: true,
 		});
@@ -4915,6 +5014,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(store, {}, manager);
 		const host = await manager.openHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 			view: true,
 		});
@@ -4928,6 +5028,7 @@ describe("Session Host lifetime", () => {
 					await expect(
 						manager.openHost({
 							capabilities,
+							storage: sessionStorageOf(capabilities),
 							sessionId: seeded.sessionId,
 						})
 					).rejects.toThrow("lifecycle operation");
@@ -4952,6 +5053,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(store, {}, manager);
 		const openedHost = await manager.openHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 			view: true,
 		});
@@ -4973,6 +5075,7 @@ describe("Session Host lifetime", () => {
 			expect(
 				await manager.openHost({
 					capabilities,
+					storage: sessionStorageOf(capabilities),
 					sessionId: seeded.sessionId,
 					view: false,
 				})
@@ -5015,6 +5118,7 @@ describe("Session Host lifetime", () => {
 		const host = await manager.openHost({
 			autoContinue: false,
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: seeded.sessionId,
 			view: true,
 		});
@@ -5044,6 +5148,7 @@ describe("Session Host lifetime", () => {
 		const capabilities = createCapabilities(store, {}, manager);
 		const sourceHost = await manager.openHost({
 			capabilities,
+			storage: sessionStorageOf(capabilities),
 			sessionId: source.sessionId,
 			view: true,
 		});
@@ -5126,6 +5231,7 @@ describe("Session Host lifetime", () => {
 				[first, second].map(({ sessionId }) =>
 					manager.openHost({
 						capabilities,
+						storage: sessionStorageOf(capabilities),
 						sessionId,
 						view: true,
 					})
@@ -5138,6 +5244,7 @@ describe("Session Host lifetime", () => {
 				await expect(
 					manager.openHost({
 						capabilities,
+						storage: sessionStorageOf(capabilities),
 						sessionId: first.sessionId,
 					})
 				).rejects.toThrow("lifecycle operation");
@@ -5156,6 +5263,7 @@ describe("Session Host lifetime", () => {
 		try {
 			const host = await manager.openHost({
 				capabilities,
+				storage: sessionStorageOf(capabilities),
 				sessionId: seeded.sessionId,
 				view: true,
 			});

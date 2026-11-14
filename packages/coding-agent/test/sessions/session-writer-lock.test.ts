@@ -9,7 +9,7 @@ import {
 } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import { resolveLocalSessionLogRoot } from "@/modules/sessions/storage/path";
-import type { SessionProjectionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionProjection } from "@/modules/sessions/storage/session-projection";
 import {
 	acquireSessionWriterLock,
 	SessionInUseError,
@@ -35,10 +35,10 @@ type DatabaseHandle = Readonly<{
 
 type Fixture = Readonly<{
 	first: DatabaseHandle;
-	firstStore: SessionProjectionStore;
+	firstStore: SessionProjection;
 	root: string;
 	second: DatabaseHandle;
-	secondStore: SessionProjectionStore;
+	secondStore: SessionProjection;
 }>;
 
 const fixtures: Fixture[] = [];
@@ -65,8 +65,8 @@ const createFixture = (): Fixture => {
 	return fixture;
 };
 
-const createSession = async (store: SessionProjectionStore) =>
-	store.createSession({
+const createSession = async (storage: SessionProjection) =>
+	storage.createSession({
 		agent: agentId("build"),
 		message: {
 			id: sessionMessageId("initial"),

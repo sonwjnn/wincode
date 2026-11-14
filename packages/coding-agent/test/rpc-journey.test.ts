@@ -648,9 +648,12 @@ test("RPC rejects an unavailable Provider Model before persisting submission mes
 			},
 		},
 	});
+	const mutableStorage = assembly.storage as {
+		externalizeAttachments: typeof assembly.storage.externalizeAttachments;
+	};
 	const originalExternalizeAttachments =
-		assembly.store.externalizeAttachments.bind(assembly.store);
-	assembly.store.externalizeAttachments = async (...args) => {
+		mutableStorage.externalizeAttachments.bind(mutableStorage);
+	mutableStorage.externalizeAttachments = async (...args) => {
 		activity.externalizations += 1;
 		return originalExternalizeAttachments(...args);
 	};
@@ -732,7 +735,7 @@ test("RPC rejects an unavailable Provider Model before persisting submission mes
 			},
 		});
 		try {
-			expect(await verification.store.listSessions()).toEqual([]);
+			expect(await verification.storage.listSessions()).toEqual([]);
 		} finally {
 			await verification.shutdown();
 		}
@@ -934,22 +937,26 @@ test("RPC session/submit rejects an unavailable model before storing its attachm
 			},
 		},
 	});
+	const mutableStorage = assembly.storage as {
+		externalizeAttachments: typeof assembly.storage.externalizeAttachments;
+	};
 	const originalExternalizeAttachments =
-		assembly.store.externalizeAttachments.bind(assembly.store);
-	assembly.store.externalizeAttachments = async (...args) => {
+		mutableStorage.externalizeAttachments.bind(mutableStorage);
+	mutableStorage.externalizeAttachments = async (...args) => {
 		activity.externalizations += 1;
 		return originalExternalizeAttachments(...args);
 	};
-	const { id: existingSessionId } = await assembly.store.createEmptySession({
+	const { id: existingSessionId } = await assembly.storage.createEmptySession({
 		model: {
 			modelId: modelId(rpcProviderModel.modelId),
 			providerId: rpcProviderModel.providerId,
 		},
 	});
 	let recordsBeforeSubmit =
-		await assembly.store.listSessionRecords(existingSessionId);
+		await assembly.storage.listSessionRecords(existingSessionId);
 	let recordsAtUnavailableSubmit = recordsBeforeSubmit;
-	let sessionBeforeSubmit = await assembly.store.getSession(existingSessionId);
+	let sessionBeforeSubmit =
+		await assembly.storage.getSession(existingSessionId);
 	let sessionAtUnavailableSubmit = sessionBeforeSubmit;
 	let externalizationsAtUnavailableSubmit = -1;
 	let providerCallsAtUnavailableSubmit = -1;
@@ -984,9 +991,9 @@ test("RPC session/submit rejects an unavailable model before storing its attachm
 			})}\n`
 		);
 		await sessionOpened.promise;
-		sessionBeforeSubmit = await assembly.store.getSession(existingSessionId);
+		sessionBeforeSubmit = await assembly.storage.getSession(existingSessionId);
 		recordsBeforeSubmit =
-			await assembly.store.listSessionRecords(existingSessionId);
+			await assembly.storage.listSessionRecords(existingSessionId);
 		availabilityReads.length = 0;
 		yield new TextEncoder().encode(
 			`${request("unavailable-submit", "session/submit", {
@@ -1019,9 +1026,9 @@ test("RPC session/submit rejects an unavailable model before storing its attachm
 		providerCallsAtUnavailableSubmit = localRecorder.requests.length;
 		availabilityReadsAtUnavailableSubmit = [...availabilityReads];
 		recordsAtUnavailableSubmit =
-			await assembly.store.listSessionRecords(existingSessionId);
+			await assembly.storage.listSessionRecords(existingSessionId);
 		sessionAtUnavailableSubmit =
-			await assembly.store.getSession(existingSessionId);
+			await assembly.storage.getSession(existingSessionId);
 		externalizationsAtUnavailableSubmit = activity.externalizations;
 		yield new TextEncoder().encode(
 			`${request("transcript", "session/getTranscript", {})}\n`
@@ -1123,7 +1130,7 @@ test("RPC session/submit rejects an unavailable model before storing its attachm
 		});
 		try {
 			expect(
-				await verification.store.listSessionRecords(existingSessionId)
+				await verification.storage.listSessionRecords(existingSessionId)
 			).toHaveLength(2);
 		} finally {
 			await verification.shutdown();
@@ -1229,8 +1236,11 @@ test("RPC rejects a mismatched Host Plugin snapshot before persisting a built-in
 			pluginRuntime: () => pluginRuntime,
 		},
 	});
-	const originalExternalizeAttachments = assembly.store.externalizeAttachments;
-	assembly.store.externalizeAttachments = async (...args) => {
+	const mutableStorage = assembly.storage as {
+		externalizeAttachments: typeof assembly.storage.externalizeAttachments;
+	};
+	const originalExternalizeAttachments = mutableStorage.externalizeAttachments;
+	mutableStorage.externalizeAttachments = async (...args) => {
 		activity.externalizations += 1;
 		return originalExternalizeAttachments(...args);
 	};
@@ -1310,7 +1320,7 @@ test("RPC rejects a mismatched Host Plugin snapshot before persisting a built-in
 			},
 		});
 		try {
-			expect(await verification.store.listSessions()).toEqual([]);
+			expect(await verification.storage.listSessions()).toEqual([]);
 		} finally {
 			await verification.shutdown();
 		}
@@ -1515,7 +1525,7 @@ test("RPC session/open preserves the structured JSONL corruption code", async ()
 		},
 		sources: {},
 	});
-	const { id: sessionId } = await assembly.store.createEmptySession({});
+	const { id: sessionId } = await assembly.storage.createEmptySession({});
 	const logPath = resolveSessionLogFilePath(
 		resolveLocalSessionLogRoot(corruptionDatabasePath),
 		sessionId
@@ -1610,9 +1620,11 @@ test("RPC session/open hides another Workspace's durable deletion marker", async
 		sources: {},
 	});
 	try {
-		await workspaceBAssembly.store.createEmptySession({ id: foreignSessionId });
+		await workspaceBAssembly.storage.createEmptySession({
+			id: foreignSessionId,
+		});
 		expect(
-			await workspaceBAssembly.store.deleteSession(foreignSessionId)
+			await workspaceBAssembly.storage.deleteSession(foreignSessionId)
 		).toMatchObject({
 			kind: "committed",
 			projection: "ready",
@@ -1712,7 +1724,7 @@ test("RPC state preserves a committed-blocked submission receipt without schedul
 				createFakeProviderCollection(recorder, rpcProviderModel),
 		},
 	});
-	const created = await assembly.store.createSession({
+	const created = await assembly.storage.createSession({
 		agent: agentId("build"),
 		id: toSessionId("rpc-blocked-projection-session"),
 		message: {
@@ -1997,7 +2009,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 			createProviderCollection: () => createFakeProviderCollection(recorder),
 		},
 	});
-	const { id: sessionId } = await failureAssembly.store.createSession({
+	const { id: sessionId } = await failureAssembly.storage.createSession({
 		agent: agentId("build"),
 		message: {
 			id: sessionMessageId("lock-failure-message"),
@@ -2007,8 +2019,11 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 		model: { modelId: modelId("gpt-5.6-luna"), providerId: "openai" },
 		turnId: agentTurnId("lock-failure-turn"),
 	});
-	const acquireSessionWriter = failureAssembly.store.acquireSessionWriter;
-	failureAssembly.store.acquireSessionWriter = async () => {
+	const mutableStorage = failureAssembly.storage as {
+		acquireSessionWriter: typeof failureAssembly.storage.acquireSessionWriter;
+	};
+	const originalAcquireSessionWriter = mutableStorage.acquireSessionWriter;
+	mutableStorage.acquireSessionWriter = async () => {
 		throw new SessionWriterLockFailureError(new Error("lock unavailable"));
 	};
 	const stdoutFrames: string[] = [];
@@ -2070,7 +2085,7 @@ test("RPC session opening keeps lock refusals request-scoped", async () => {
 		});
 		expect(frames.some((frame) => frame.method === "server/fatal")).toBe(false);
 	} finally {
-		failureAssembly.store.acquireSessionWriter = acquireSessionWriter;
+		mutableStorage.acquireSessionWriter = originalAcquireSessionWriter;
 		await failureAssembly.shutdown();
 	}
 });
@@ -2091,7 +2106,7 @@ test("raw JSONL target switches retain background Sessions but stream only the a
 		providerId: "openai" as const,
 	};
 	const createSeededSession = async (key: string) =>
-		switchAssembly.store.createSession({
+		switchAssembly.storage.createSession({
 			agent: agentId("build"),
 			message: {
 				id: sessionMessageId(`${key}-seed`),

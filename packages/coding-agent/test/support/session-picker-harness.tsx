@@ -7,8 +7,8 @@ import {
 	RouterContextProvider,
 } from "@tanstack/react-router";
 import { useEffect } from "react";
-import * as sessionStoreModule from "@/modules/sessions/storage/get-session-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import * as sessionStoreModule from "@/modules/sessions/storage/get-session-storage";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import {
@@ -46,16 +46,16 @@ export const createSessionPickerRouter = () => {
 
 /**
  * Renders the Session picker against a partial store and returns the renderer
- * plus the `getSessionStore` spy the caller must restore.
+ * plus the `getSessionStorage` spy the caller must restore.
  */
 export const renderSessionPicker = async ({
 	kittyKeyboard,
-	store,
-}: Readonly<{ kittyKeyboard: boolean; store: SessionStore }>) => {
-	const getStoreSpy = spyOn(
+	storage,
+}: Readonly<{ kittyKeyboard: boolean; storage: SessionStorage }>) => {
+	const getSessionStorageSpy = spyOn(
 		sessionStoreModule,
-		"getSessionStore"
-	).mockReturnValue(store);
+		"getSessionStorage"
+	).mockReturnValue(storage);
 	const router = createSessionPickerRouter();
 	const setup = await testRenderWithClipboard(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
@@ -72,5 +72,5 @@ export const renderSessionPicker = async ({
 		</ThemeProvider>,
 		{ height: 24, kittyKeyboard, width: 100 }
 	);
-	return { getStoreSpy, router, setup };
+	return { getSessionStorageSpy, router, setup };
 };

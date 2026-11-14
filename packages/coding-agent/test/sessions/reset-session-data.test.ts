@@ -2,7 +2,6 @@ import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isUndefined } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
@@ -61,7 +60,7 @@ const createResetPersistence = (
 			projection.sqlite.close();
 		},
 		logRoot,
-		store,
+		storage: store,
 	};
 };
 
@@ -84,7 +83,10 @@ test("resets session data without conflating repeated pasted markers in prompt h
 		model,
 		turnId: agentTurnId("turn-1"),
 	});
-	await store.recordPrompt({ files: [], text: "preserve this prompt" });
+	await store.promptHistory.recordPrompt({
+		files: [],
+		text: "preserve this prompt",
+	});
 	const pastedPrompt = {
 		files: [],
 		pastedText: [
@@ -92,21 +94,18 @@ test("resets session data without conflating repeated pasted markers in prompt h
 		],
 		text: "[Pasted ~3 lines]",
 	};
-	await store.recordPrompt(pastedPrompt);
-	await store.recordPrompt({
+	await store.promptHistory.recordPrompt(pastedPrompt);
+	await store.promptHistory.recordPrompt({
 		...pastedPrompt,
 		pastedText: [
 			{ start: 0, text: "red\ngreen\nblue", token: "[Pasted ~3 lines]" },
 		],
 	});
-	const attachmentLease = await store.attachmentStore?.ingest({
+	const attachmentLease = await store.attachmentStore.ingest({
 		bytes: PNG_BYTES,
 		filename: "reset.png",
 		mediaType: "image/png",
 	});
-	if (isUndefined(attachmentLease)) {
-		throw new Error("The attachment fixture was not stored.");
-	}
 	const reference = attachmentLease.reference;
 	await attachmentLease.release();
 	await store.appendCompaction({
@@ -128,7 +127,7 @@ test("resets session data without conflating repeated pasted markers in prompt h
 	await store.collectAttachments(0);
 
 	expect(await store.listSessions()).toEqual([]);
-	expect(await store.getPromptHistory()).toEqual([
+	expect(await store.promptHistory.getPromptHistory()).toEqual([
 		{
 			...pastedPrompt,
 			pastedText: [
@@ -139,7 +138,7 @@ test("resets session data without conflating repeated pasted markers in prompt h
 		{ files: [], text: "preserve this prompt" },
 	]);
 	expect(await store.getCompactions(sessionId)).toEqual([]);
-	expect(await store.attachmentStore?.resolve(reference)).toMatchObject({
+	expect(await store.attachmentStore.resolve(reference)).toMatchObject({
 		availability: "missing",
 	});
 	expect(await fs.readdir(attachmentRoot)).toEqual(["v1"]);
@@ -157,31 +156,26 @@ test("reset preserves prompt-history attachment owners and collects unowned Sess
 	const projection = createDatabase(
 		resolveLocalSessionProjectionPath(databasePath)
 	);
-	const store = createSessionJsonlStore(
-		createDrizzleSessionStore(projection.db, {
-			attachmentRoot,
-			operationalDatabase: operational.db,
-			sessionLogRoot: logRoot,
-			snapshotRoot,
-			workspaceRoot: directory,
-		}),
-		logRoot
-	);
+	const projectionStore = createDrizzleSessionStore(projection.db, {
+		attachmentRoot,
+		operationalDatabase: operational.db,
+		sessionLogRoot: logRoot,
+		snapshotRoot,
+		workspaceRoot: directory,
+	});
+	const store = createSessionJsonlStore(projectionStore, logRoot);
 	try {
-		const promptHistoryLease = await store.attachmentStore?.ingest({
+		const promptHistoryLease = await projectionStore.attachmentStore.ingest({
 			bytes: PNG_BYTES,
 			filename: "prompt-history-owner.png",
 			mediaType: "image/png",
 		});
-		const sessionOnlyLease = await store.attachmentStore?.ingest({
+		const sessionOnlyLease = await projectionStore.attachmentStore.ingest({
 			bytes: new Uint8Array([...PNG_BYTES, 0x01]),
 			filename: "session-only-owner.png",
 			mediaType: "image/png",
 		});
-		if (promptHistoryLease === undefined || sessionOnlyLease === undefined) {
-			throw new Error("The reset attachment fixtures were not stored.");
-		}
-		await store.recordPrompt({
+		await projectionStore.promptHistory.recordPrompt({
 			files: [attachmentReferenceToFilePart(promptHistoryLease.reference)],
 			text: "prompt history retains its attachment",
 		});
@@ -205,7 +199,9 @@ test("reset preserves prompt-history attachment owners and collects unowned Sess
 
 		await store.resetSessionData();
 
-		expect(await store.getPromptHistory()).toMatchObject([
+		expect(
+			await projectionStore.promptHistory.getPromptHistory()
+		).toMatchObject([
 			{
 				files: [
 					{
@@ -216,10 +212,12 @@ test("reset preserves prompt-history attachment owners and collects unowned Sess
 			},
 		]);
 		expect(
-			await store.attachmentStore?.resolve(promptHistoryLease.reference)
+			await projectionStore.attachmentStore.resolve(
+				promptHistoryLease.reference
+			)
 		).toMatchObject({ availability: "available" });
 		expect(
-			await store.attachmentStore?.resolve(sessionOnlyLease.reference)
+			await projectionStore.attachmentStore.resolve(sessionOnlyLease.reference)
 		).toMatchObject({ availability: "missing" });
 		expect(
 			JSON.parse(
@@ -255,9 +253,9 @@ test("a recovery in one Workspace blocks global reset before any Session log cha
 	const first = createResetPersistence(databasePath, workspaceA);
 	const second = createResetPersistence(databasePath, workspaceB);
 	try {
-		await first.store.createEmptySession({ id: firstSessionId });
-		await second.store.createEmptySession({ id: secondSessionId });
-		const recovery = second.store.fileObservationStore?.recovery;
+		await first.storage.createEmptySession({ id: firstSessionId });
+		await second.storage.createEmptySession({ id: secondSessionId });
+		const recovery = second.storage.fileObservationStore?.recovery;
 		if (recovery === undefined) {
 			throw new Error("Workspace B has no recovery store.");
 		}
@@ -306,7 +304,7 @@ test("a recovery in one Workspace blocks global reset before any Session log cha
 			`${secondSessionId}.json`
 		);
 
-		await expect(first.store.resetSessionData()).rejects.toThrow(
+		await expect(first.storage.resetSessionData()).rejects.toThrow(
 			"Reset is blocked until every workspace recovery is reconciled or discarded."
 		);
 
@@ -336,10 +334,10 @@ test("global reset deletes Sessions bound to different Workspaces without partia
 	const first = createResetPersistence(databasePath, workspaceA);
 	const second = createResetPersistence(databasePath, workspaceB);
 	try {
-		await first.store.createEmptySession({ id: firstSessionId });
-		await second.store.createEmptySession({ id: secondSessionId });
+		await first.storage.createEmptySession({ id: firstSessionId });
+		await second.storage.createEmptySession({ id: secondSessionId });
 
-		await first.store.resetSessionData();
+		await first.storage.resetSessionData();
 
 		for (const sessionId of [firstSessionId, secondSessionId]) {
 			expect(
@@ -358,8 +356,8 @@ test("global reset deletes Sessions bound to different Workspaces without partia
 				sessionId,
 			});
 		}
-		expect(await first.store.listSessions()).toEqual([]);
-		expect(await second.store.listSessions()).toEqual([]);
+		expect(await first.storage.listSessions()).toEqual([]);
+		expect(await second.storage.listSessions()).toEqual([]);
 	} finally {
 		first.close();
 		second.close();
@@ -379,25 +377,22 @@ test("reset reports committed cleanup pending and retries the same deletion iden
 	const projection = createDatabase(
 		resolveLocalSessionProjectionPath(databasePath)
 	);
-	const store = createSessionJsonlStore(
-		createDrizzleSessionStore(projection.db, {
-			attachmentRoot: path.join(directory, "attachments"),
-			operationalDatabase: operational.db,
-			sessionLogRoot: logRoot,
-			snapshotRoot: path.join(directory, "file-snapshots"),
-			workspaceRoot: directory,
-		}),
-		logRoot,
-		{
-			remove: async (filePath, options) => {
-				if (failRemoval && filePath.endsWith(`${sessionId}.jsonl`)) {
-					failRemoval = false;
-					throw new Error("Injected reset log removal failure.");
-				}
-				await fs.rm(filePath, options);
-			},
-		}
-	);
+	const projectionStore = createDrizzleSessionStore(projection.db, {
+		attachmentRoot: path.join(directory, "attachments"),
+		operationalDatabase: operational.db,
+		sessionLogRoot: logRoot,
+		snapshotRoot: path.join(directory, "file-snapshots"),
+		workspaceRoot: directory,
+	});
+	const store = createSessionJsonlStore(projectionStore, logRoot, {
+		remove: async (filePath, options) => {
+			if (failRemoval && filePath.endsWith(`${sessionId}.jsonl`)) {
+				failRemoval = false;
+				throw new Error("Injected reset log removal failure.");
+			}
+			await fs.rm(filePath, options);
+		},
+	});
 	const markerPath = path.join(
 		directory,
 		"session-control",
@@ -443,16 +438,14 @@ test("manual reset removes authoritative logs before clearing their projection",
 	const projection = createDatabase(
 		resolveLocalSessionProjectionPath(databasePath)
 	);
-	const store = createSessionJsonlStore(
-		createDrizzleSessionStore(projection.db, {
-			attachmentRoot,
-			operationalDatabase: operational.db,
-			sessionLogRoot: logRoot,
-			snapshotRoot,
-			workspaceRoot: directory,
-		}),
-		logRoot
-	);
+	const projectionStore = createDrizzleSessionStore(projection.db, {
+		attachmentRoot,
+		operationalDatabase: operational.db,
+		sessionLogRoot: logRoot,
+		snapshotRoot,
+		workspaceRoot: directory,
+	});
+	const store = createSessionJsonlStore(projectionStore, logRoot);
 	try {
 		await store.createEmptySession({ id: sessionId });
 	} finally {
@@ -520,7 +513,10 @@ test("incompatible local Session schema is refused without deleting user data", 
 			model,
 			turnId: agentTurnId("unsafe-reset-turn"),
 		});
-		await store.recordPrompt({ files: [], text: "keep prompt history" });
+		await store.promptHistory.recordPrompt({
+			files: [],
+			text: "keep prompt history",
+		});
 		await store.appendCompaction({
 			firstKeptUiMessageId: sessionMessageId("unsafe-reset-user"),
 			sessionId,
@@ -535,14 +531,12 @@ test("incompatible local Session schema is refused without deleting user data", 
 			estimatedTokensAfter: 5,
 			trigger: "manual",
 		});
-		const attachmentLease = await store.attachmentStore?.ingest({
+		// Held but never released: a live lease must survive the reset.
+		await store.attachmentStore.ingest({
 			bytes: PNG_BYTES,
 			filename: "unsafe-reset.png",
 			mediaType: "image/png",
 		});
-		if (isUndefined(attachmentLease)) {
-			throw new Error("The preservation fixture attachment was not stored.");
-		}
 		const attachmentFiles = await fs.readdir(attachmentRoot);
 		sqlite.close();
 		sqlite = undefined;

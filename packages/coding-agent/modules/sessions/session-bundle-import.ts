@@ -10,14 +10,13 @@ import {
 	SessionBundleValidationError,
 } from "./storage/session-bundle";
 import { SessionLogError } from "./storage/session-jsonl-codec";
-import type { SessionStore } from "./storage/session-store";
+import type { SessionLifecycle } from "./storage/session-lifecycle";
 
 export type SessionBundleImportErrorCode =
 	| "session_bundle_invalid"
 	| "session_import_conflict"
 	| "session_import_failed"
 	| "session_import_indeterminate"
-	| "session_import_unavailable"
 	| "session_in_use"
 	| "session_lock_failed";
 
@@ -113,17 +112,11 @@ const toImportError = (
 
 export const createSessionBundleImportOperation =
 	(
-		store: SessionStore,
+		store: SessionLifecycle,
 		fileSystem?: SessionBundleImportFileSystem
 	): SessionBundleImportOperation =>
 	async ({ bundlePath, signal }: SessionBundleImportInput) => {
 		const importWithAuthority = store.withSessionBundleImport;
-		if (importWithAuthority === undefined) {
-			throw new SessionBundleImportError(
-				"session_import_unavailable",
-				"Session store does not support authoritative bundle import."
-			);
-		}
 		const resolvedBundlePath = path.resolve(bundlePath);
 		let sessionId: SessionId | undefined;
 		try {

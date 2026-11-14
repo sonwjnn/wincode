@@ -23,7 +23,7 @@ import {
 	SessionBundleExportCleanupError,
 	SessionWriteOutcomeError,
 } from "./storage/session-jsonl-store";
-import type { SessionStore } from "./storage/session-store";
+import type { SessionLifecycle } from "./storage/session-lifecycle";
 
 export type SessionBundleExportErrorCode =
 	| "session_busy"
@@ -34,7 +34,6 @@ export type SessionBundleExportErrorCode =
 	| "session_commit_indeterminate"
 	| "session_export_cleanup_failed"
 	| "session_export_failed"
-	| "session_export_unavailable"
 	| "session_lock_failed"
 	| "session_log_corrupt"
 	| "session_log_version_unsupported"
@@ -209,7 +208,7 @@ const exportErrorFor = (
 export const createSessionBundleExportOperation =
 	(
 		manager: Pick<SessionHostManager, "withIdleForSessionLifecycle">,
-		store: SessionStore,
+		store: SessionLifecycle,
 		fileSystem?: SessionBundleExportFileSystem
 	): SessionBundleExportOperation =>
 	async ({
@@ -222,13 +221,6 @@ export const createSessionBundleExportOperation =
 		const sessionId = toSessionId(sessionIdValue);
 		const destinationPath = path.resolve(destination);
 		const exportWithWriter = store.withSessionBundleExport;
-		if (exportWithWriter === undefined) {
-			throw new SessionBundleExportError(
-				"session_export_unavailable",
-				sessionId,
-				"Session store does not support authoritative bundle export."
-			);
-		}
 		let manifest: SessionBundleManifest | undefined;
 		let exportStarted = false;
 		try {
