@@ -711,10 +711,19 @@ export function createMcpRegistry(input: McpRegistryDeps): McpRegistry {
 		initialConnectionsPromise = Promise.allSettled(connects).then(() => {
 			initialConnectionsSettled = true;
 		});
+		// The deadline bounds the wait, it is not a lifetime. Racing against
+		// `Bun.sleep` left a live timer holding the event loop for its full
+		// duration whenever the connections settled first, so a process that had
+		// finished every connection still took ten more seconds to exit. The
+		// timer is cleared on whichever side wins.
+		const deadline = Promise.withResolvers<void>();
+		const deadlineTimer = setTimeout(() => deadline.resolve(), 10_000);
 		initialCatalogReadyPromise = Promise.race([
 			initialConnectionsPromise,
-			Bun.sleep(10_000),
-		]);
+			deadline.promise,
+		]).finally(() => {
+			clearTimeout(deadlineTimer);
+		});
 	};
 
 	const init = (): Promise<void> => {
