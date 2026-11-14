@@ -63,6 +63,9 @@ export const reportDeferredFlushFailure = (
 		...(rpcMethod === undefined ? {} : { rpcMethod }),
 	});
 };
+/** Default teardown budget for one RPC shutdown request. */
+const RPC_SHUTDOWN_DEADLINE_MS = 5000;
+
 const diagnosticRpcMethod = (method: string): string | undefined =>
 	method === "initialize" ||
 	method === "server/shutdown" ||
@@ -101,6 +104,7 @@ export async function runRpc({
 	pluginRuntime,
 	composeServices: providedComposer,
 	input,
+	shutdownDeadlineMs = RPC_SHUTDOWN_DEADLINE_MS,
 	signal,
 	signalExitCode,
 	stderr,
@@ -181,7 +185,7 @@ export async function runRpc({
 				}
 				state.lifecycle = "closing";
 				inputAbortController.abort();
-				const deadline = Date.now() + 5000;
+				const deadline = Date.now() + shutdownDeadlineMs;
 				const settle = async (
 					work: Promise<void>,
 					label: string

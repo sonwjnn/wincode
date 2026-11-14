@@ -125,6 +125,8 @@ export type RpcRunnerOptions = Readonly<{
 	pluginRuntime?: PluginRuntime;
 	composeServices?: (input: RpcCompositionInput) => Promise<RpcAssembly>;
 	input: JsonlInput;
+	/** Teardown budget for a shutdown that never settles; defaults to 5s. */
+	shutdownDeadlineMs?: number;
 	signal?: AbortSignal;
 	signalExitCode?: number | (() => number);
 	stderr: OutputWriter;

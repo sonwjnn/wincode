@@ -1605,6 +1605,9 @@ test("ignored aborts finish cleanup at one bounded deadline", async () => {
 		controller.abort();
 	};
 	const stderr = writer();
+	// The wait under test is the deadline, not the five seconds it used to take:
+	// the budget is injected so the deadline branch stays observable in
+	// milliseconds instead of charging every suite run for its production value.
 	const exitCode = await runRpc({
 		composeServices: async () => ({
 			capabilities: emptyCapabilities(),
@@ -1632,6 +1635,7 @@ test("ignored aborts finish cleanup at one bounded deadline", async () => {
 		],
 		signal: controller.signal,
 		signalExitCode: 130,
+		shutdownDeadlineMs: 25,
 		stderr,
 		stdout,
 	});
@@ -1647,6 +1651,54 @@ test("ignored aborts finish cleanup at one bounded deadline", async () => {
 				record.context?.label === "capability"
 		)
 	).toBe(true);
+}, 10_000);
+
+test("a zero shutdown budget reports the overrun without awaiting shutdown", async () => {
+	// The deadline boundary itself: a zero budget must log the overrun and keep
+	// tearing down instead of waiting on work that never settles. Passing without
+	// resolving the gate is the assertion; a timing bound would only measure the
+	// machine.
+	const shutdownGate = Promise.withResolvers<void>();
+	const stdout = writer();
+	const stderr = writer();
+	const exitCode = await runRpc({
+		composeServices: async () => ({
+			capabilities: emptyCapabilities(),
+			shutdown: () => shutdownGate.promise,
+			workspace: process.cwd(),
+			workspaceId: "workspace-test",
+		}),
+		input: [
+			new TextEncoder().encode(
+				`${JSON.stringify({
+					id: "initialize-1",
+					jsonrpc: "2.0",
+					method: "initialize",
+					params: {
+						capabilities: {},
+						clientInfo: { name: "test-client" },
+						cwd: process.cwd(),
+						protocolVersion: 4,
+					},
+				})}\n`
+			),
+		],
+		shutdownDeadlineMs: 0,
+		stderr,
+		stdout,
+	});
+
+	expect(exitCode).toBe(0);
+	expect(stderr.frames).toEqual([]);
+	expect(
+		(await readRpcLogRecords()).some(
+			(record) =>
+				record.level === "warn" &&
+				record.message === "RPC shutdown deadline exceeded" &&
+				record.context?.label === "capability"
+		)
+	).toBe(true);
+	shutdownGate.resolve();
 }, 10_000);
 
 test("records shutdown failures without writing diagnostics to RPC stderr", async () => {
