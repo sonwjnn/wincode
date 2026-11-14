@@ -47,10 +47,8 @@ import {
 	type ResolvedSessionSelection,
 	restoreSelection,
 } from "../../../modules/sessions/selection";
-import {
-	requireSessionWriteReady,
-	SessionWriteOutcomeError,
-} from "../../../modules/sessions/storage/session-jsonl-store";
+import { SessionWriteOutcomeError } from "../../../modules/sessions/session-write-outcome";
+import { requireSessionWriteReady } from "../../../modules/sessions/storage/session-jsonl-store";
 import type { SessionSendInput } from "../../../modules/sessions/submission-types";
 import { projectSessionMessageRecords } from "../../../modules/sessions/transcript-projection";
 import { type SessionId, toSessionId } from "../../../shared/identifiers";

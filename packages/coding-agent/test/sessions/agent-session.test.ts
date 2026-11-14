@@ -42,11 +42,11 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import { SessionWriteOutcomeError } from "@/modules/sessions/session-write-outcome";
 import {
 	createMemoryAttachmentMetadataRepository,
 	createSessionAttachmentStore,
 } from "@/modules/sessions/storage/attachment-store";
-import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type {
 	SessionSendInput,

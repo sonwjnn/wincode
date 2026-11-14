@@ -3,11 +3,9 @@ import type {
 	SessionUsageEntry,
 } from "@/modules/sessions/storage/session-catalog";
 import type { SessionId } from "@/shared/identifiers";
+import { SessionWriteOutcomeError } from "../session-write-outcome";
 import type { SessionCatalog } from "../storage/session-catalog";
-import {
-	requireSessionWriteReady,
-	SessionWriteOutcomeError,
-} from "../storage/session-jsonl-store";
+import { requireSessionWriteReady } from "../storage/session-jsonl-store";
 
 export type SessionUsageLedger = Readonly<{
 	dispose: () => void;

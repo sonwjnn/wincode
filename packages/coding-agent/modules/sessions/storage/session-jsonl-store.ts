@@ -14,9 +14,8 @@ import {
 	toSubmissionId,
 } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
-import { logger, omitUndefined, readUtf8File } from "@wincode/utils";
+import { isCode, omitUndefined } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
-import { z } from "zod";
 import {
 	normalizeProviderModelSelection,
 	type ProviderModelSelection,
@@ -33,12 +32,8 @@ import {
 	toSessionHistoryEntryId,
 	toSessionId,
 	toSessionUsageEntryId,
-	toWorkspaceId,
-	type WorkspaceId,
 } from "@/shared/identifiers";
 import { throwIfAborted } from "@/shared/utils/abort";
-import { errorDiagnosticFields } from "@/shared/utils/error-log-fields";
-import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
@@ -85,9 +80,10 @@ import {
 	validatePluginSessionStatePluginId,
 	validatePluginSessionStateSchemaVersion,
 } from "../session-plugin-state";
-import type {
-	SessionWriteOutcome,
-	SessionWriteReceipt,
+import {
+	type SessionWriteOutcome,
+	SessionWriteOutcomeError,
+	type SessionWriteReceipt,
 } from "../session-write-outcome";
 import type {
 	SessionStatistics,
@@ -105,6 +101,7 @@ import {
 } from "./attachment-store";
 import type { DrizzleSessionStore } from "./drizzle-session-store";
 import { parseSessionLogFileName, resolveSessionLogFilePath } from "./path";
+import { createProjectedSessionStore } from "./projected-session";
 import {
 	type PreparedSessionBundleExport,
 	type PreparedSessionBundleImport,
@@ -126,7 +123,6 @@ import {
 	createSessionLogEvent,
 	createSessionLogHeader,
 	decodeSessionLog,
-	decodeSessionLogSuffix,
 	encodeCanonicalSessionJson,
 	encodeSessionLogLine,
 	isSessionHistoryEntryEventType,
@@ -134,12 +130,9 @@ import {
 	parseSessionContextEditPayload,
 	parseSessionForkedPayload,
 	parseSessionSubmissionStatusPayload,
-	SESSION_LOG_EVENT_TYPES,
-	SESSION_LOG_HASH_PATTERN,
 	type SessionBundleBranchProvenance,
 	type SessionCompactionPayload,
 	type SessionForkedPayload,
-	type SessionHistoryEntryEventType,
 	type SessionLogEntry,
 	type SessionLogEnvelope,
 	SessionLogError,
@@ -152,6 +145,7 @@ import {
 	sessionHistoryPathToEntryFromLog,
 	sessionLogOperationDigest,
 	sessionProjectionCursorsEqual,
+	sessionProjectionMatchesState,
 } from "./session-jsonl-codec";
 import { rebuildSessionJsonlProjection } from "./session-jsonl-rebuild";
 import type {
@@ -165,6 +159,52 @@ import type {
 	SessionLifecycle,
 	UpdateSessionInput,
 } from "./session-lifecycle";
+import {
+	assertSameSessionWriteIntent,
+	type CommittedLogEntry,
+	clearSessionForkAction,
+	clearSessionForkIntent,
+	createSessionLogFile,
+	creationDigest,
+	deletionReceiptFromEntry,
+	ensureDirectoryDurable,
+	ensureDurableReceipt,
+	equalBytes,
+	findOperation,
+	firstDifferentByteOffset,
+	indeterminateLogWriteError,
+	isCanonicalTimestamp,
+	isSessionHistoryWrite,
+	lockKey,
+	operationIdFileStem,
+	readExistingSessionLog,
+	readLog,
+	readSessionForkIntent,
+	readSessionImportActivationMarker,
+	readSessionWriteIntent,
+	removeSessionImportActivationMarker,
+	type SessionCreation,
+	type SessionDeletionReceipt,
+	type SessionForkAction,
+	SessionForkError,
+	type SessionForkIntent,
+	type SessionImportActivationMarker,
+	type SessionLogFileIo,
+	type SessionWrite,
+	type SessionWriteIntent,
+	type StagedSessionLog,
+	sessionControlRoot,
+	sessionDeletionOperationId,
+	sessionHistoryReferencesForWrite,
+	sessionLogFor,
+	stageSessionLog,
+	syncAndVerifyLogPrefix,
+	syncDirectoryAfterDurablePublication,
+	toReceipt,
+	validSessionId,
+	writeDeletedMarker,
+	writeSessionImportActivationMarker,
+} from "./session-log";
 import {
 	decodeSessionHistoryReadPointToken,
 	decodeSessionPageToken,
@@ -184,13 +224,6 @@ import type {
 } from "./session-records";
 import type { SessionStorage } from "./session-storage";
 import {
-	ensureSessionDirectoryTreeDurably,
-	publishSessionFileNoReplaceDurably,
-	removeSessionFileDurably,
-	replaceSessionFileDurably,
-	syncDirectoryAfterDurablePathChange,
-} from "./session-storage-durability";
-import {
 	acquireSessionWriterLock,
 	SessionInUseError,
 	type SessionWriterLock,
@@ -198,23 +231,6 @@ import {
 	type SessionWriterLockOptions,
 	withSessionCatalogLifecycleGate,
 } from "./session-writer-lock";
-
-export type SessionLogFileIo = Readonly<{
-	sync?: (filePath: string, handle: fs.FileHandle) => Promise<void>;
-	syncDirectory?: (directory: string, handle: fs.FileHandle) => Promise<void>;
-	remove?: (
-		filePath: string,
-		options: Parameters<typeof fs.rm>[1]
-	) => Promise<void>;
-	write?: (
-		filePath: string,
-		handle: fs.FileHandle,
-		bytes: Uint8Array,
-		offset: number,
-		length: number,
-		position: number
-	) => Promise<number>;
-}>;
 
 export type SessionJsonlStoreTestObserver = Readonly<{
 	onPluginWriteGenerationValidated?: (
@@ -234,50 +250,6 @@ export class SessionCleanupPendingError extends Error {
 		);
 		this.name = "SessionCleanupPendingError";
 		this.operationIds = operationIds;
-	}
-}
-
-export class SessionForkError extends Error {
-	readonly code:
-		| "session_busy"
-		| "session_checkpoint_invalid"
-		| "session_history_branches_unsupported"
-		| "session_operation_conflict";
-	readonly operationId: string;
-	readonly sourceSessionId: SessionId;
-
-	constructor(
-		code: SessionForkError["code"],
-		message: string,
-		sourceSessionId: SessionId,
-		operationId: string,
-		options?: ErrorOptions
-	) {
-		super(message, options);
-		this.name = "SessionForkError";
-		this.code = code;
-		this.operationId = operationId;
-		this.sourceSessionId = sourceSessionId;
-	}
-}
-
-export class SessionWriteOutcomeError extends Error {
-	readonly code: string;
-	readonly outcome: SessionWriteOutcome;
-
-	constructor(outcome: SessionWriteOutcome, cause?: unknown) {
-		super(
-			outcome.kind === "committed"
-				? "Session log commit is durable, but its SQLite projection or receipt is unavailable."
-				: outcome.error.message,
-			cause === undefined ? undefined : { cause }
-		);
-		this.name = "SessionWriteOutcomeError";
-		this.code =
-			outcome.kind === "committed"
-				? "session_projection_unavailable"
-				: outcome.error.code;
-		this.outcome = outcome;
 	}
 }
 
@@ -416,1968 +388,10 @@ export const requireSessionWriteReady = (
 	throw new SessionWriteOutcomeError(outcome);
 };
 
-type SessionWriteIntent = Readonly<{
-	expectedOffset: number;
-	historyReferences?: Readonly<{
-		activeLeafId: string;
-		historyEntryId: string;
-		parentEntryId: string | null;
-	}>;
-	operationDigest: string;
-	operationId: string;
-	sequence: number;
-	sessionId: SessionId;
-	timestamp?: string;
-	type: SessionLogEventType;
-	workspaceId?: WorkspaceId;
-}>;
-
-type SessionCreation = Readonly<{
-	createdAt: Date;
-	createdAtIsExplicit: boolean;
-	editMode: EditMode;
-	initialRecord?: SessionRecord;
-	lastMessageAt: Date | null;
-	model?: CreateEmptySessionInput["model"];
-	pinned: boolean;
-	thinkingLevel?: CreateEmptySessionInput["thinkingLevel"];
-	title: string;
-}>;
-
-type SessionWrite = Readonly<{
-	envelopeTimestamp?: string;
-	operationId: string;
-	payload: Readonly<Record<string, unknown>>;
-	type: Exclude<SessionLogEnvelope["type"], "session.header">;
-}>;
-
 type ExpectedPluginHistoryGeneration = Readonly<{
 	generation: number;
 	message: string;
 }>;
-
-type SessionHistoryWrite = SessionWrite &
-	Readonly<{ type: SessionHistoryEntryEventType }>;
-
-const isSessionHistoryWrite = (
-	write: SessionWrite
-): write is SessionHistoryWrite => isSessionHistoryEntryEventType(write.type);
-
-const sessionHistoryReferencesForWrite = (
-	write: SessionWrite
-): SessionWriteIntent["historyReferences"] => {
-	if (!isSessionHistoryWrite(write)) {
-		return;
-	}
-	return {
-		activeLeafId: write.payload.activeLeafId as string,
-		historyEntryId: write.payload.historyEntryId as string,
-		parentEntryId: write.payload.parentEntryId as string | null,
-	};
-};
-
-type CommittedLogEntry = Readonly<{
-	createdNew: boolean;
-	entry: SessionLogEntry;
-	receiptBlocked: boolean;
-	receiptCause?: unknown;
-	state: SessionLogState;
-}>;
-
-const sessionDeletionOperationId = (sessionId: SessionId): string =>
-	`delete-${validSessionId(sessionId)}`;
-const operationIdFileStem = (operationId: string): string =>
-	new Bun.CryptoHasher("sha256").update(operationId).digest("hex");
-
-const appendQueue = createKeyedSerialQueue();
-const forkOperationQueue = createKeyedSerialQueue();
-
-const validSessionId = (sessionId: SessionId): string => {
-	if (!isValidSessionId(sessionId)) {
-		throw new Error("Session ID is not safe for a Session log path.");
-	}
-	return sessionId;
-};
-
-const canonicalLogRoot = async (logRoot: string): Promise<string> => {
-	const resolvedRoot = path.resolve(logRoot);
-	try {
-		return await fs.realpath(resolvedRoot);
-	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw error;
-		}
-		return path.join(
-			await fs.realpath(path.dirname(resolvedRoot)),
-			path.basename(resolvedRoot)
-		);
-	}
-};
-
-const sessionControlRoot = async (logRoot: string): Promise<string> =>
-	path.join(path.dirname(await canonicalLogRoot(logRoot)), "session-control");
-
-const lockKey = async (
-	logRoot: string,
-	sessionId: SessionId
-): Promise<string> => {
-	await ensureDirectoryDurable(logRoot);
-	return `${await canonicalLogRoot(logRoot)}\0${sessionId}`;
-};
-
-const isCode = (error: unknown, code: string): boolean =>
-	typeof error === "object" &&
-	error !== null &&
-	Reflect.get(error, "code") === code;
-
-const writeFully = async (
-	handle: fs.FileHandle,
-	bytes: Uint8Array,
-	position: number,
-	filePath: string,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	let offset = 0;
-	while (offset < bytes.byteLength) {
-		const bytesWritten = fileIo.write
-			? await fileIo.write(
-					filePath,
-					handle,
-					bytes,
-					offset,
-					bytes.byteLength - offset,
-					position + offset
-				)
-			: (
-					await handle.write(
-						bytes,
-						offset,
-						bytes.byteLength - offset,
-						position + offset
-					)
-				).bytesWritten;
-		if (bytesWritten <= 0) {
-			throw new Error("Session log write made no progress.");
-		}
-		offset += bytesWritten;
-	}
-};
-
-const syncFile = async (
-	filePath: string,
-	handle: fs.FileHandle,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	if (fileIo.sync !== undefined) {
-		await fileIo.sync(filePath, handle);
-		return;
-	}
-	await handle.sync();
-};
-
-/** Windows FlushFileBuffers requires GENERIC_WRITE, including for existing files. */
-const openFileForSync = (filePath: string): Promise<fs.FileHandle> =>
-	fs.open(filePath, process.platform === "win32" ? "r+" : "r");
-
-const syncDirectory = async (
-	directory: string,
-	fileIo?: SessionLogFileIo
-): Promise<void> => {
-	if (process.platform === "win32" && fileIo?.syncDirectory === undefined) {
-		throw new Error(
-			"Windows Session durability requires write-through path publication, not directory-handle sync."
-		);
-	}
-	const handle = await fs.open(directory, "r");
-	try {
-		if (fileIo?.syncDirectory !== undefined) {
-			await fileIo.syncDirectory(directory, handle);
-			return;
-		}
-		await handle.sync();
-	} finally {
-		await handle.close();
-	}
-};
-
-const syncDirectoryAfterDurablePublication = async (
-	directory: string,
-	fileIo?: SessionLogFileIo
-): Promise<void> =>
-	await syncDirectoryAfterDurablePathChange(
-		directory,
-		async (path) => await syncDirectory(path, fileIo),
-		fileIo?.syncDirectory !== undefined
-	);
-
-const ensureDirectoryDurable = async (
-	directory: string,
-	mode = 0o700,
-	fileIo?: SessionLogFileIo
-): Promise<void> =>
-	await ensureSessionDirectoryTreeDurably(
-		directory,
-		mode,
-		async (parent) => await syncDirectory(parent, fileIo),
-		fileIo?.syncDirectory !== undefined,
-		"Session log path is not a directory."
-	);
-
-const readLog = async (
-	logPath: string,
-	sessionId: SessionId
-): Promise<Readonly<{ bytes: Uint8Array; state: SessionLogState }>> => {
-	const bytes = await Bun.file(logPath).bytes();
-	return { bytes, state: decodeSessionLog(sessionId, bytes) };
-};
-
-const firstDifferentByteOffset = (
-	left: Uint8Array,
-	right: Uint8Array
-): number | undefined => {
-	const commonLength = Math.min(left.byteLength, right.byteLength);
-	for (let index = 0; index < commonLength; index += 1) {
-		if (left[index] !== right[index]) {
-			return index;
-		}
-	}
-	return left.byteLength === right.byteLength ? undefined : commonLength;
-};
-
-const equalBytes = (left: Uint8Array, right: Uint8Array): boolean =>
-	firstDifferentByteOffset(left, right) === undefined;
-
-const sessionWriteIntentPath = async (
-	logRoot: string,
-	sessionId: SessionId
-): Promise<string> =>
-	path.join(
-		await sessionControlRoot(logRoot),
-		"indeterminate",
-		`${validSessionId(sessionId)}.json`
-	);
-
-export type SessionLogVerification = Readonly<{
-	byteLength: number;
-	eventCount: number;
-	lastHash: string;
-	lastSequence: number;
-	logId: string;
-	reconciliationPending: boolean;
-	sessionId: SessionId;
-}>;
-
-/**
- * Validates a Session log with the same decoder used by writable reopen. This
- * inspection reads the log and pending marker only; it does not acquire writer
- * authority, sync files, or repair an incomplete suffix.
- */
-export const verifySessionJsonlLog = async (
-	logRoot: string,
-	sessionId: SessionId
-): Promise<SessionLogVerification> => {
-	const logPath = resolveSessionLogFilePath(path.resolve(logRoot), sessionId);
-	const { bytes, state } = await readLog(logPath, sessionId);
-	let reconciliationPending = false;
-	try {
-		await fs.access(await sessionWriteIntentPath(logRoot, sessionId));
-		reconciliationPending = true;
-	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw error;
-		}
-	}
-	return {
-		byteLength: bytes.byteLength,
-		eventCount: Math.max(0, state.entries.length - 1),
-		lastHash: state.lastHash,
-		lastSequence: state.nextSequence - 1,
-		logId: state.logId,
-		reconciliationPending,
-		sessionId,
-	};
-};
-
-const isWritableSessionLogEventType = (
-	type: unknown
-): type is SessionLogEventType =>
-	typeof type === "string" &&
-	SESSION_LOG_EVENT_TYPES.includes(type as SessionLogEventType) &&
-	type !== "session.header";
-
-const isCanonicalTimestamp = (value: unknown): value is string => {
-	if (typeof value !== "string") {
-		return false;
-	}
-	const parsed = new Date(value);
-	return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
-};
-
-const sessionHistoryReferencesFrom = (
-	value: unknown
-): SessionWriteIntent["historyReferences"] => {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return;
-	}
-	const activeLeafId = Reflect.get(value, "activeLeafId");
-	const historyEntryId = Reflect.get(value, "historyEntryId");
-	const parentEntryId = Reflect.get(value, "parentEntryId");
-	if (
-		typeof activeLeafId !== "string" ||
-		!isValidSessionLogIdentifier(activeLeafId) ||
-		typeof historyEntryId !== "string" ||
-		!isValidSessionLogIdentifier(historyEntryId) ||
-		(parentEntryId !== null &&
-			(typeof parentEntryId !== "string" ||
-				!isValidSessionLogIdentifier(parentEntryId)))
-	) {
-		return;
-	}
-	return { activeLeafId, historyEntryId, parentEntryId };
-};
-
-const sessionWriteIntentMetadataFrom = (
-	value: object,
-	type: unknown,
-	sessionId: SessionId
-): Pick<
-	SessionWriteIntent,
-	"historyReferences" | "timestamp" | "workspaceId"
-> => {
-	const timestamp = Reflect.get(value, "timestamp");
-	const storedWorkspaceId = Reflect.get(value, "workspaceId");
-	const version = Reflect.get(value, "version");
-	const parsedTimestamp = isCanonicalTimestamp(timestamp)
-		? timestamp
-		: undefined;
-	const parsedWorkspaceId =
-		typeof storedWorkspaceId === "string" &&
-		storedWorkspaceId.length > 0 &&
-		storedWorkspaceId.length <= 256
-			? toWorkspaceId(storedWorkspaceId)
-			: undefined;
-	const historyReferencesRaw = Reflect.get(value, "historyReferences");
-	const historyReferences = sessionHistoryReferencesFrom(historyReferencesRaw);
-	const historyWrite = isSessionHistoryEntryEventType(type);
-	const validVersion =
-		version === 1 || version === 2 || version === 3 || version === 4;
-	const validTimestamp =
-		version === 1
-			? timestamp === undefined || parsedTimestamp !== undefined
-			: parsedTimestamp !== undefined;
-	let validWorkspaceId = storedWorkspaceId === undefined;
-	if (version === 3) {
-		validWorkspaceId =
-			type === "session.created" && parsedWorkspaceId !== undefined;
-	} else if (version === 4 && type === "session.created") {
-		validWorkspaceId =
-			storedWorkspaceId === undefined || parsedWorkspaceId !== undefined;
-	}
-	let validHistoryReferences = historyReferencesRaw === undefined;
-	if (version === 4 && historyWrite) {
-		validHistoryReferences = historyReferences !== undefined;
-	}
-	if (
-		!(
-			validVersion &&
-			validTimestamp &&
-			validWorkspaceId &&
-			validHistoryReferences
-		)
-	) {
-		throw new SessionLogError(
-			"session_log_corrupt",
-			sessionId,
-			"Session has an invalid pending write marker."
-		);
-	}
-	return omitUndefined({
-		historyReferences,
-		timestamp: parsedTimestamp,
-		workspaceId: parsedWorkspaceId,
-	});
-};
-
-const sessionWriteIntentFrom = (
-	value: unknown,
-	sessionId: SessionId
-): SessionWriteIntent => {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new SessionLogError(
-			"session_log_corrupt",
-			sessionId,
-			"Session has an invalid pending write marker."
-		);
-	}
-	const type = Reflect.get(value, "type");
-	const operationId = Reflect.get(value, "operationId");
-	const storedSessionId = Reflect.get(value, "sessionId");
-	const operationDigest = Reflect.get(value, "operationDigest");
-	const expectedOffset = Reflect.get(value, "expectedOffset");
-	const sequence = Reflect.get(value, "sequence");
-	const metadata = sessionWriteIntentMetadataFrom(value, type, sessionId);
-	const validSequence =
-		type === "session.created" ? sequence === 1 : Number(sequence) >= 2;
-	const validOffset =
-		type === "session.created"
-			? expectedOffset === 0
-			: Number(expectedOffset) > 0;
-	if (
-		!(isWritableSessionLogEventType(type) && validSequence && validOffset) ||
-		typeof operationId !== "string" ||
-		!isValidSessionLogIdentifier(operationId) ||
-		storedSessionId !== sessionId ||
-		typeof operationDigest !== "string" ||
-		!SESSION_LOG_HASH_PATTERN.test(operationDigest) ||
-		!Number.isSafeInteger(expectedOffset) ||
-		!Number.isSafeInteger(sequence)
-	) {
-		throw new SessionLogError(
-			"session_log_corrupt",
-			sessionId,
-			"Session has an invalid pending write marker."
-		);
-	}
-	return {
-		expectedOffset,
-		operationDigest,
-		operationId,
-		sequence,
-		sessionId,
-		...metadata,
-		type,
-	};
-};
-
-const assertSameSessionWriteIntent = (
-	intent: SessionWriteIntent,
-	expected: Pick<
-		SessionWriteIntent,
-		"operationDigest" | "operationId" | "type" | "workspaceId"
-	>,
-	sessionId: SessionId,
-	allowLegacyWorkspaceOwner = false
-): void => {
-	if (intent.operationId !== expected.operationId) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			`Session write ${intent.operationId} must be reconciled before another write.`,
-			{
-				offset: intent.expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	}
-	if (
-		intent.type !== expected.type ||
-		intent.operationDigest !== expected.operationDigest ||
-		(intent.workspaceId !== expected.workspaceId && !allowLegacyWorkspaceOwner)
-	) {
-		throw new SessionLogError(
-			"session_operation_conflict",
-			sessionId,
-			"A Session operation identity was retried with a different payload.",
-			{
-				offset: intent.expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	}
-};
-
-const readSessionWriteIntent = async (
-	logRoot: string,
-	sessionId: SessionId,
-	fileIo: SessionLogFileIo
-): Promise<SessionWriteIntent | undefined> => {
-	const markerPath = await sessionWriteIntentPath(logRoot, sessionId);
-	let markerText: string;
-	try {
-		markerText = await fs.readFile(markerPath, "utf8");
-	} catch (error) {
-		if (isCode(error, "ENOENT")) {
-			return;
-		}
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			"Session pending write marker could not be read.",
-			{ cause: error }
-		);
-	}
-	let value: unknown;
-	try {
-		value = JSON.parse(markerText);
-	} catch {
-		throw new SessionLogError(
-			"session_log_corrupt",
-			sessionId,
-			"Session has an invalid pending write marker."
-		);
-	}
-	const intent = sessionWriteIntentFrom(value, sessionId);
-	let handle: fs.FileHandle;
-	try {
-		handle = await openFileForSync(markerPath);
-	} catch (error) {
-		if (isCode(error, "ENOENT")) {
-			return;
-		}
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			"Session pending write marker could not be opened.",
-			{
-				cause: error,
-				offset: intent.expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	}
-	try {
-		await syncFile(markerPath, handle, fileIo);
-	} catch (error) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			"Session pending write marker durability could not be confirmed.",
-			{
-				cause: error,
-				offset: intent.expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	} finally {
-		await handle.close();
-	}
-	try {
-		await syncDirectoryAfterDurablePublication(
-			path.dirname(markerPath),
-			fileIo
-		);
-	} catch (error) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			"Session pending write marker directory durability could not be confirmed.",
-			{
-				cause: error,
-				offset: intent.expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	}
-	return intent;
-};
-
-const writeSessionWriteIntent = async (
-	logRoot: string,
-	intent: SessionWriteIntent & Readonly<{ timestamp: string }>,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const controlRoot = await sessionControlRoot(logRoot);
-	const markerRoot = path.join(controlRoot, "indeterminate");
-	const markerPath = await sessionWriteIntentPath(logRoot, intent.sessionId);
-	await ensureDirectoryDurable(controlRoot);
-	await ensureDirectoryDurable(markerRoot);
-	const existing = await readSessionWriteIntent(
-		logRoot,
-		intent.sessionId,
-		fileIo
-	);
-	const upgradeLegacyIntent =
-		existing !== undefined && existing.timestamp === undefined;
-	if (existing !== undefined) {
-		assertSameSessionWriteIntent(existing, intent, intent.sessionId);
-		if (!upgradeLegacyIntent) {
-			return;
-		}
-	}
-	const temporaryPath = `${markerPath}.${randomUUIDv7()}.tmp`;
-	let handle: fs.FileHandle | undefined;
-	try {
-		handle = await fs.open(temporaryPath, "wx", 0o600);
-		const bytes = new TextEncoder().encode(
-			`${encodeCanonicalSessionJson({
-				...intent,
-				version: 4,
-			})}\n`
-		);
-		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
-		await syncFile(temporaryPath, handle, fileIo);
-		await handle.close();
-		handle = undefined;
-		if (upgradeLegacyIntent) {
-			await replaceSessionFileDurably(
-				temporaryPath,
-				markerPath,
-				async (directory) => await syncDirectory(directory, fileIo),
-				fileIo.syncDirectory !== undefined
-			);
-			return;
-		}
-		try {
-			await publishSessionFileNoReplaceDurably(
-				temporaryPath,
-				markerPath,
-				async (directory) => await syncDirectory(directory, fileIo),
-				fileIo.syncDirectory !== undefined
-			);
-		} catch (error) {
-			if (!isCode(error, "EEXIST")) {
-				throw error;
-			}
-			const raced = await readSessionWriteIntent(
-				logRoot,
-				intent.sessionId,
-				fileIo
-			);
-			if (raced === undefined) {
-				throw new Error("Pending Session write marker disappeared.");
-			}
-			assertSameSessionWriteIntent(raced, intent, intent.sessionId);
-			return;
-		}
-	} catch (error) {
-		await handle?.close().catch(() => undefined);
-		if (error instanceof SessionLogError) {
-			throw error;
-		}
-		logger.warn("Session pending write marker could not be persisted", {
-			...errorDiagnosticFields(error),
-			operationId: intent.operationId,
-			platform: process.platform,
-			sessionId: intent.sessionId,
-		});
-		throw new SessionLogError(
-			upgradeLegacyIntent
-				? "session_log_write_indeterminate"
-				: "session_log_write_not_committed",
-			intent.sessionId,
-			upgradeLegacyIntent
-				? "Session write could not durably upgrade its pending marker."
-				: "Session write could not persist its pending marker before log mutation.",
-			{
-				cause: error,
-				offset: intent.expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	} finally {
-		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-	}
-};
-
-const sessionForkIntentSchema = z
-	.object({
-		checkpointRecordId: z.string().min(1).max(512),
-		operationDigest: z.string().regex(/^[0-9a-f]{64}$/u),
-		operationId: z.string().min(1).max(512),
-		sourceSessionId: z.string().min(1).max(512),
-		targetSessionId: z.string().min(1).max(512),
-		version: z.literal(1),
-	})
-	.strict();
-
-type SessionForkIntent = z.infer<typeof sessionForkIntentSchema>;
-
-const sessionForkIntentPath = async (
-	logRoot: string,
-	operationId: string
-): Promise<string> =>
-	path.join(
-		await sessionControlRoot(logRoot),
-		"forks",
-		`${operationIdFileStem(operationId)}.json`
-	);
-
-const readSessionForkIntent = async (
-	logRoot: string,
-	operationId: string,
-	sourceSessionId: SessionId
-): Promise<SessionForkIntent | undefined> => {
-	const intentPath = await sessionForkIntentPath(logRoot, operationId);
-	let value: unknown;
-	try {
-		value = JSON.parse(await Bun.file(intentPath).text());
-	} catch (error) {
-		if (isCode(error, "ENOENT")) {
-			return;
-		}
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sourceSessionId,
-			"Session fork operation intent could not be read.",
-			{ cause: error, operationId }
-		);
-	}
-	const parsed = sessionForkIntentSchema.safeParse(value);
-	if (!parsed.success || parsed.data.operationId !== operationId) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sourceSessionId,
-			"Session fork operation intent is invalid.",
-			{ operationId }
-		);
-	}
-	return parsed.data;
-};
-
-const publishCreateOnceJsonMarker = async <Value>({
-	directory,
-	fileIo,
-	markerPath,
-	missingRaceMessage,
-	readExisting,
-	value,
-}: Readonly<{
-	directory: string;
-	fileIo: SessionLogFileIo;
-	markerPath: string;
-	missingRaceMessage: string;
-	readExisting: () => Promise<Value | undefined>;
-	value: Value;
-}>): Promise<Value> => {
-	const temporaryPath = `${markerPath}.${randomUUIDv7()}.tmp`;
-	let handle: fs.FileHandle | undefined;
-	try {
-		handle = await fs.open(temporaryPath, "wx", 0o600);
-		const bytes = new TextEncoder().encode(
-			`${encodeCanonicalSessionJson(value)}\n`
-		);
-		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
-		await syncFile(temporaryPath, handle, fileIo);
-		await handle.close();
-		handle = undefined;
-		try {
-			await publishSessionFileNoReplaceDurably(
-				temporaryPath,
-				markerPath,
-				async (directory) => await syncDirectory(directory, fileIo),
-				fileIo.syncDirectory !== undefined
-			);
-		} catch (error) {
-			if (!isCode(error, "EEXIST")) {
-				throw error;
-			}
-			const raced = await readExisting();
-			if (raced === undefined) {
-				throw new Error(missingRaceMessage);
-			}
-			return raced;
-		}
-		await syncDirectoryAfterDurablePublication(directory, fileIo);
-		return value;
-	} finally {
-		await handle?.close().catch(() => undefined);
-		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-	}
-};
-
-const writeSessionForkIntent = async (
-	logRoot: string,
-	intent: SessionForkIntent,
-	sourceSessionId: SessionId,
-	fileIo: SessionLogFileIo
-): Promise<SessionForkIntent> => {
-	const markerPath = await sessionForkIntentPath(logRoot, intent.operationId);
-	const markerRoot = path.dirname(markerPath);
-	await ensureDirectoryDurable(markerRoot, 0o700, fileIo);
-	try {
-		return await publishCreateOnceJsonMarker({
-			directory: markerRoot,
-			fileIo,
-			markerPath,
-			missingRaceMessage: "Session fork operation intent disappeared.",
-			readExisting: async () =>
-				await readSessionForkIntent(
-					logRoot,
-					intent.operationId,
-					sourceSessionId
-				),
-			value: intent,
-		});
-	} catch (error) {
-		if (error instanceof SessionLogError) {
-			throw error;
-		}
-		throw new SessionLogError(
-			"session_log_write_not_committed",
-			sourceSessionId,
-			"Session fork operation intent could not be made durable.",
-			{ cause: error, operationId: intent.operationId }
-		);
-	}
-};
-
-const clearSessionForkIntent = async (
-	logRoot: string,
-	intent: SessionForkIntent,
-	sourceSessionId: SessionId,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const markerPath = await sessionForkIntentPath(logRoot, intent.operationId);
-	const existing = await readSessionForkIntent(
-		logRoot,
-		intent.operationId,
-		sourceSessionId
-	);
-	if (existing === undefined || !Bun.deepEquals(existing, intent, true)) {
-		return;
-	}
-	await removeSessionFileDurably(
-		markerPath,
-		await sessionControlRoot(logRoot),
-		async (directory) => await syncDirectory(directory, fileIo)
-	);
-};
-
-/** Pending UI retry identity is control metadata, not a source-log mutation. */
-const sessionForkActionSchema = z
-	.object({
-		checkpointRecordId: z.string().min(1).max(512),
-		operationId: z.string().min(1).max(512),
-		sourceSessionId: z.string().min(1).max(512),
-		version: z.literal(1),
-	})
-	.strict();
-
-type SessionForkAction = z.infer<typeof sessionForkActionSchema>;
-
-const sessionForkActionPath = async (
-	logRoot: string,
-	sourceSessionId: SessionId,
-	checkpoint: SessionForkCheckpoint
-): Promise<string> => {
-	const identity = new Bun.CryptoHasher("sha256")
-		.update(`${sourceSessionId}\0${checkpoint.recordId}`)
-		.digest("hex");
-	return path.join(
-		await sessionControlRoot(logRoot),
-		"fork-actions",
-		`${identity}.json`
-	);
-};
-
-const readSessionForkAction = async (
-	logRoot: string,
-	sourceSessionId: SessionId,
-	checkpoint: SessionForkCheckpoint
-): Promise<SessionForkAction | undefined> => {
-	const actionPath = await sessionForkActionPath(
-		logRoot,
-		sourceSessionId,
-		checkpoint
-	);
-	let value: unknown;
-	try {
-		value = JSON.parse(await Bun.file(actionPath).text());
-	} catch (error) {
-		if (isCode(error, "ENOENT")) {
-			return;
-		}
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sourceSessionId,
-			"Pending Session fork action could not be read.",
-			{ cause: error }
-		);
-	}
-	const parsed = sessionForkActionSchema.safeParse(value);
-	if (
-		!parsed.success ||
-		parsed.data.sourceSessionId !== sourceSessionId ||
-		parsed.data.checkpointRecordId !== checkpoint.recordId
-	) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sourceSessionId,
-			"Pending Session fork action is invalid."
-		);
-	}
-	return parsed.data;
-};
-
-const writeSessionForkAction = async (
-	logRoot: string,
-	action: SessionForkAction,
-	checkpoint: SessionForkCheckpoint,
-	fileIo: SessionLogFileIo
-): Promise<SessionForkAction> => {
-	const sourceSessionId = toSessionId(action.sourceSessionId);
-	const actionPath = await sessionForkActionPath(
-		logRoot,
-		sourceSessionId,
-		checkpoint
-	);
-	const actionRoot = path.dirname(actionPath);
-	await ensureDirectoryDurable(actionRoot, 0o700, fileIo);
-	try {
-		return await publishCreateOnceJsonMarker({
-			directory: actionRoot,
-			fileIo,
-			markerPath: actionPath,
-			missingRaceMessage: "Pending Session fork action disappeared.",
-			readExisting: async () =>
-				await readSessionForkAction(logRoot, sourceSessionId, checkpoint),
-			value: action,
-		});
-	} catch (error) {
-		if (error instanceof SessionLogError) {
-			throw error;
-		}
-		throw new SessionLogError(
-			"session_log_write_not_committed",
-			sourceSessionId,
-			"Session fork action could not be made durable.",
-			{ cause: error, operationId: action.operationId }
-		);
-	}
-};
-
-const clearSessionForkAction = async (
-	logRoot: string,
-	sourceSessionId: SessionId,
-	checkpoint: SessionForkCheckpoint,
-	operationId: string,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const existing = await readSessionForkAction(
-		logRoot,
-		sourceSessionId,
-		checkpoint
-	);
-	if (existing === undefined) {
-		return;
-	}
-	if (existing.operationId !== operationId) {
-		throw new SessionForkError(
-			"session_operation_conflict",
-			"Session fork action completion does not match its pending operation.",
-			sourceSessionId,
-			operationId
-		);
-	}
-	const actionPath = await sessionForkActionPath(
-		logRoot,
-		sourceSessionId,
-		checkpoint
-	);
-	try {
-		await removeSessionFileDurably(
-			actionPath,
-			await sessionControlRoot(logRoot),
-			async (directory) => await syncDirectory(directory, fileIo)
-		);
-	} catch (error) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sourceSessionId,
-			"Completed Session fork action could not be cleared.",
-			{ cause: error, operationId }
-		);
-	}
-};
-
-const clearSessionWriteIntent = async (
-	logRoot: string,
-	intent: SessionWriteIntent,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const markerPath = await sessionWriteIntentPath(logRoot, intent.sessionId);
-	const existing = await readSessionWriteIntent(
-		logRoot,
-		intent.sessionId,
-		fileIo
-	);
-	if (existing === undefined) {
-		return;
-	}
-	assertSameSessionWriteIntent(existing, intent, intent.sessionId);
-	await removeSessionFileDurably(
-		markerPath,
-		await sessionControlRoot(logRoot),
-		async (directory) => await syncDirectory(directory, fileIo)
-	);
-};
-
-const syncAndVerifyLogSuffix = async (
-	logPath: string,
-	startOffset: number,
-	capturedBytes: Uint8Array,
-	sessionId: SessionId,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const handle = await openFileForSync(logPath);
-	try {
-		await syncFile(logPath, handle, fileIo);
-	} finally {
-		await handle.close();
-	}
-	const endOffset = startOffset + capturedBytes.byteLength;
-	const { size } = await fs.stat(logPath);
-	const current =
-		size < endOffset
-			? new Uint8Array()
-			: await Bun.file(logPath).slice(startOffset, endOffset).bytes();
-	if (!equalBytes(capturedBytes, current)) {
-		const offset = firstDifferentByteOffset(capturedBytes, current);
-		throw new SessionLogError(
-			"session_log_corrupt",
-			sessionId,
-			"Session log suffix changed while its projection was being checked.",
-			{ offset: startOffset + (offset ?? capturedBytes.byteLength) }
-		);
-	}
-};
-
-const syncAndVerifyLogPrefix = async (
-	logPath: string,
-	capturedBytes: Uint8Array,
-	sessionId: SessionId,
-	fileIo: SessionLogFileIo,
-	sequence?: number
-): Promise<void> => {
-	const handle = await openFileForSync(logPath);
-	try {
-		await syncFile(logPath, handle, fileIo);
-	} finally {
-		await handle.close();
-	}
-	const current = await Bun.file(logPath).bytes();
-	if (
-		current.byteLength < capturedBytes.byteLength ||
-		!equalBytes(current.subarray(0, capturedBytes.byteLength), capturedBytes)
-	) {
-		const offset = firstDifferentByteOffset(capturedBytes, current);
-		throw new SessionLogError(
-			"session_log_corrupt",
-			sessionId,
-			"Session log changed while its projection was being checked.",
-			{
-				offset: offset ?? capturedBytes.byteLength,
-				...omitUndefined({ sequence }),
-			}
-		);
-	}
-};
-
-const ensureDurableQuarantineArtifact = async (
-	filePath: string,
-	expectedBytes: Uint8Array,
-	sessionId: SessionId,
-	intent: SessionWriteIntent,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const temporaryPath = `${filePath}.${randomUUIDv7()}.tmp`;
-	let handle: fs.FileHandle | undefined;
-	try {
-		try {
-			handle = await openFileForSync(filePath);
-			const existing = await Bun.file(filePath).bytes();
-			if (!equalBytes(existing, expectedBytes)) {
-				throw new SessionLogError(
-					"session_log_corrupt",
-					sessionId,
-					"Quarantine artifact conflicts with the pending Session write.",
-					{
-						offset: intent.expectedOffset,
-						operationId: intent.operationId,
-						sequence: intent.sequence,
-					}
-				);
-			}
-			await syncFile(filePath, handle, fileIo);
-		} catch (error) {
-			if (!isCode(error, "ENOENT")) {
-				throw error;
-			}
-			await handle?.close().catch(() => undefined);
-			handle = await fs.open(temporaryPath, "wx", 0o600);
-			await writeFully(handle, expectedBytes, 0, temporaryPath, fileIo);
-			await syncFile(temporaryPath, handle, fileIo);
-			await handle.close();
-			handle = undefined;
-			try {
-				await publishSessionFileNoReplaceDurably(
-					temporaryPath,
-					filePath,
-					async (directory) => await syncDirectory(directory, fileIo),
-					fileIo.syncDirectory !== undefined
-				);
-			} catch (linkError) {
-				if (!isCode(linkError, "EEXIST")) {
-					throw linkError;
-				}
-				const existing = await Bun.file(filePath).bytes();
-				if (!equalBytes(existing, expectedBytes)) {
-					throw new SessionLogError(
-						"session_log_corrupt",
-						sessionId,
-						"Quarantine artifact conflicts with the pending Session write.",
-						{
-							offset: intent.expectedOffset,
-							operationId: intent.operationId,
-							sequence: intent.sequence,
-						}
-					);
-				}
-			}
-		}
-	} finally {
-		await handle?.close().catch(() => undefined);
-		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-	}
-};
-
-const quarantinePartialLogAppend = async (
-	logRoot: string,
-	logPath: string,
-	sessionId: SessionId,
-	intent: SessionWriteIntent,
-	bytes: Uint8Array,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const expectedOffset = intent.expectedOffset;
-	if (
-		expectedOffset <= 0 ||
-		expectedOffset >= bytes.byteLength ||
-		bytes[expectedOffset - 1] !== 0x0a ||
-		bytes[bytes.byteLength - 1] === 0x0a
-	) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			"Session log has an incomplete suffix outside the pending write boundary.",
-			{
-				offset: expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	}
-	const prefix = bytes.subarray(0, expectedOffset);
-	const prefixState = decodeSessionLog(sessionId, prefix);
-	if (
-		prefixState.nextSequence !== intent.sequence ||
-		prefixState.nextOffset !== expectedOffset
-	) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			"Session log prefix does not match its pending write marker.",
-			{
-				offset: expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	}
-	const controlRoot = await sessionControlRoot(logRoot);
-	const quarantineRoot = path.join(
-		controlRoot,
-		"quarantine",
-		validSessionId(sessionId)
-	);
-	await ensureDirectoryDurable(controlRoot, 0o700, fileIo);
-	await ensureDirectoryDurable(path.dirname(quarantineRoot), 0o700, fileIo);
-	await ensureDirectoryDurable(quarantineRoot, 0o700, fileIo);
-	const quarantinePath = path.join(
-		quarantineRoot,
-		`${intent.sequence}-${operationIdFileStem(intent.operationId)}.partial`
-	);
-	const quarantineBytes = bytes.subarray(expectedOffset);
-	await ensureDurableQuarantineArtifact(
-		quarantinePath,
-		quarantineBytes,
-		sessionId,
-		intent,
-		fileIo
-	);
-	const quarantineMetadata = {
-		byteLength: quarantineBytes.byteLength,
-		offset: expectedOffset,
-		operationId: intent.operationId,
-		prefixHash: prefixState.lastHash,
-		reason: "incomplete-final-line",
-		sequence: intent.sequence,
-		sessionId,
-		suffixHash: new Bun.CryptoHasher("sha256")
-			.update(quarantineBytes)
-			.digest("hex"),
-		version: 1,
-	};
-	await ensureDurableQuarantineArtifact(
-		`${quarantinePath}.json`,
-		new TextEncoder().encode(
-			`${encodeCanonicalSessionJson(quarantineMetadata)}\n`
-		),
-		sessionId,
-		intent,
-		fileIo
-	);
-	const current = await Bun.file(logPath).bytes();
-	if (!equalBytes(current, bytes)) {
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			"Session log changed while its incomplete suffix was being quarantined.",
-			{
-				offset: expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	}
-	const logHandle = await fs.open(logPath, "r+");
-	try {
-		if ((await logHandle.stat()).size !== bytes.byteLength) {
-			throw new Error("Session log changed before suffix truncation.");
-		}
-		await logHandle.truncate(expectedOffset);
-		await syncFile(logPath, logHandle, fileIo);
-	} finally {
-		await logHandle.close();
-	}
-	await syncDirectoryAfterDurablePublication(path.dirname(logPath), fileIo);
-	await syncAndVerifyLogPrefix(logPath, prefix, sessionId, fileIo);
-};
-
-const findOperation = (
-	state: SessionLogState,
-	write: SessionWrite,
-	sessionId: SessionId
-): SessionLogEntry | undefined => {
-	const previous = state.entries.find(
-		({ envelope }) => envelope.operationId === write.operationId
-	);
-	if (previous === undefined) {
-		return;
-	}
-	const { envelope } = previous;
-	const previousDigest = sessionLogOperationDigest(
-		envelope.type,
-		envelope.payload
-	);
-	const requestedDigest = sessionLogOperationDigest(write.type, write.payload);
-	if (previousDigest !== requestedDigest) {
-		throw new SessionLogError(
-			"session_operation_conflict",
-			sessionId,
-			"A Session operation identity was reused with a different payload.",
-			{ sequence: envelope.sequence, offset: previous.startOffset }
-		);
-	}
-	return previous;
-};
-
-const creationDigest = (payload: Readonly<Record<string, unknown>>): string => {
-	const {
-		createdAt: _createdAt,
-		lastMessageAt: _lastMessageAt,
-		...semantic
-	} = payload;
-	return sessionLogOperationDigest("session.created", semantic);
-};
-
-const findCreationOperation = (
-	state: SessionLogState,
-	write: SessionWrite,
-	sessionId: SessionId
-): SessionLogEntry | undefined => {
-	const previous = state.entries.find(
-		({ envelope }) => envelope.operationId === write.operationId
-	);
-	if (previous === undefined) {
-		return;
-	}
-	if (
-		previous.envelope.type !== "session.created" ||
-		creationDigest(previous.envelope.payload) !==
-			creationDigest(write.payload) ||
-		previous.envelope.payload.createdAt !== write.payload.createdAt ||
-		previous.envelope.payload.lastMessageAt !== write.payload.lastMessageAt
-	) {
-		throw new SessionLogError(
-			"session_operation_conflict",
-			sessionId,
-			"A Session creation identity was reused with a different payload.",
-			{ offset: previous.startOffset, sequence: previous.envelope.sequence }
-		);
-	}
-	return previous;
-};
-
-type DurableSessionReceipt = Readonly<{
-	entryHash: string;
-	logId?: string;
-	operationId: string;
-	sequence: number;
-	sessionId: string;
-}>;
-
-const isDurableSessionReceipt = (
-	value: unknown
-): value is DurableSessionReceipt => {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return false;
-	}
-	const receipt = value as Record<string, unknown>;
-	return (
-		typeof receipt.entryHash === "string" &&
-		(receipt.logId === undefined || typeof receipt.logId === "string") &&
-		typeof receipt.operationId === "string" &&
-		Number.isSafeInteger(receipt.sequence) &&
-		typeof receipt.sessionId === "string"
-	);
-};
-
-const publishReceiptReplacement = async (
-	receiptPath: string,
-	bytes: Uint8Array,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const temporaryPath = `${receiptPath}.${randomUUIDv7()}.tmp`;
-	let handle: fs.FileHandle | undefined;
-	try {
-		handle = await fs.open(temporaryPath, "wx", 0o600);
-		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
-		await syncFile(temporaryPath, handle, fileIo);
-		await handle.close();
-		handle = undefined;
-		await replaceSessionFileDurably(
-			temporaryPath,
-			receiptPath,
-			async (directory) => await syncDirectory(directory, fileIo),
-			fileIo.syncDirectory !== undefined
-		);
-	} finally {
-		await handle?.close().catch(() => undefined);
-		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-	}
-};
-
-const verifyOrRepairExistingReceipt = async (
-	receiptPath: string,
-	receiptRoot: string,
-	expected: DurableSessionReceipt,
-	expectedText: string,
-	bytes: Uint8Array,
-	sessionId: SessionId,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	let existing: string;
-	try {
-		existing = await fs.readFile(receiptPath, "utf8");
-	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw error;
-		}
-		await publishReceiptReplacement(receiptPath, bytes, fileIo);
-		return;
-	}
-	let value: unknown;
-	try {
-		value = JSON.parse(existing);
-	} catch {
-		await publishReceiptReplacement(receiptPath, bytes, fileIo);
-		return;
-	}
-	if (!isDurableSessionReceipt(value)) {
-		await publishReceiptReplacement(receiptPath, bytes, fileIo);
-		return;
-	}
-	if (encodeCanonicalSessionJson(value) !== expectedText) {
-		throw new SessionLogError(
-			"session_operation_conflict",
-			sessionId,
-			"A durable Session receipt conflicts with its committed log entry.",
-			{ sequence: expected.sequence }
-		);
-	}
-	let handle: fs.FileHandle;
-	try {
-		handle = await openFileForSync(receiptPath);
-	} catch (error) {
-		if (!isCode(error, "ENOENT")) {
-			throw error;
-		}
-		await publishReceiptReplacement(receiptPath, bytes, fileIo);
-		return;
-	}
-	try {
-		await syncFile(receiptPath, handle, fileIo);
-	} finally {
-		await handle.close();
-	}
-	await syncDirectoryAfterDurablePublication(receiptRoot, fileIo);
-};
-
-const ensureDurableReceipt = async (
-	logRoot: string,
-	sessionId: SessionId,
-	entry: SessionLogEntry,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const controlRoot = await sessionControlRoot(logRoot);
-	const receiptRoot = path.join(
-		controlRoot,
-		"receipts",
-		validSessionId(sessionId)
-	);
-	await ensureDirectoryDurable(controlRoot);
-	await ensureDirectoryDurable(path.join(controlRoot, "receipts"));
-	await ensureDirectoryDurable(receiptRoot);
-	const receiptPath = path.join(
-		receiptRoot,
-		`${operationIdFileStem(entry.envelope.operationId)}.json`
-	);
-	const receipt: DurableSessionReceipt = {
-		entryHash: entry.envelope.entryHash,
-		logId:
-			entry.envelope.sequence === 0 &&
-			typeof entry.envelope.payload.logId === "string"
-				? entry.envelope.payload.logId
-				: undefined,
-		operationId: entry.envelope.operationId,
-		sequence: entry.envelope.sequence,
-		sessionId,
-	};
-	const expectedText = encodeCanonicalSessionJson(receipt);
-	const bytes = new TextEncoder().encode(`${expectedText}\n`);
-	const temporaryPath = `${receiptPath}.${randomUUIDv7()}.tmp`;
-	let handle: fs.FileHandle | undefined;
-	try {
-		handle = await fs.open(temporaryPath, "wx", 0o600);
-		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
-		await syncFile(temporaryPath, handle, fileIo);
-		await handle.close();
-		handle = undefined;
-		await publishSessionFileNoReplaceDurably(
-			temporaryPath,
-			receiptPath,
-			async (directory) => await syncDirectory(directory, fileIo),
-			fileIo.syncDirectory !== undefined
-		);
-	} catch (error) {
-		await handle?.close().catch(() => undefined);
-		if (!isCode(error, "EEXIST")) {
-			throw error;
-		}
-		await verifyOrRepairExistingReceipt(
-			receiptPath,
-			receiptRoot,
-			receipt,
-			expectedText,
-			bytes,
-			sessionId,
-			fileIo
-		);
-	} finally {
-		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-	}
-};
-
-type StagedSessionLog = Readonly<{
-	filePath: string;
-	root: string;
-}>;
-
-const stageSessionLog = async (
-	canonicalRoot: string,
-	sessionId: SessionId,
-	operationId: string,
-	bytes: Uint8Array,
-	fileIo: SessionLogFileIo
-): Promise<StagedSessionLog> => {
-	const root = path.join(canonicalRoot, ".staging");
-	const filePath = path.join(root, `${operationIdFileStem(operationId)}.jsonl`);
-	let handle: fs.FileHandle | undefined;
-	try {
-		await ensureDirectoryDurable(root);
-		// A prior process may have crashed after staging but before publishing.
-		await fs.rm(filePath, { force: true });
-		handle = await fs.open(filePath, "wx", 0o600);
-		await writeFully(handle, bytes, 0, filePath, fileIo);
-		await syncFile(filePath, handle, fileIo);
-		await handle.close();
-		handle = undefined;
-		return { filePath, root };
-	} catch (error) {
-		await handle?.close().catch(() => undefined);
-		await fs.rm(filePath, { force: true }).catch(() => undefined);
-		throw new SessionLogError(
-			"session_log_write_not_committed",
-			sessionId,
-			"Session creation was not published to the authoritative log.",
-			{ cause: error, operationId }
-		);
-	}
-};
-
-const sessionCreationTimestamps = (
-	creation: SessionCreation,
-	pendingIntent: SessionWriteIntent | undefined,
-	existingCreation: Readonly<Record<string, unknown>> | undefined,
-	operationId: string
-): Readonly<{ createdAt: string; lastMessageAt: string | null }> => {
-	const storedCreatedAt = isCanonicalTimestamp(existingCreation?.createdAt)
-		? new Date(existingCreation.createdAt)
-		: undefined;
-	const pendingCreatedAt =
-		pendingIntent?.operationId === operationId &&
-		pendingIntent.type === "session.created" &&
-		pendingIntent.timestamp !== undefined
-			? new Date(pendingIntent.timestamp)
-			: undefined;
-	const createdAt = creation.createdAtIsExplicit
-		? creation.createdAt
-		: (storedCreatedAt ?? pendingCreatedAt ?? creation.createdAt);
-	const lastMessageAt =
-		creation.lastMessageAt?.getTime() === creation.createdAt.getTime()
-			? createdAt
-			: creation.lastMessageAt;
-	return {
-		createdAt: createdAt.toISOString(),
-		lastMessageAt: lastMessageAt?.toISOString() ?? null,
-	};
-};
-
-const readExistingSessionLog = async (
-	logPath: string,
-	sessionId: SessionId
-): Promise<
-	Readonly<{ bytes: Uint8Array; state: SessionLogState }> | undefined
-> => {
-	try {
-		return await readLog(logPath, sessionId);
-	} catch (error) {
-		if (isCode(error, "ENOENT")) {
-			return;
-		}
-		throw error;
-	}
-};
-
-const assertCreationIntentTimestampMatches = (
-	creation: SessionCreation,
-	intent: SessionWriteIntent | undefined,
-	existingCreation: Readonly<Record<string, unknown>> | undefined,
-	operationId: string,
-	sessionId: SessionId
-): void => {
-	if (
-		intent?.operationId !== operationId ||
-		intent.type !== "session.created"
-	) {
-		return;
-	}
-	const persistedTimestamp =
-		intent.timestamp ??
-		(isCanonicalTimestamp(existingCreation?.createdAt)
-			? existingCreation.createdAt
-			: undefined);
-	if (persistedTimestamp === undefined) {
-		const explicitTimestamp = creation.createdAtIsExplicit;
-		throw new SessionLogError(
-			explicitTimestamp
-				? "session_operation_conflict"
-				: "session_log_write_indeterminate",
-			sessionId,
-			explicitTimestamp
-				? "A legacy Session creation intent cannot verify its explicit timestamp."
-				: "A legacy Session creation intent has no persisted timestamp to retry safely.",
-			{ offset: 0, operationId, sequence: 1 }
-		);
-	}
-	if (
-		creation.createdAtIsExplicit &&
-		persistedTimestamp !== creation.createdAt.toISOString()
-	) {
-		throw new SessionLogError(
-			"session_operation_conflict",
-			sessionId,
-			"A Session creation identity was reused with a different payload.",
-			{ offset: 0, operationId, sequence: 1 }
-		);
-	}
-};
-
-const assertSessionCreationOwnership = (
-	sessionId: SessionId,
-	operationId: string,
-	workspaceId: WorkspaceId,
-	pendingIntent: SessionWriteIntent | undefined,
-	hasPublishedLog: boolean,
-	isBoundToWorkspace: () => boolean,
-	isBoundToAnotherWorkspace: () => boolean
-): boolean => {
-	const boundToWorkspace = isBoundToWorkspace();
-	const intentWorkspaceId = pendingIntent?.workspaceId;
-	if (
-		isBoundToAnotherWorkspace() ||
-		(pendingIntent?.type === "session.created" &&
-			intentWorkspaceId !== undefined &&
-			intentWorkspaceId !== workspaceId)
-	) {
-		throw new SessionLogError(
-			"session_operation_conflict",
-			sessionId,
-			"Session creation belongs to another Workspace.",
-			{
-				offset: pendingIntent?.expectedOffset ?? 0,
-				operationId,
-				sequence: 1,
-			}
-		);
-	}
-	if (
-		(hasPublishedLog || pendingIntent?.type === "session.created") &&
-		!boundToWorkspace &&
-		intentWorkspaceId !== workspaceId
-	) {
-		throw new SessionLogError(
-			"session_operation_conflict",
-			sessionId,
-			"Cannot verify Workspace ownership of this published Session creation.",
-			{
-				offset: pendingIntent?.expectedOffset ?? 0,
-				operationId,
-				sequence: 1,
-			}
-		);
-	}
-	return boundToWorkspace;
-};
-
-const ensureSessionCreationReceipt = async ({
-	createdNew,
-	entry,
-	fileIo,
-	intent,
-	logRoot,
-	sessionId,
-	state,
-}: {
-	createdNew: boolean;
-	entry: SessionLogEntry;
-	fileIo: SessionLogFileIo;
-	intent: SessionWriteIntent | undefined;
-	logRoot: string;
-	sessionId: SessionId;
-	state: SessionLogState;
-}): Promise<CommittedLogEntry> => {
-	try {
-		await ensureDurableReceipt(logRoot, sessionId, entry, fileIo);
-		if (intent !== undefined) {
-			await clearSessionWriteIntent(logRoot, intent, fileIo);
-		}
-		return { createdNew, entry, receiptBlocked: false, state };
-	} catch (error) {
-		if (
-			error instanceof SessionLogError &&
-			error.code === "session_operation_conflict"
-		) {
-			throw error;
-		}
-		return {
-			createdNew,
-			entry,
-			receiptBlocked: true,
-			receiptCause: error,
-			state,
-		};
-	}
-};
-
-const prepareSessionCreationWrite = ({
-	boundToWorkspace,
-	creation,
-	existingLog,
-	operationId,
-	pendingIntent,
-	sessionId,
-	workspaceId,
-}: {
-	boundToWorkspace: boolean;
-	creation: SessionCreation;
-	existingLog:
-		| Readonly<{ bytes: Uint8Array; state: SessionLogState }>
-		| undefined;
-	operationId: string;
-	pendingIntent: SessionWriteIntent | undefined;
-	sessionId: SessionId;
-	workspaceId: WorkspaceId;
-}): Readonly<{
-	createdAt: string;
-	creationIntent: SessionWriteIntent & Readonly<{ timestamp: string }>;
-	operation: SessionWrite;
-}> => {
-	const existingCreation = existingLog?.state.entries.find(
-		({ envelope }) =>
-			envelope.operationId === operationId &&
-			envelope.type === "session.created"
-	)?.envelope.payload;
-	const { createdAt, lastMessageAt } = sessionCreationTimestamps(
-		creation,
-		pendingIntent,
-		existingCreation,
-		operationId
-	);
-	assertCreationIntentTimestampMatches(
-		creation,
-		pendingIntent,
-		existingCreation,
-		operationId,
-		sessionId
-	);
-	const initialHistoryEntryId =
-		creation.initialRecord === undefined
-			? undefined
-			: sessionHistoryEntryIdForRecord(sessionId, creation.initialRecord.id);
-	const operation: SessionWrite = {
-		operationId,
-		payload: {
-			activeLeafId: initialHistoryEntryId ?? null,
-			createdAt,
-			editMode: creation.editMode,
-			lastMessageAt,
-			model: creation.model,
-			pinned: creation.pinned,
-			thinkingLevel: creation.thinkingLevel,
-			title: creation.title,
-			...omitUndefined({
-				initialHistoryEntryId,
-				initialRecord: creation.initialRecord,
-			}),
-		},
-		type: "session.created",
-	};
-	const creationIntent: SessionWriteIntent & Readonly<{ timestamp: string }> = {
-		expectedOffset: 0,
-		operationDigest: creationDigest(operation.payload),
-		operationId,
-		sequence: 1,
-		sessionId,
-		timestamp: createdAt,
-		type: "session.created",
-		workspaceId,
-	};
-	if (pendingIntent !== undefined) {
-		assertSameSessionWriteIntent(
-			pendingIntent,
-			creationIntent,
-			sessionId,
-			pendingIntent.type === "session.created" &&
-				pendingIntent.workspaceId === undefined &&
-				boundToWorkspace
-		);
-	}
-	return { createdAt, creationIntent, operation };
-};
-
-const createSessionLog = async (
-	logRoot: string,
-	sessionId: SessionId,
-	creation: SessionCreation,
-	fileIo: SessionLogFileIo,
-	workspaceId: WorkspaceId,
-	isBoundToWorkspace: () => boolean,
-	isBoundToAnotherWorkspace: () => boolean,
-	bindSessionToWorkspace: () => void
-): Promise<CommittedLogEntry> => {
-	const safeId = validSessionId(sessionId);
-	const operationId = `create-${safeId}`;
-	const root = path.resolve(logRoot);
-	try {
-		await ensureDirectoryDurable(root);
-	} catch (error) {
-		throw new SessionLogError(
-			"session_log_write_not_committed",
-			sessionId,
-			"Session creation could not prepare its authoritative log root.",
-			{ cause: error, operationId }
-		);
-	}
-	let canonicalRoot: string;
-	try {
-		canonicalRoot = await fs.realpath(root);
-	} catch (error) {
-		throw new SessionLogError(
-			"session_log_write_not_committed",
-			sessionId,
-			"Session creation could not resolve its authoritative log root.",
-			{ cause: error, operationId }
-		);
-	}
-	const targetPath = resolveSessionLogFilePath(canonicalRoot, sessionId);
-	const pendingIntent = await readSessionWriteIntent(
-		logRoot,
-		sessionId,
-		fileIo
-	);
-	const existingLog = await readExistingSessionLog(targetPath, sessionId);
-	const boundToWorkspace = assertSessionCreationOwnership(
-		sessionId,
-		operationId,
-		workspaceId,
-		pendingIntent,
-		existingLog !== undefined,
-		isBoundToWorkspace,
-		isBoundToAnotherWorkspace
-	);
-	const { createdAt, creationIntent, operation } = prepareSessionCreationWrite({
-		boundToWorkspace,
-		creation,
-		existingLog,
-		operationId,
-		pendingIntent,
-		sessionId,
-		workspaceId,
-	});
-	if (existingLog !== undefined) {
-		const previous = findCreationOperation(
-			existingLog.state,
-			operation,
-			sessionId
-		);
-		if (previous !== undefined) {
-			await syncAndVerifyLogPrefix(
-				targetPath,
-				existingLog.bytes,
-				sessionId,
-				fileIo
-			);
-			await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
-				assertSessionCreationOwnership(
-					sessionId,
-					operationId,
-					workspaceId,
-					pendingIntent,
-					true,
-					isBoundToWorkspace,
-					isBoundToAnotherWorkspace
-				);
-				bindSessionToWorkspace();
-			});
-			return await ensureSessionCreationReceipt({
-				createdNew: false,
-				entry: previous,
-				fileIo,
-				intent: pendingIntent,
-				logRoot,
-				sessionId,
-				state: existingLog.state,
-			});
-		}
-		throw new SessionLogError(
-			"session_log_corrupt",
-			sessionId,
-			"Published Session log is missing its creation event."
-		);
-	}
-
-	const header = createSessionLogHeader(sessionId, randomUUIDv7(), createdAt);
-	const createdEnvelope = createSessionLogEvent({
-		operationId: operation.operationId,
-		payload: operation.payload,
-		previousHash: header.entryHash,
-		sequence: 1,
-		sessionId,
-		timestamp: createdAt,
-		type: "session.created",
-	});
-	const bytes = new Uint8Array([
-		...encodeSessionLogLine(header),
-		...encodeSessionLogLine(createdEnvelope),
-	]);
-	const staged = await stageSessionLog(
-		canonicalRoot,
-		sessionId,
-		operation.operationId,
-		bytes,
-		fileIo
-	);
-	const intent: SessionWriteIntent & Readonly<{ timestamp: string }> =
-		pendingIntent === undefined
-			? creationIntent
-			: {
-					...pendingIntent,
-					timestamp: pendingIntent.timestamp ?? creationIntent.timestamp,
-				};
-	let published = false;
-	try {
-		await writeSessionWriteIntent(logRoot, intent, fileIo);
-		await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
-			await publishSessionFileNoReplaceDurably(
-				staged.filePath,
-				targetPath,
-				async (directory) => await syncDirectory(directory, fileIo),
-				fileIo.syncDirectory !== undefined,
-				() => {
-					published = true;
-				}
-			);
-			await syncDirectoryAfterDurablePublication(staged.root, fileIo);
-			bindSessionToWorkspace();
-		});
-		const { bytes: publishedBytes, state } = await readLog(
-			targetPath,
-			sessionId
-		);
-		await syncAndVerifyLogPrefix(targetPath, publishedBytes, sessionId, fileIo);
-		const entry = state.entries[1];
-		if (entry === undefined) {
-			throw new SessionLogError(
-				"session_log_corrupt",
-				sessionId,
-				"Published Session log is missing its creation event."
-			);
-		}
-		return await ensureSessionCreationReceipt({
-			createdNew: true,
-			entry,
-			fileIo,
-			intent,
-			logRoot,
-			sessionId,
-			state,
-		});
-	} catch (error) {
-		if (published) {
-			if (
-				error instanceof SessionLogError &&
-				error.code === "session_operation_conflict"
-			) {
-				throw error;
-			}
-			throw indeterminateLogWriteError(sessionId, intent, error);
-		}
-		if (error instanceof SessionLogError) {
-			throw error;
-		}
-		throw new SessionLogError(
-			"session_log_write_not_committed",
-			sessionId,
-			"Session creation was not published to the authoritative log.",
-			{ cause: error, operationId: operation.operationId }
-		);
-	} finally {
-		await fs.rm(staged.filePath, { force: true }).catch(() => undefined);
-	}
-};
-
-const serializeWrite = <Result>(
-	key: string,
-	operation: () => Promise<Result>
-): Promise<Result> => appendQueue.run(key, operation);
 
 const initialRecordFor = (
 	input: CreateSessionInput,
@@ -2419,17 +433,6 @@ const initialCreation = (
 	title: "Untitled Session",
 });
 
-const toReceipt = (
-	entry: SessionLogEntry,
-	projection: SessionWriteReceipt["projection"]
-): SessionWriteReceipt => ({
-	entryHash: entry.envelope.entryHash,
-	kind: "committed",
-	operationId: entry.envelope.operationId,
-	projection,
-	sequence: entry.envelope.sequence,
-});
-
 const toForkReceipt = (
 	entry: SessionLogEntry,
 	operationId: string,
@@ -2438,18 +441,6 @@ const toForkReceipt = (
 	...toReceipt(entry, projection),
 	operationId,
 });
-
-const projectionMatchesState = (
-	cursor: SessionProjectionCursor | undefined,
-	state: SessionLogState,
-	generation: number
-): boolean =>
-	cursor !== undefined &&
-	cursor.generation === generation &&
-	cursor.logId === state.logId &&
-	cursor.nextSequence === state.nextSequence &&
-	cursor.nextByteOffset === state.nextOffset &&
-	cursor.lastHash === state.lastHash;
 
 const compactionForAppend = (
 	input: AppendSessionCompactionInput,
@@ -4653,6 +2644,8 @@ export const createSessionJsonlStore = (
 	testObserver?: SessionJsonlStoreTestObserver
 ): SessionStorage => {
 	const projection = projectionStore.jsonlProjection;
+	const sessionLog = sessionLogFor(logRoot, fileIo);
+
 	const pendingCreationAttachmentLeases = new Map<
 		SessionId,
 		AttachmentExternalizationLease
@@ -4665,7 +2658,6 @@ export const createSessionJsonlStore = (
 		}>
 	>();
 	const heldWriterKeys = new Set<string>();
-	const writerOperationQueue = createKeyedSerialQueue();
 	const sessionHistoryTreeSnapshotCache = new Map<
 		string,
 		CachedSessionHistoryTreeSnapshot
@@ -4674,21 +2666,7 @@ export const createSessionJsonlStore = (
 	const withAppendQueues = async <Result>(
 		sessionIds: readonly SessionId[],
 		operation: () => Promise<Result>
-	): Promise<Result> => {
-		const keys = await Promise.all(
-			[...new Set(sessionIds)]
-				.sort()
-				.map(async (sessionId) => await lockKey(logRoot, sessionId))
-		);
-		const acquire = async (index: number): Promise<Result> => {
-			const key = keys[index];
-			if (key === undefined) {
-				return await operation();
-			}
-			return await appendQueue.run(key, async () => await acquire(index + 1));
-		};
-		return acquire(0);
-	};
+	): Promise<Result> => await sessionLog.withAppendQueue(sessionIds, operation);
 
 	const deletedMarkerPath = async (sessionId: SessionId): Promise<string> =>
 		path.join(
@@ -4713,11 +2691,31 @@ export const createSessionJsonlStore = (
 		);
 	};
 
-	const assertSessionWorkspaceBinding = (sessionId: SessionId): void => {
-		if (!projection.isBoundToWorkspace(sessionId)) {
-			throw new Error("Session not found");
-		}
-	};
+	const projected = createProjectedSessionStore({
+		assertNoUnresolvedOwnedSessionCreations: async (root) =>
+			await assertNoUnresolvedOwnedSessionCreations(root),
+		checkDeletedMarker: async (sessionId) =>
+			await checkDeletedMarker(sessionId),
+		hasPendingAttachmentRecovery: (sessionId) =>
+			pendingCreationAttachmentLeases.has(sessionId) ||
+			pendingAttachmentLeases.has(sessionId),
+		log: sessionLog,
+		projection,
+		projectionStore: {
+			getSession: async (sessionId) =>
+				await projectionStore.getSession(sessionId),
+		},
+		reconcileDeletedSessionIfNeeded: async (sessionId) =>
+			await reconcileDeletedSessionIfNeeded(sessionId),
+		reconcileDeletedSessions: async () => await reconcileDeletedSessions(),
+		reconcileSidecars: async (sessionId, logPath, bytes, state) =>
+			await reconcileProjectionSessionSidecars(
+				sessionId,
+				logPath,
+				bytes,
+				state
+			),
+	});
 
 	const assertSessionHistoryWorkspaceBinding = (
 		sessionId: SessionId,
@@ -4758,372 +2756,6 @@ export const createSessionJsonlStore = (
 		}
 	};
 
-	const assertProjectionReady = (sessionId: SessionId): number => {
-		const maintenance = projection.getMaintenanceState();
-		if (maintenance.status !== "ready") {
-			throw new SessionLogError(
-				"session_projection_blocked",
-				sessionId,
-				"Session projection rebuild is incomplete; retry `wincode sessions rebuild` before opening Sessions."
-			);
-		}
-		return maintenance.generation;
-	};
-
-	const assertCursorDoesNotExceedLog = (
-		sessionId: SessionId,
-		cursor: SessionProjectionCursor | undefined,
-		state: SessionLogState
-	): void => {
-		const projectedEntry =
-			cursor === undefined ? undefined : state.entries[cursor.nextSequence - 1];
-		if (
-			cursor !== undefined &&
-			(cursor.logId !== state.logId ||
-				cursor.nextSequence > state.nextSequence ||
-				projectedEntry === undefined ||
-				projectedEntry.endOffset !== cursor.nextByteOffset ||
-				projectedEntry.envelope.entryHash !== cursor.lastHash)
-		) {
-			throw new SessionLogError(
-				"session_log_corrupt",
-				sessionId,
-				"SQLite projection cursor does not match the committed Session log.",
-				{
-					...omitUndefined({
-						offset: cursor?.nextByteOffset,
-						sequence:
-							cursor === undefined ? undefined : cursor.nextSequence - 1,
-					}),
-				}
-			);
-		}
-	};
-
-	const projectionSessionIsMissing = async (
-		sessionId: SessionId
-	): Promise<boolean> => {
-		try {
-			await projectionStore.getSession(sessionId);
-			return false;
-		} catch (error) {
-			if (error instanceof Error && error.message === "Session not found") {
-				return true;
-			}
-			throw error;
-		}
-	};
-
-	const catchUpProjection = (
-		sessionId: SessionId,
-		state: SessionLogState,
-		cursor: SessionProjectionCursor | undefined,
-		missingSession: boolean
-	): SessionProjectionCursor | undefined => {
-		let expectedCursor = cursor;
-		for (;;) {
-			const generation = projection.getMaintenanceState().generation;
-			const replace =
-				missingSession ||
-				expectedCursor === undefined ||
-				expectedCursor.generation !== generation;
-			const projectedSequence = expectedCursor?.nextSequence ?? 0;
-			const pending = replace
-				? state.entries
-				: state.entries.filter(
-						({ envelope }) => envelope.sequence >= projectedSequence
-					);
-			try {
-				projection.projectEntries(
-					sessionId,
-					pending,
-					state,
-					expectedCursor,
-					replace ? "replace" : "append"
-				);
-			} catch {
-				const latestCursor = projection.getCursor(sessionId);
-				if (sessionProjectionCursorsEqual(latestCursor, expectedCursor)) {
-					throw new SessionLogError(
-						"session_projection_blocked",
-						sessionId,
-						"SQLite projection could not be rebuilt from the committed Session log."
-					);
-				}
-				assertCursorDoesNotExceedLog(sessionId, latestCursor, state);
-				expectedCursor = latestCursor;
-			}
-			const latestCursor = projection.getCursor(sessionId);
-			assertCursorDoesNotExceedLog(sessionId, latestCursor, state);
-			if (
-				projectionMatchesState(
-					latestCursor,
-					state,
-					projection.getMaintenanceState().generation
-				)
-			) {
-				return latestCursor;
-			}
-			expectedCursor = latestCursor;
-		}
-	};
-
-	const assertProjectionAtLogHead = (
-		sessionId: SessionId,
-		cursor: SessionProjectionCursor | undefined,
-		state: SessionLogState
-	): void => {
-		if (
-			cursor === undefined ||
-			cursor.generation !== projection.getMaintenanceState().generation ||
-			cursor.nextSequence !== state.nextSequence ||
-			cursor.nextByteOffset !== state.nextOffset ||
-			cursor.lastHash !== state.lastHash ||
-			cursor.logId !== state.logId
-		) {
-			throw new SessionLogError(
-				"session_projection_blocked",
-				sessionId,
-				"SQLite projection did not reach the committed Session log head."
-			);
-		}
-	};
-
-	const waitForPendingLogAppend = async (
-		sessionId: SessionId,
-		attempt: number,
-		error: SessionLogError
-	): Promise<void> => {
-		const markerPath = await sessionWriteIntentPath(logRoot, sessionId);
-		let markerExists = true;
-		try {
-			await fs.access(markerPath);
-		} catch (markerError) {
-			if (isCode(markerError, "ENOENT")) {
-				markerExists = false;
-			} else {
-				throw markerError;
-			}
-		}
-		if (!markerExists && attempt >= 2) {
-			throw error;
-		}
-		if (attempt >= 100) {
-			const intent = await readSessionWriteIntent(logRoot, sessionId, fileIo);
-			if (intent !== undefined) {
-				throw new SessionLogError(
-					"session_log_write_indeterminate",
-					sessionId,
-					`Session write ${intent.operationId} has an incomplete suffix.`,
-					{
-						cause: error,
-						offset: intent.expectedOffset,
-						operationId: intent.operationId,
-						sequence: intent.sequence,
-					}
-				);
-			}
-			throw error;
-		}
-		await Bun.sleep(10);
-	};
-
-	const readLogForProjection = async (
-		logPath: string,
-		sessionId: SessionId
-	): Promise<Readonly<{ bytes: Uint8Array; state: SessionLogState }>> => {
-		for (let attempt = 0; ; attempt += 1) {
-			try {
-				return await readLog(logPath, sessionId);
-			} catch (error) {
-				if (
-					!(error instanceof SessionLogError) ||
-					error.code !== "session_log_truncated"
-				) {
-					throw error;
-				}
-				await waitForPendingLogAppend(sessionId, attempt, error);
-			}
-		}
-	};
-
-	// Tree pages decode JSONL directly, so an append can expose a partial tail.
-	// The write intent brackets bytes until sync; checking both sides of the read
-	// lets a concurrent reader retry without acquiring writer authority.
-	const readLogForHistoryTree = async (
-		logPath: string,
-		sessionId: SessionId
-	): Promise<Readonly<{ bytes: Uint8Array; state: SessionLogState }>> => {
-		const changingLogError = new SessionLogError(
-			"session_log_truncated",
-			sessionId,
-			"Session log changed while its history tree snapshot was read."
-		);
-		for (let attempt = 0; attempt < 100; attempt += 1) {
-			// Recheck the intent instead of trusting one observation: a writer
-			// that finishes between checks leaves a complete snapshot behind, and
-			// the next read must be allowed to return it.
-			if (
-				(await readSessionWriteIntent(logRoot, sessionId, fileIo)) !== undefined
-			) {
-				await Bun.sleep(10);
-				continue;
-			}
-			try {
-				const snapshot = await readLog(logPath, sessionId);
-				if (
-					(await readSessionWriteIntent(logRoot, sessionId, fileIo)) ===
-					undefined
-				) {
-					return snapshot;
-				}
-			} catch (error) {
-				if (
-					!(error instanceof SessionLogError) ||
-					error.code !== "session_log_truncated"
-				) {
-					throw error;
-				}
-			}
-			await Bun.sleep(10);
-		}
-		const intent = await readSessionWriteIntent(logRoot, sessionId, fileIo);
-		if (intent === undefined) {
-			throw changingLogError;
-		}
-		throw new SessionLogError(
-			"session_log_write_indeterminate",
-			sessionId,
-			`Session write ${intent.operationId} has an incomplete suffix.`,
-			{
-				offset: intent.expectedOffset,
-				operationId: intent.operationId,
-				sequence: intent.sequence,
-			}
-		);
-	};
-
-	const readLogSuffixForProjection = async (
-		logPath: string,
-		sessionId: SessionId,
-		cursor: SessionProjectionCursor
-	): Promise<Readonly<{ bytes: Uint8Array; state: SessionLogState }>> => {
-		for (let attempt = 0; ; attempt += 1) {
-			try {
-				const { size } = await fs.stat(logPath);
-				if (
-					!(
-						Number.isSafeInteger(size) &&
-						Number.isSafeInteger(cursor.nextByteOffset)
-					) ||
-					cursor.nextByteOffset < 0 ||
-					size < cursor.nextByteOffset
-				) {
-					throw new SessionLogError(
-						"session_log_corrupt",
-						sessionId,
-						"Session projection cursor extends past its authoritative log.",
-						{ offset: cursor.nextByteOffset, sequence: cursor.nextSequence }
-					);
-				}
-				const bytes = await Bun.file(logPath)
-					.slice(cursor.nextByteOffset, size)
-					.bytes();
-				if (bytes.byteLength !== size - cursor.nextByteOffset) {
-					throw new SessionLogError(
-						"session_log_truncated",
-						sessionId,
-						"Session log changed while its projection suffix was read.",
-						{ offset: cursor.nextByteOffset, sequence: cursor.nextSequence }
-					);
-				}
-				const state = decodeSessionLogSuffix(sessionId, bytes, cursor);
-				await syncAndVerifyLogSuffix(
-					logPath,
-					cursor.nextByteOffset,
-					bytes,
-					sessionId,
-					fileIo
-				);
-				return { bytes, state };
-			} catch (error) {
-				if (
-					!(error instanceof SessionLogError) ||
-					error.code !== "session_log_truncated"
-				) {
-					throw error;
-				}
-				await waitForPendingLogAppend(sessionId, attempt, error);
-			}
-		}
-	};
-
-	const reconcileVisibleWriteIntent = async (
-		sessionId: SessionId,
-		logPath: string,
-		bytes: Uint8Array,
-		state: SessionLogState
-	): Promise<void> => {
-		const intent = await readSessionWriteIntent(logRoot, sessionId, fileIo);
-		if (intent === undefined) {
-			return;
-		}
-		if (
-			intent.type === "session.created" &&
-			intent.workspaceId !== undefined &&
-			intent.workspaceId !== projection.workspaceId
-		) {
-			throw new SessionLogError(
-				"session_operation_conflict",
-				sessionId,
-				"Session creation belongs to another Workspace.",
-				{
-					offset: intent.expectedOffset,
-					operationId: intent.operationId,
-					sequence: intent.sequence,
-				}
-			);
-		}
-		const entry = state.entries.find(
-			({ envelope }) => envelope.operationId === intent.operationId
-		);
-		if (entry === undefined) {
-			return;
-		}
-		const entryDigest =
-			entry.envelope.type === "session.created"
-				? creationDigest(entry.envelope.payload)
-				: sessionLogOperationDigest(
-						entry.envelope.type,
-						entry.envelope.payload
-					);
-		if (
-			entry.envelope.type !== intent.type ||
-			entryDigest !== intent.operationDigest ||
-			entry.envelope.sequence !== intent.sequence ||
-			(intent.type !== "session.created" &&
-				entry.startOffset !== intent.expectedOffset)
-		) {
-			throw new SessionLogError(
-				"session_log_write_indeterminate",
-				sessionId,
-				"Committed Session entry does not match its pending write marker.",
-				{
-					offset: intent.expectedOffset,
-					operationId: intent.operationId,
-					sequence: intent.sequence,
-				}
-			);
-		}
-		try {
-			await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
-			await ensureDurableReceipt(logRoot, sessionId, entry, fileIo);
-			await clearSessionWriteIntent(logRoot, intent, fileIo);
-		} catch (error) {
-			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
-		}
-	};
-
 	const releasePendingCreationAttachmentLease = async (
 		sessionId: SessionId,
 		lease: AttachmentExternalizationLease
@@ -5147,11 +2779,7 @@ export const createSessionJsonlStore = (
 		if (leases === undefined) {
 			return;
 		}
-		const pendingIntent = await readSessionWriteIntent(
-			logRoot,
-			sessionId,
-			fileIo
-		);
+		const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 		const committedOperationIds = new Set(
 			state.entries.map(({ envelope }) => envelope.operationId)
 		);
@@ -5174,27 +2802,19 @@ export const createSessionJsonlStore = (
 		}
 	};
 
-	const logChangedSinceProjectionRead = async (
-		logPath: string,
-		capturedBytes: Uint8Array | undefined
-	): Promise<boolean> => {
-		if (capturedBytes === undefined) {
-			return false;
-		}
-		try {
-			return !equalBytes(capturedBytes, await Bun.file(logPath).bytes());
-		} catch {
-			return false;
-		}
-	};
-
 	const reconcileProjectionSessionSidecars = async (
 		sessionId: SessionId,
 		logPath: string,
 		bytes: Uint8Array,
 		state: SessionLogState
 	): Promise<void> => {
-		await reconcileVisibleWriteIntent(sessionId, logPath, bytes, state);
+		await sessionLog.reconcileVisibleWriteIntent(
+			sessionId,
+			logPath,
+			bytes,
+			state,
+			projection.workspaceId
+		);
 		await releaseReconciledAttachmentLeases(sessionId, state);
 		const pendingCreationLease = pendingCreationAttachmentLeases.get(sessionId);
 		if (
@@ -5209,203 +2829,6 @@ export const createSessionJsonlStore = (
 				sessionId,
 				pendingCreationLease
 			);
-		}
-	};
-
-	const shouldRetryProjectionRead = async (
-		error: unknown,
-		logPath: string,
-		capturedBytes: Uint8Array | undefined
-	): Promise<boolean> =>
-		error instanceof SessionLogError &&
-		(error.code === "session_log_corrupt" ||
-			error.code === "session_projection_blocked") &&
-		projection.getMaintenanceState().status === "ready" &&
-		(await logChangedSinceProjectionRead(logPath, capturedBytes));
-
-	const ensureProjected = async (
-		sessionId: SessionId
-	): Promise<SessionLogState> => {
-		const generation = assertProjectionReady(sessionId);
-		const logPath = resolveSessionLogFilePath(
-			await fs.realpath(logRoot),
-			sessionId
-		);
-		if (!projection.isBoundToWorkspace(sessionId)) {
-			if (projection.isBoundToAnotherWorkspace(sessionId)) {
-				throw new Error("Session not found");
-			}
-			await fs.stat(logPath);
-			throw new Error("Session not found");
-		}
-		await checkDeletedMarker(sessionId);
-		for (let attempt = 0; attempt < 5; attempt += 1) {
-			let capturedBytes: Uint8Array | undefined;
-			try {
-				const snapshot = await readLogForProjection(logPath, sessionId);
-				capturedBytes = snapshot.bytes;
-				const { state } = snapshot;
-				await syncAndVerifyLogPrefix(logPath, capturedBytes, sessionId, fileIo);
-				await reconcileProjectionSessionSidecars(
-					sessionId,
-					logPath,
-					capturedBytes,
-					state
-				);
-				let cursor = projection.getCursor(sessionId);
-				assertCursorDoesNotExceedLog(sessionId, cursor, state);
-				const missingSession = await projectionSessionIsMissing(sessionId);
-				if (
-					missingSession ||
-					cursor === undefined ||
-					cursor.generation !== generation ||
-					cursor.nextSequence < state.nextSequence
-				) {
-					cursor = catchUpProjection(sessionId, state, cursor, missingSession);
-				}
-				assertProjectionAtLogHead(sessionId, cursor, state);
-				return state;
-			} catch (error) {
-				if (!(await shouldRetryProjectionRead(error, logPath, capturedBytes))) {
-					throw error;
-				}
-			}
-		}
-		throw new SessionLogError(
-			"session_projection_blocked",
-			sessionId,
-			"Session log kept changing while its projection was being refreshed."
-		);
-	};
-
-	const assertProjectionSessionBound = async (
-		sessionId: SessionId,
-		logPath: string
-	): Promise<void> => {
-		if (projection.isBoundToWorkspace(sessionId)) {
-			return;
-		}
-		if (!projection.isBoundToAnotherWorkspace(sessionId)) {
-			await fs.stat(logPath);
-		}
-		throw new Error("Session not found");
-	};
-
-	const hasPendingProjectionRecovery = async (
-		sessionId: SessionId
-	): Promise<boolean> =>
-		pendingCreationAttachmentLeases.has(sessionId) ||
-		pendingAttachmentLeases.has(sessionId) ||
-		(await readSessionWriteIntent(logRoot, sessionId, fileIo)) !== undefined;
-
-	const isProjectionCursorReady = async (
-		sessionId: SessionId,
-		generation: number,
-		cursor: SessionProjectionCursor | undefined
-	): Promise<boolean> =>
-		cursor !== undefined &&
-		cursor.generation === generation &&
-		cursor.nextSequence >= 2 &&
-		!(await projectionSessionIsMissing(sessionId));
-
-	const projectionLogSize = async (
-		logPath: string
-	): Promise<number | undefined> => {
-		try {
-			return (await fs.stat(logPath)).size;
-		} catch {
-			return;
-		}
-	};
-
-	const tryReadProjectionSuffix = async (
-		logPath: string,
-		sessionId: SessionId,
-		cursor: SessionProjectionCursor
-	): Promise<
-		Readonly<{ bytes: Uint8Array; state: SessionLogState }> | undefined
-	> => {
-		try {
-			return await readLogSuffixForProjection(logPath, sessionId, cursor);
-		} catch {
-			return;
-		}
-	};
-
-	// A suffix lacks earlier graph identities, so history writes need full-log
-	// validation before their records can become visible through the projection.
-	const suffixNeedsFullProjectionReplay = (state: SessionLogState): boolean =>
-		state.entries.length === 0 ||
-		state.entries.some(
-			({ envelope }) =>
-				isSessionHistoryEntryEventType(envelope.type) ||
-				["session.created", "session.deleted", "session.forked"].includes(
-					envelope.type
-				)
-		);
-
-	const projectProjectionSuffix = (
-		sessionId: SessionId,
-		cursor: SessionProjectionCursor,
-		state: SessionLogState
-	): boolean => {
-		try {
-			projection.projectEntries(
-				sessionId,
-				state.entries,
-				state,
-				cursor,
-				"append"
-			);
-			assertProjectionAtLogHead(
-				sessionId,
-				projection.getCursor(sessionId),
-				state
-			);
-			return true;
-		} catch {
-			return false;
-		}
-	};
-
-	const ensureProjectionCaughtUp = async (
-		sessionId: SessionId
-	): Promise<void> => {
-		const generation = assertProjectionReady(sessionId);
-		const logPath = resolveSessionLogFilePath(
-			await fs.realpath(logRoot),
-			sessionId
-		);
-		await reconcileDeletedSessionIfNeeded(sessionId);
-		await assertProjectionSessionBound(sessionId, logPath);
-		await checkDeletedMarker(sessionId);
-		if (await hasPendingProjectionRecovery(sessionId)) {
-			await ensureProjected(sessionId);
-			return;
-		}
-		const cursor = projection.getCursor(sessionId);
-		if (
-			cursor === undefined ||
-			!(await isProjectionCursorReady(sessionId, generation, cursor))
-		) {
-			await ensureProjected(sessionId);
-			return;
-		}
-		const logSize = await projectionLogSize(logPath);
-		if (logSize === cursor.nextByteOffset) {
-			return;
-		}
-		if (logSize === undefined || logSize < cursor.nextByteOffset) {
-			await ensureProjected(sessionId);
-			return;
-		}
-		const suffix = await tryReadProjectionSuffix(logPath, sessionId, cursor);
-		if (suffix === undefined || suffixNeedsFullProjectionReplay(suffix.state)) {
-			await ensureProjected(sessionId);
-			return;
-		}
-		if (!projectProjectionSuffix(sessionId, cursor, suffix.state)) {
-			await ensureProjected(sessionId);
 		}
 	};
 
@@ -5553,7 +2976,7 @@ export const createSessionJsonlStore = (
 		// A concurrent authoritative read may have reconciled before this result
 		// was registered. Re-read once so a settled operation cannot strand a pin.
 		try {
-			await ensureProjected(sessionId);
+			await (await projected.open(sessionId)).atHeadState();
 		} catch {
 			// The retained lease remains available to a later authoritative read.
 		}
@@ -5564,7 +2987,7 @@ export const createSessionJsonlStore = (
 		entry: SessionLogEntry
 	): Promise<void> => {
 		try {
-			await ensureDurableReceipt(logRoot, sessionId, entry, fileIo);
+			await sessionLog.ensureReceipt(sessionId, entry);
 		} catch (error) {
 			if (
 				error instanceof SessionLogError &&
@@ -5586,7 +3009,7 @@ export const createSessionJsonlStore = (
 			projection.projectEntries(sessionId, [entry], state, cursorBefore);
 		} catch (error) {
 			if (
-				projectionMatchesState(
+				sessionProjectionMatchesState(
 					projection.getCursor(sessionId),
 					state,
 					projection.getMaintenanceState().generation
@@ -5608,7 +3031,7 @@ export const createSessionJsonlStore = (
 		try {
 			await ensureReceipt(sessionId, entry);
 			if (entry.envelope.type !== "session.deleted") {
-				await clearSessionWriteIntent(logRoot, intent, fileIo);
+				await sessionLog.clearWriteIntent(intent);
 			}
 			projectCommittedEntry(sessionId, entry, state, cursorBefore);
 		} catch (error) {
@@ -5616,106 +3039,6 @@ export const createSessionJsonlStore = (
 				throw error;
 			}
 			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
-		}
-	};
-
-	const writeAppendEntry = async (
-		sessionId: SessionId,
-		logPath: string,
-		entryBytes: Uint8Array,
-		intent: SessionWriteIntent
-	): Promise<void> => {
-		let handle: fs.FileHandle | undefined;
-		let writeAttempted = false;
-		try {
-			handle = await fs.open(logPath, "r+");
-			if ((await handle.stat()).size !== intent.expectedOffset) {
-				throw new Error("Session log changed outside its writer authority.");
-			}
-			writeAttempted = true;
-			await writeFully(
-				handle,
-				entryBytes,
-				intent.expectedOffset,
-				logPath,
-				fileIo
-			);
-			await syncFile(logPath, handle, fileIo);
-			await handle.close();
-			handle = undefined;
-		} catch (error) {
-			await handle?.close().catch(() => undefined);
-			if (!writeAttempted) {
-				try {
-					await clearSessionWriteIntent(logRoot, intent, fileIo);
-				} catch (clearError) {
-					throw indeterminateLogWriteError(sessionId, intent, {
-						appendError: error,
-						markerError: clearError,
-					});
-				}
-				throw new SessionLogError(
-					"session_log_write_not_committed",
-					sessionId,
-					"Session log append failed before writing any bytes.",
-					{
-						cause: error,
-						offset: intent.expectedOffset,
-						operationId: intent.operationId,
-						sequence: intent.sequence,
-					}
-				);
-			}
-			throw indeterminateLogWriteError(sessionId, intent, error);
-		}
-	};
-
-	const verifyAppendedEntry = async (
-		sessionId: SessionId,
-		logPath: string,
-		envelope: SessionLogEnvelope,
-		intent: SessionWriteIntent
-	): Promise<Readonly<{ entry: SessionLogEntry; state: SessionLogState }>> => {
-		try {
-			const { bytes, state } = await readLog(logPath, sessionId);
-			await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
-			const entry = state.entries.at(-1);
-			if (
-				entry === undefined ||
-				entry.envelope.entryHash !== envelope.entryHash
-			) {
-				throw new Error("Appended Session log entry could not be verified.");
-			}
-			return { entry, state };
-		} catch (error) {
-			throw indeterminateLogWriteError(sessionId, intent, error);
-		}
-	};
-
-	const repairPendingAppendTail = async (
-		sessionId: SessionId,
-		logPath: string,
-		intent: SessionWriteIntent
-	): Promise<void> => {
-		const bytes = await Bun.file(logPath).bytes();
-		try {
-			await quarantinePartialLogAppend(
-				logRoot,
-				logPath,
-				sessionId,
-				intent,
-				bytes,
-				fileIo
-			);
-		} catch (repairError) {
-			if (
-				repairError instanceof SessionLogError &&
-				(repairError.code === "session_log_corrupt" ||
-					repairError.code === "session_log_write_indeterminate")
-			) {
-				throw repairError;
-			}
-			throw indeterminateLogWriteError(sessionId, intent, repairError);
 		}
 	};
 
@@ -5741,11 +3064,11 @@ export const createSessionJsonlStore = (
 				}
 			);
 		}
-		await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
+		await sessionLog.syncPrefix(logPath, bytes, sessionId);
 		try {
-			await ensureReceipt(sessionId, entry);
+			await sessionLog.ensureReceipt(sessionId, entry);
 			if (intent.type !== "session.deleted") {
-				await clearSessionWriteIntent(logRoot, intent, fileIo);
+				await sessionLog.clearWriteIntent(intent);
 			}
 		} catch (error) {
 			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
@@ -5794,7 +3117,7 @@ export const createSessionJsonlStore = (
 		);
 		let loaded: Readonly<{ bytes: Uint8Array; state: SessionLogState }>;
 		try {
-			loaded = await readLog(logPath, sessionId);
+			loaded = await sessionLog.read(sessionId);
 		} catch (error) {
 			if (
 				!(error instanceof SessionLogError) ||
@@ -5802,7 +3125,7 @@ export const createSessionJsonlStore = (
 			) {
 				throw error;
 			}
-			await repairPendingAppendTail(sessionId, logPath, intent);
+			await sessionLog.quarantinePendingAppend(sessionId, logPath, intent);
 			return;
 		}
 		const { bytes, state } = loaded;
@@ -5817,7 +3140,7 @@ export const createSessionJsonlStore = (
 			);
 		}
 		assertPendingAppendAtLogHead(sessionId, intent, bytes, state);
-		await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
+		await sessionLog.syncPrefix(logPath, bytes, sessionId);
 	};
 
 	const committedOperation = async (
@@ -5833,7 +3156,7 @@ export const createSessionJsonlStore = (
 		try {
 			await ensureReceipt(sessionId, entry);
 			if (intent !== undefined && intent.type !== "session.deleted") {
-				await clearSessionWriteIntent(logRoot, intent, fileIo);
+				await sessionLog.clearWriteIntent(intent);
 			}
 		} catch (error) {
 			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
@@ -5843,12 +3166,11 @@ export const createSessionJsonlStore = (
 
 	const stateAfterProjectionCatchup = async (
 		sessionId: SessionId,
-		logPath: string,
 		write: SessionWrite,
 		pendingIntent: SessionWriteIntent | undefined
 	): Promise<SessionLogState> => {
 		try {
-			return await ensureProjected(sessionId);
+			return await (await projected.open(sessionId)).atHeadState();
 		} catch (error) {
 			if (
 				pendingIntent !== undefined ||
@@ -5862,7 +3184,7 @@ export const createSessionJsonlStore = (
 			}
 			let state: SessionLogState;
 			try {
-				({ state } = await readLog(logPath, sessionId));
+				({ state } = await sessionLog.read(sessionId));
 			} catch {
 				throw error;
 			}
@@ -5884,11 +3206,7 @@ export const createSessionJsonlStore = (
 		entry: SessionLogEntry
 	): Promise<CommittedLogEntry> => {
 		if (entry.envelope.type === "session.deleted") {
-			const logPath = resolveSessionLogFilePath(
-				await fs.realpath(logRoot),
-				sessionId
-			);
-			const { state } = await readLog(logPath, sessionId);
+			const { state } = await sessionLog.read(sessionId);
 			const matchingEntry = state.entries.find(
 				({ envelope }) => envelope.entryHash === entry.envelope.entryHash
 			);
@@ -5911,7 +3229,7 @@ export const createSessionJsonlStore = (
 				createdNew: false,
 				entry,
 				receiptBlocked: false,
-				state: await ensureProjected(sessionId),
+				state: await (await projected.open(sessionId)).atHeadState(),
 			};
 		} catch (error) {
 			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
@@ -5986,15 +3304,15 @@ export const createSessionJsonlStore = (
 			type: write.type,
 		});
 		if (pendingIntent?.timestamp === undefined) {
-			await writeSessionWriteIntent(logRoot, intent, fileIo);
+			await sessionLog.writeIntent(intent);
 		}
-		await writeAppendEntry(
+		await sessionLog.appendBytes(
 			sessionId,
 			logPath,
 			encodeSessionLogLine(envelope),
 			intent
 		);
-		const verified = await verifyAppendedEntry(
+		const verified = await sessionLog.verifyAppended(
 			sessionId,
 			logPath,
 			envelope,
@@ -6011,7 +3329,7 @@ export const createSessionJsonlStore = (
 		} else {
 			await ensureReceipt(sessionId, verified.entry);
 			if (intent.type !== "session.deleted") {
-				await clearSessionWriteIntent(logRoot, intent, fileIo);
+				await sessionLog.clearWriteIntent(intent);
 			}
 		}
 		return {
@@ -6031,17 +3349,12 @@ export const createSessionJsonlStore = (
 			payload: {},
 			type: "session.deleted",
 		};
-		const key = await lockKey(logRoot, sessionId);
-		return serializeWrite(key, async () => {
+		return sessionLog.runSerial(sessionId, async () => {
 			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(logRoot),
 				sessionId
 			);
-			const pendingIntent = await readSessionWriteIntent(
-				logRoot,
-				sessionId,
-				fileIo
-			);
+			const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 			if (pendingIntent !== undefined) {
 				const recovered = await reconcilePendingAppend(
 					sessionId,
@@ -6050,14 +3363,14 @@ export const createSessionJsonlStore = (
 					pendingIntent
 				);
 				if (recovered !== undefined) {
-					const { state } = await readLog(logPath, sessionId);
+					const { state } = await sessionLog.read(sessionId);
 					return {
 						logId: state.logId,
 						receipt: deletionReceiptFromEntry(recovered),
 					};
 				}
 			}
-			const { bytes, state } = await readLog(logPath, sessionId);
+			const { bytes, state } = await sessionLog.read(sessionId);
 			const previous = findOperation(state, write, sessionId);
 			if (previous !== undefined) {
 				await ensureReceipt(sessionId, previous);
@@ -6172,9 +3485,8 @@ export const createSessionJsonlStore = (
 	};
 
 	const readLogForHistoryWrite = async (
-		sessionId: SessionId,
-		logPath: string
-	): Promise<SessionLogState> => (await readLog(logPath, sessionId)).state;
+		sessionId: SessionId
+	): Promise<SessionLogState> => (await sessionLog.read(sessionId)).state;
 
 	const prepareSessionHistoryNavigationWrite = (
 		sessionId: SessionId,
@@ -6253,7 +3565,6 @@ export const createSessionJsonlStore = (
 	};
 	const recordWriteWithHistory = async (
 		sessionId: SessionId,
-		logPath: string,
 		write: SessionWrite,
 		pendingIntent: SessionWriteIntent | undefined,
 		expectedGeneration?: ExpectedPluginHistoryGeneration
@@ -6288,7 +3599,7 @@ export const createSessionJsonlStore = (
 			);
 			return withSessionHistoryReferences(sessionId, state, write);
 		}
-		const state = await readLogForHistoryWrite(sessionId, logPath);
+		const state = await readLogForHistoryWrite(sessionId);
 		assertExpectedPluginHistoryGeneration(
 			sessionId,
 			state,
@@ -6305,21 +3616,15 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		write: SessionWrite,
 		expectedGeneration?: ExpectedPluginHistoryGeneration
-	): Promise<CommittedLogEntry> => {
-		const key = await lockKey(logRoot, sessionId);
-		return serializeWrite(key, async () => {
+	): Promise<CommittedLogEntry> =>
+		sessionLog.runSerial(sessionId, async () => {
 			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(logRoot),
 				sessionId
 			);
-			const pendingIntent = await readSessionWriteIntent(
-				logRoot,
-				sessionId,
-				fileIo
-			);
+			const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 			const preparedWrite = await recordWriteWithHistory(
 				sessionId,
-				logPath,
 				write,
 				pendingIntent,
 				expectedGeneration
@@ -6338,12 +3643,11 @@ export const createSessionJsonlStore = (
 
 			const stateBefore = await stateAfterProjectionCatchup(
 				sessionId,
-				logPath,
 				preparedWrite,
 				pendingIntent
 			);
 			const cursorBefore = projection.getCursor(sessionId);
-			const { bytes, state } = await readLog(logPath, sessionId);
+			const { bytes, state } = await sessionLog.read(sessionId);
 			if (state.lastHash !== stateBefore.lastHash) {
 				throw new SessionLogError(
 					"session_log_corrupt",
@@ -6376,7 +3680,6 @@ export const createSessionJsonlStore = (
 				pendingIntent
 			);
 		});
-	};
 
 	const withTemporaryWriter = async <Result>(
 		sessionId: SessionId,
@@ -6386,7 +3689,7 @@ export const createSessionJsonlStore = (
 		onOperationEnqueued?: () => void
 	): Promise<Result> => {
 		const key = await lockKey(logRoot, sessionId);
-		const queuedOperation = writerOperationQueue.run(key, async () => {
+		const queuedOperation = sessionLog.runWriter(sessionId, async () => {
 			const writer =
 				reuseHeldWriter && heldWriterKeys.has(key)
 					? undefined
@@ -6420,7 +3723,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		options?: SessionWriterLockOptions
 	): Promise<SessionWriterLock> => {
-		assertProjectionReady(sessionId);
+		projected.ready(sessionId);
 		const writer = await acquireSessionWriterLock(logRoot, sessionId, options);
 		const key = await lockKey(logRoot, sessionId);
 		heldWriterKeys.add(key);
@@ -6443,13 +3746,9 @@ export const createSessionJsonlStore = (
 		signal?: AbortSignal
 	) => {
 		throwIfAborted(signal, "Session bundle export was cancelled.");
-		assertProjectionReady(sessionId);
+		projected.ready(sessionId);
 		await assertSessionWritable(sessionId);
-		const pendingIntent = await readSessionWriteIntent(
-			logRoot,
-			sessionId,
-			fileIo
-		);
+		const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 		if (pendingIntent !== undefined) {
 			throw new SessionLogError(
 				"session_log_write_indeterminate",
@@ -6467,7 +3766,7 @@ export const createSessionJsonlStore = (
 		let bytes: Uint8Array;
 		let state: SessionLogState;
 		try {
-			({ bytes, state } = await readLog(logPath, sessionId));
+			({ bytes, state } = await sessionLog.read(sessionId));
 		} catch (error) {
 			if (isCode(error, "ENOENT")) {
 				throw new SessionLogError(
@@ -6480,10 +3779,10 @@ export const createSessionJsonlStore = (
 			throw error;
 		}
 		const checked = validateSessionBundleLog(sessionId, bytes, "source");
-		const generation = assertProjectionReady(sessionId);
+		const generation = projected.ready(sessionId);
 		const cursor = projection.getCursor(sessionId);
-		assertCursorDoesNotExceedLog(sessionId, cursor, state);
-		if (!projectionMatchesState(cursor, state, generation)) {
+		projected.assertCursorWithinLog(sessionId, cursor, state);
+		if (!sessionProjectionMatchesState(cursor, state, generation)) {
 			throw new SessionLogError(
 				"session_projection_blocked",
 				sessionId,
@@ -6763,7 +4062,7 @@ export const createSessionJsonlStore = (
 	const assertSessionImportTargetAvailable = async (
 		sessionId: SessionId
 	): Promise<void> => {
-		if ((await readDeletedMarker(logRoot, sessionId)) !== undefined) {
+		if ((await sessionLog.readDeletedMarker(sessionId)) !== undefined) {
 			throw new SessionBundleImportConflictError(
 				"A deleted Session ID cannot be reimported."
 			);
@@ -6798,7 +4097,7 @@ export const createSessionJsonlStore = (
 		}
 		assertSessionImportTargetMatchesBundle(target, prepared, identity);
 		projection.bindSessionToWorkspace(sessionId);
-		await ensureProjected(sessionId);
+		await (await projected.open(sessionId)).atHead();
 		return { activationPending: true, sessionId, status: "unchanged" };
 	};
 
@@ -6820,7 +4119,7 @@ export const createSessionJsonlStore = (
 		assertSessionImportTargetMatchesBundle(target, prepared, identity);
 		await assertImportedBundleAttachmentsAvailable(prepared, options.signal);
 		if (projection.isBoundToWorkspace(sessionId)) {
-			await ensureProjected(sessionId);
+			await (await projected.open(sessionId)).atHead();
 			return {
 				activationPending: marker !== undefined,
 				sessionId,
@@ -6921,16 +4220,9 @@ export const createSessionJsonlStore = (
 		);
 		await options.fileSystem?.beforePublish?.(staged.filePath, targetPath);
 		try {
-			await publishSessionFileNoReplaceDurably(
-				staged.filePath,
-				targetPath,
-				async (directory) => await syncDirectory(directory, fileIo),
-				fileIo.syncDirectory !== undefined,
-				() => {
-					publication.logPublished = true;
-				}
-			);
-			await syncDirectoryAfterDurablePublication(staged.root, fileIo);
+			await sessionLog.publishStaged(staged, targetPath, () => {
+				publication.logPublished = true;
+			});
 		} catch (error) {
 			if (isCode(error, "EEXIST")) {
 				throw new SessionBundleImportConflictError(
@@ -6941,7 +4233,7 @@ export const createSessionJsonlStore = (
 		}
 		try {
 			await options.fileSystem?.afterPublish?.(targetPath);
-			await ensureProjected(sessionId);
+			await (await projected.open(sessionId)).atHead();
 		} catch (error) {
 			throw new SessionBundleImportIndeterminateError(
 				"Session bundle log was published, but import recovery or projection did not complete.",
@@ -6980,11 +4272,11 @@ export const createSessionJsonlStore = (
 					prepared,
 					options.signal
 				);
-				await ensureProjected(sessionId);
+				await (await projected.open(sessionId)).atHead();
 				return { activationPending: false, sessionId, status: "unchanged" };
 			}
 			projection.bindSessionToWorkspace(sessionId);
-			await ensureProjected(sessionId);
+			await (await projected.open(sessionId)).atHead();
 			return { activationPending: true, sessionId, status: "unchanged" };
 		}
 		projection.bindSessionToWorkspace(sessionId);
@@ -7195,12 +4487,8 @@ export const createSessionJsonlStore = (
 						"Imported Session is not bound to this local workspace."
 					);
 				}
-				await ensureProjected(sessionId);
-				const logPath = resolveSessionLogFilePath(
-					await fs.realpath(logRoot),
-					sessionId
-				);
-				const { state } = await readLog(logPath, sessionId);
+				await (await projected.open(sessionId)).atHead();
+				const { state } = await sessionLog.read(sessionId);
 				const importedCut = state.entries.find(
 					({ envelope }) => envelope.sequence === marker.cutSequence
 				);
@@ -7233,7 +4521,7 @@ export const createSessionJsonlStore = (
 						"Imported Session activation operation conflicts with its historical log."
 					);
 				}
-				await ensureProjected(sessionId);
+				await (await projected.open(sessionId)).atHead();
 				await removeSessionImportActivationMarker(logRoot, sessionId, fileIo);
 			},
 			undefined,
@@ -7248,7 +4536,7 @@ export const createSessionJsonlStore = (
 		try {
 			const generation = projection.getMaintenanceState().generation;
 			const cursor = projection.getCursor(sessionId);
-			if (projectionMatchesState(cursor, created.state, generation)) {
+			if (sessionProjectionMatchesState(cursor, created.state, generation)) {
 				return toReceipt(created.entry, "ready");
 			}
 			const replace = cursor === undefined || cursor.generation !== generation;
@@ -7264,7 +4552,7 @@ export const createSessionJsonlStore = (
 				cursor,
 				replace ? "replace" : "append"
 			);
-			assertProjectionAtLogHead(
+			projected.assertAtHead(
 				sessionId,
 				projection.getCursor(sessionId),
 				created.state
@@ -7272,7 +4560,7 @@ export const createSessionJsonlStore = (
 			return toReceipt(created.entry, "ready");
 		} catch {
 			if (
-				projectionMatchesState(
+				sessionProjectionMatchesState(
 					projection.getCursor(sessionId),
 					created.state,
 					projection.getMaintenanceState().generation
@@ -7302,9 +4590,9 @@ export const createSessionJsonlStore = (
 		try {
 			const createdAt = input.createdAt ?? new Date();
 			return await withTemporaryWriter(sessionId, async () => {
-				assertProjectionReady(sessionId);
+				projected.ready(sessionId);
 				await assertSessionWritable(sessionId);
-				const created = await createSessionLog(
+				const created = await createSessionLogFile(
 					logRoot,
 					sessionId,
 					initialCreation({ ...input, id: sessionId }, createdAt),
@@ -7337,7 +4625,7 @@ export const createSessionJsonlStore = (
 		let message = input.message;
 		try {
 			return await withTemporaryWriter(sessionId, async () => {
-				assertProjectionReady(sessionId);
+				projected.ready(sessionId);
 				await assertSessionWritable(sessionId);
 				let lease = pendingCreationAttachmentLeases.get(sessionId);
 				if (
@@ -7373,7 +4661,7 @@ export const createSessionJsonlStore = (
 						thinkingLevel: input.thinkingLevel,
 						title: titleFor(externalizedInput),
 					};
-					const created = await createSessionLog(
+					const created = await createSessionLogFile(
 						logRoot,
 						sessionId,
 						creation,
@@ -7503,7 +4791,7 @@ export const createSessionJsonlStore = (
 		validatePluginSessionStatePluginId(pluginId);
 		validatePluginSessionStateKey(key);
 		const [state, historyPath] = await Promise.all([
-			ensureProjected(sessionId),
+			(await projected.open(sessionId)).atHeadState(),
 			readSessionHistoryPath(sessionId),
 		]);
 		const selectedHistoryEntryIds = new Set(
@@ -7548,7 +4836,7 @@ export const createSessionJsonlStore = (
 			};
 			return await withTemporaryWriter(sessionId, async () => {
 				await assertSessionWritable(sessionId);
-				const state = await ensureProjected(sessionId);
+				const state = await (await projected.open(sessionId)).atHeadState();
 				const historyTree = buildSessionHistoryTreeEntries(
 					state,
 					sessionId,
@@ -7655,7 +4943,7 @@ export const createSessionJsonlStore = (
 			const payload = copyPluginSessionHistoryPayload(input.payload);
 			return await withTemporaryWriter(sessionId, async () => {
 				await assertSessionWritable(sessionId);
-				const state = await ensureProjected(sessionId);
+				const state = await (await projected.open(sessionId)).atHeadState();
 				const historyTree = buildSessionHistoryTreeEntries(
 					state,
 					sessionId,
@@ -7721,7 +5009,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		entryId: SessionHistoryEntryId
 	): Promise<boolean> => {
-		const state = await ensureProjected(sessionId);
+		const state = await (await projected.open(sessionId)).atHeadState();
 		return historyEntryExists(state, entryId);
 	};
 	const navigateSessionHistory = async (
@@ -7730,7 +5018,7 @@ export const createSessionJsonlStore = (
 	): Promise<SessionWriteOutcome> =>
 		withWriteOutcome(sessionId, request.operationId, async () => {
 			await assertSessionWritable(sessionId);
-			const state = await ensureProjected(sessionId);
+			const state = await (await projected.open(sessionId)).atHeadState();
 			return await commitWrite(sessionId, {
 				operationId: request.operationId,
 				payload: {
@@ -7980,7 +5268,8 @@ export const createSessionJsonlStore = (
 				? undefined
 				: await stateForPendingAppend(input.sessionId, matchingIntent);
 		const state =
-			pendingAppend?.state ?? (await ensureProjected(input.sessionId));
+			pendingAppend?.state ??
+			(await (await projected.open(input.sessionId)).atHeadState());
 		const retryCreatedAt =
 			pendingAppend?.createdAt ?? matchingIntent?.timestamp;
 		assertCompactionRetryTimestampRecoverable(
@@ -8068,7 +5357,7 @@ export const createSessionJsonlStore = (
 		const id: CompactionId = input.id ?? toCompactionId(randomUUIDv7());
 		const operationId = `compaction-${id}`;
 		const result = await withTemporaryWriter(input.sessionId, async () => {
-			assertProjectionReady(input.sessionId);
+			projected.ready(input.sessionId);
 			await assertSessionWritable(input.sessionId);
 			const pendingIntent = await readSessionWriteIntent(
 				logRoot,
@@ -8123,17 +5412,9 @@ export const createSessionJsonlStore = (
 		| Readonly<{ logId: string; receipt: SessionDeletionReceipt }>
 		| Readonly<{ writeOutcome: SessionWriteOutcome }>
 	> => {
-		const logPath = resolveSessionLogFilePath(
-			await fs.realpath(logRoot),
-			sessionId
-		);
-		const pendingIntent = await readSessionWriteIntent(
-			logRoot,
-			sessionId,
-			fileIo
-		);
+		const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 		if (pendingIntent?.operationId === operationId) {
-			const { state } = await readLog(logPath, sessionId);
+			const { state } = await sessionLog.read(sessionId);
 			const writeOutcome = await commitWrite(sessionId, {
 				operationId,
 				payload: {},
@@ -8143,7 +5424,7 @@ export const createSessionJsonlStore = (
 				? { logId: state.logId, receipt: writeOutcome }
 				: { writeOutcome };
 		}
-		const { state } = await readLog(logPath, sessionId);
+		const { state } = await sessionLog.read(sessionId);
 		const deletion = findOperation(
 			state,
 			{ operationId, payload: {}, type: "session.deleted" },
@@ -8174,11 +5455,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		operationId: string
 	): Promise<void> => {
-		const pendingIntent = await readSessionWriteIntent(
-			logRoot,
-			sessionId,
-			fileIo
-		);
+		const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 		if (pendingIntent === undefined) {
 			return;
 		}
@@ -8192,7 +5469,7 @@ export const createSessionJsonlStore = (
 				"Session deletion conflicts with a different pending Session write."
 			);
 		}
-		await clearSessionWriteIntent(logRoot, pendingIntent, fileIo);
+		await sessionLog.clearWriteIntent(pendingIntent);
 	};
 
 	const removeDeletedSessionLog = async (
@@ -8202,7 +5479,6 @@ export const createSessionJsonlStore = (
 		let markerDurable = false;
 		try {
 			await ensureDirectoryDurable(logRoot);
-			const root = await fs.realpath(logRoot);
 			await writeDeletedMarker(
 				logRoot,
 				sessionId,
@@ -8215,16 +5491,7 @@ export const createSessionJsonlStore = (
 				sessionId,
 				marker.receipt.operationId
 			);
-			const sessionLogPath = resolveSessionLogFilePath(root, sessionId);
-			const removeFile = fileIo.remove;
-			await removeSessionFileDurably(
-				sessionLogPath,
-				root,
-				async (directory) => await syncDirectory(directory, fileIo),
-				removeFile === undefined
-					? undefined
-					: async (filePath) => await removeFile(filePath, { force: true })
-			);
+			await sessionLog.removeLog(sessionId);
 			return { logRemoved: true, markerDurable };
 		} catch {
 			return { logRemoved: false, markerDurable };
@@ -8272,7 +5539,7 @@ export const createSessionJsonlStore = (
 					let logRemoved = false;
 					let writeOutcome: SessionWriteOutcome | undefined;
 					await withSessionCatalogLifecycleGate(logRoot, async () => {
-						const marker = await readDeletedMarker(logRoot, sessionId);
+						const marker = await sessionLog.readDeletedMarker(sessionId);
 						if (marker !== undefined) {
 							receipt = {
 								entryHash: marker.entryHash,
@@ -8443,7 +5710,7 @@ export const createSessionJsonlStore = (
 			.sort();
 		const pending: SessionId[] = [];
 		for (const sessionId of candidates) {
-			const intent = await readSessionWriteIntent(logRoot, sessionId, fileIo);
+			const intent = await sessionLog.readWriteIntent(sessionId);
 			if (intent?.type !== "session.deleted") {
 				continue;
 			}
@@ -8474,7 +5741,7 @@ export const createSessionJsonlStore = (
 		const published = new Set(await findSessionLogIds());
 		const bound = new Set(projection.listAllBoundSessionIds());
 		for (const sessionId of sessionIds) {
-			const marker = await readDeletedMarker(logRoot, sessionId);
+			const marker = await sessionLog.readDeletedMarker(sessionId);
 			if (!published.has(sessionId)) {
 				if (marker === undefined) {
 					throw new Error(
@@ -8514,44 +5781,31 @@ export const createSessionJsonlStore = (
 		}
 	};
 
-	const resetSessionLog = async (
-		root: string,
-		sessionId: SessionId
-	): Promise<void> => {
-		const sessionLogPath = resolveSessionLogFilePath(root, sessionId);
-		const existingMarker = await readDeletedMarker(logRoot, sessionId);
+	const resetSessionLog = async (sessionId: SessionId): Promise<void> => {
+		const existingMarker = await sessionLog.readDeletedMarker(sessionId);
 		let logId: string;
 		let receipt: SessionDeletionReceipt;
 		if (existingMarker === undefined) {
 			const deletion = await appendResetDeletion(sessionId);
 			logId = deletion.logId;
 			receipt = deletion.receipt;
-			await writeDeletedMarker(logRoot, sessionId, logId, receipt, fileIo);
+			await sessionLog.writeDeletedMarker(sessionId, logId, receipt);
 		} else {
 			logId = existingMarker.logId;
 			receipt = existingMarker;
-			await writeDeletedMarker(logRoot, sessionId, logId, receipt, fileIo);
+			await sessionLog.writeDeletedMarker(sessionId, logId, receipt);
 		}
 		await clearPendingDeletionWriteIntent(sessionId, receipt.operationId);
-		const removeFile = fileIo.remove;
-		await removeSessionFileDurably(
-			sessionLogPath,
-			root,
-			async (directory) => await syncDirectory(directory, fileIo),
-			removeFile === undefined
-				? undefined
-				: async (filePath) => await removeFile(filePath, { force: true })
-		);
+		await sessionLog.removeLog(sessionId);
 	};
 
 	const resetSessionLogForLifecycle = async (
-		root: string,
 		sessionId: SessionId
 	): Promise<void> => {
 		try {
-			await resetSessionLog(root, sessionId);
+			await resetSessionLog(sessionId);
 		} catch (error) {
-			const marker = await readDeletedMarker(logRoot, sessionId);
+			const marker = await sessionLog.readDeletedMarker(sessionId);
 			if (marker === undefined) {
 				throw error;
 			}
@@ -8571,7 +5825,6 @@ export const createSessionJsonlStore = (
 	};
 
 	const resetSessionDataUnderCatalogGate = async (
-		root: string,
 		lockedSessionIds: ReadonlySet<SessionId>
 	): Promise<boolean> => {
 		const latestSessionIds = await findResetSessionIds();
@@ -8583,7 +5836,7 @@ export const createSessionJsonlStore = (
 		await assertResetAllowed();
 		await preflightResetTargets(latestSessionIds);
 		for (const sessionId of latestSessionIds) {
-			await resetSessionLogForLifecycle(root, sessionId);
+			await resetSessionLogForLifecycle(sessionId);
 		}
 		const operationIds = latestSessionIds.map(sessionDeletionOperationId);
 		try {
@@ -8606,9 +5859,8 @@ export const createSessionJsonlStore = (
 				for (const sessionId of sessionIds) {
 					writers.push(await acquireSessionWriterLock(logRoot, sessionId));
 				}
-				const root = await fs.realpath(logRoot);
 				resetCompleted = await withSessionCatalogLifecycleGate(logRoot, () =>
-					resetSessionDataUnderCatalogGate(root, lockedSessionIds)
+					resetSessionDataUnderCatalogGate(lockedSessionIds)
 				);
 				if (resetCompleted) {
 					try {
@@ -8642,13 +5894,14 @@ export const createSessionJsonlStore = (
 			if (typeof sessionId === "string") {
 				try {
 					await reconcileDeletedSessionIfNeeded(sessionId as SessionId);
-					await ensureProjected(sessionId as SessionId);
+					const handle = await projected.open(sessionId as SessionId);
+					await handle.atHeadState();
 				} catch (error) {
 					if (!isCode(error, "ENOENT")) {
 						throw error;
 					}
-					const projected = await projectionStore.listSessions();
-					if (projected.some((session) => session.id === sessionId)) {
+					const projectedSessions = await projectionStore.listSessions();
+					if (projectedSessions.some((session) => session.id === sessionId)) {
 						throw new SessionLogError(
 							"session_log_corrupt",
 							sessionId as SessionId,
@@ -8710,7 +5963,7 @@ export const createSessionJsonlStore = (
 			}
 			sessionIds.add(sessionId);
 			try {
-				await ensureProjected(sessionId);
+				await (await projected.open(sessionId)).atHeadState();
 			} catch (error) {
 				if (
 					(error instanceof SessionLogError &&
@@ -8723,57 +5976,6 @@ export const createSessionJsonlStore = (
 			}
 		}
 		return { issues, sessionIds };
-	};
-
-	const ensureCatalogSessionProjected = async (
-		sessionId: SessionId
-	): Promise<void> => {
-		try {
-			await ensureProjectionCaughtUp(sessionId);
-		} catch (error) {
-			if (isCode(error, "session_deleted")) {
-				return;
-			}
-			if (isCode(error, "ENOENT")) {
-				throw new SessionLogError(
-					"session_log_corrupt",
-					sessionId,
-					"A bound Session is missing its authoritative JSONL log.",
-					{ cause: error }
-				);
-			}
-			throw error;
-		}
-	};
-
-	const ensureBoundSessionProjectedIfStale = async (
-		sessionId: SessionId
-	): Promise<void> => {
-		await reconcileDeletedSessionIfNeeded(sessionId);
-		const generation = assertProjectionReady(sessionId);
-		assertSessionWorkspaceBinding(sessionId);
-		await checkDeletedMarker(sessionId);
-		await ensureDirectoryDurable(logRoot);
-		const logPath = resolveSessionLogFilePath(
-			await fs.realpath(logRoot),
-			sessionId
-		);
-		const cursor = projection.getCursor(sessionId);
-		try {
-			const { size } = await fs.stat(logPath);
-			if (
-				cursor !== undefined &&
-				cursor.generation === generation &&
-				cursor.nextByteOffset === size
-			) {
-				return;
-			}
-		} catch (error) {
-			if (!isCode(error, "ENOENT")) {
-				throw error;
-			}
-		}
-		await ensureCatalogSessionProjected(sessionId);
 	};
 
 	const listPendingSessionWriteIntentIds = async (): Promise<SessionId[]> => {
@@ -8841,7 +6043,7 @@ export const createSessionJsonlStore = (
 			) {
 				continue;
 			}
-			const intent = await readSessionWriteIntent(logRoot, sessionId, fileIo);
+			const intent = await sessionLog.readWriteIntent(sessionId);
 			if (
 				intent?.type !== "session.created" ||
 				intent.workspaceId !== projection.workspaceId
@@ -8867,34 +6069,6 @@ export const createSessionJsonlStore = (
 					sequence: intent.sequence,
 				}
 			);
-		}
-	};
-
-	const ensureBoundCatalogLogsProjected = async (): Promise<void> => {
-		await ensureDirectoryDurable(logRoot);
-		const root = await fs.realpath(logRoot);
-		await assertNoUnresolvedOwnedSessionCreations(root);
-		const generation = projection.getMaintenanceState().generation;
-		for (const sessionId of projection.listBoundSessionIds()) {
-			const logPath = resolveSessionLogFilePath(root, sessionId);
-			const cursor = projection.getCursor(sessionId);
-			let size: number;
-			try {
-				({ size } = await fs.stat(logPath));
-			} catch (error) {
-				if (!isCode(error, "ENOENT")) {
-					throw error;
-				}
-				await ensureCatalogSessionProjected(sessionId);
-				continue;
-			}
-			if (
-				cursor === undefined ||
-				cursor.generation !== generation ||
-				cursor.nextByteOffset !== size
-			) {
-				await ensureCatalogSessionProjected(sessionId);
-			}
 		}
 	};
 
@@ -8974,14 +6148,6 @@ export const createSessionJsonlStore = (
 		generation: number;
 		selections: ProviderModelSelection[];
 	}>;
-	const ensureRecentModelSelectionsProjected = async (
-		sessionIds: readonly SessionId[]
-	): Promise<void> => {
-		for (const sessionId of sessionIds) {
-			await reconcileDeletedSessionIfNeeded(sessionId);
-			await ensureProjected(sessionId);
-		}
-	};
 	const readRecentModelSelections = (
 		sessionIds: readonly SessionId[],
 		limit: number
@@ -9022,7 +6188,7 @@ export const createSessionJsonlStore = (
 		limit: number
 	): Promise<RecentModelSelectionsAttempt> => {
 		const sessionIds = projection.listBoundSessionIds();
-		await ensureRecentModelSelectionsProjected(sessionIds);
+		await projected.catchUpRecentModelSelections(sessionIds);
 		if (!Bun.deepEquals(sessionIds, projection.listBoundSessionIds(), true)) {
 			return { kind: "retry" };
 		}
@@ -9038,7 +6204,7 @@ export const createSessionJsonlStore = (
 				...(error instanceof SessionLogError ? { error } : {}),
 			};
 		}
-		await ensureRecentModelSelectionsProjected(sessionIds);
+		await projected.catchUpRecentModelSelections(sessionIds);
 		return recentModelSelectionsReadIsCurrent(sessionIds, read)
 			? { kind: "ready", selections: read.selections }
 			: { kind: "retry" };
@@ -9095,7 +6261,7 @@ export const createSessionJsonlStore = (
 	const listSessionsPage = async (
 		options: SessionPageOptions = {}
 	): Promise<SessionCatalogPage> => {
-		await ensureDeletedSessionsReconciled();
+		await projected.reconcileDeleted();
 		const limit = parseSessionPageLimit(options.limit);
 		let cursor: SessionCatalogPageCursor | undefined;
 		if (options.cursor !== undefined) {
@@ -9109,7 +6275,9 @@ export const createSessionJsonlStore = (
 			cursor = decoded;
 		}
 		if (cursor === undefined) {
-			await ensureBoundCatalogLogsProjected();
+			await projected.catchUpBoundCatalog();
+		} else {
+			projected.assertCatalogReadPoint(cursor);
 		}
 		const page = await readCatalogPageInsideLifecycleGate(cursor, limit);
 		const nextCursor =
@@ -9131,7 +6299,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		options: SessionPageOptions = {}
 	): Promise<SessionHistoryPage> => {
-		await ensureDeletedSessionsReconciled();
+		await projected.reconcileDeleted();
 		const limit = parseSessionPageLimit(options.limit);
 		let cursor: SessionHistoryPageCursor | undefined;
 		if (options.cursor !== undefined) {
@@ -9144,9 +6312,9 @@ export const createSessionJsonlStore = (
 			}
 			cursor = decoded;
 		}
-		if (cursor === undefined) {
-			await ensureBoundSessionProjectedIfStale(sessionId);
-		}
+		const handle = await projected.open(sessionId);
+		const view =
+			cursor === undefined ? await handle.atHead() : await handle.at(cursor);
 		return withSessionCatalogLifecycleGate(logRoot, async () => {
 			assertSessionHistoryWorkspaceBinding(sessionId, cursor);
 			try {
@@ -9160,10 +6328,12 @@ export const createSessionJsonlStore = (
 				}
 				throw error;
 			}
-			const page = projectionStore.readSessionHistoryPageProjection(sessionId, {
-				...(cursor === undefined ? {} : { cursor }),
-				limit,
-			});
+			const page = await view.read(() =>
+				projectionStore.readSessionHistoryPageProjection(sessionId, {
+					...(cursor === undefined ? {} : { cursor }),
+					limit,
+				})
+			);
 			const nextCursor =
 				page.hasMore && page.beforeSequence !== undefined
 					? encodeSessionPageToken({
@@ -9273,7 +6443,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		options: SessionPageOptions = {}
 	): Promise<SessionHistoryTreePage> => {
-		await ensureDeletedSessionsReconciled();
+		await projected.reconcileDeleted();
 		const limit = parseSessionPageLimit(options.limit);
 		let cursor: SessionHistoryTreePageCursor | undefined;
 		if (options.cursor !== undefined) {
@@ -9286,9 +6456,9 @@ export const createSessionJsonlStore = (
 			}
 			cursor = decoded;
 		}
-		if (cursor === undefined) {
-			await ensureBoundSessionProjectedIfStale(sessionId);
-		}
+		const handle = await projected.open(sessionId);
+		const view =
+			cursor === undefined ? await handle.atHead() : await handle.at(cursor);
 		return withSessionCatalogLifecycleGate(logRoot, async () => {
 			assertSessionHistoryWorkspaceBinding(sessionId, cursor);
 			try {
@@ -9302,46 +6472,48 @@ export const createSessionJsonlStore = (
 				}
 				throw error;
 			}
-			const logPath = resolveSessionLogFilePath(
-				await fs.realpath(logRoot),
-				sessionId
-			);
-			if (cursor !== undefined) {
-				const cached = await getCachedSessionHistoryTreeSnapshot(
-					logPath,
+			return await view.read(async () => {
+				const logPath = resolveSessionLogFilePath(
+					await fs.realpath(logRoot),
+					sessionId
+				);
+				if (cursor !== undefined) {
+					const cached = await getCachedSessionHistoryTreeSnapshot(
+						logPath,
+						sessionId,
+						cursor
+					);
+					if (cached !== undefined) {
+						return pageSessionHistoryTree(
+							cached,
+							cached.readPoint,
+							cursor.afterSequence,
+							limit
+						);
+					}
+				}
+				const { state } = await sessionLog.readForHistoryTree(sessionId);
+				const snapshot = resolveSessionHistoryTreeSnapshot(
+					state,
 					sessionId,
 					cursor
 				);
-				if (cached !== undefined) {
-					return pageSessionHistoryTree(
-						cached,
-						cached.readPoint,
-						cursor.afterSequence,
-						limit
-					);
+				const tree = buildSessionHistoryTreeEntries(
+					state,
+					sessionId,
+					snapshot.snapshotSequence
+				);
+				const page = pageSessionHistoryTree(
+					tree,
+					snapshot.readPoint,
+					snapshot.afterSequence,
+					limit
+				);
+				if (page.nextCursor !== undefined) {
+					await cacheSessionHistoryTreeSnapshot(logPath, snapshot, tree);
 				}
-			}
-			const { state } = await readLogForHistoryTree(logPath, sessionId);
-			const snapshot = resolveSessionHistoryTreeSnapshot(
-				state,
-				sessionId,
-				cursor
-			);
-			const tree = buildSessionHistoryTreeEntries(
-				state,
-				sessionId,
-				snapshot.snapshotSequence
-			);
-			const page = pageSessionHistoryTree(
-				tree,
-				snapshot.readPoint,
-				snapshot.afterSequence,
-				limit
-			);
-			if (page.nextCursor !== undefined) {
-				await cacheSessionHistoryTreeSnapshot(logPath, snapshot, tree);
-			}
-			return page;
+				return page;
+			});
 		});
 	};
 
@@ -9365,7 +6537,7 @@ export const createSessionJsonlStore = (
 				readPoint: page.readPoint,
 			};
 		}
-		const state = await ensureProjected(sessionId);
+		const state = await (await projected.open(sessionId)).atHeadState();
 		const envelopesByEntryId = new Map<string, SessionLogEnvelope>();
 		for (const { envelope } of state.entries) {
 			if (envelope.type === "plugin.entry-appended") {
@@ -9411,98 +6583,97 @@ export const createSessionJsonlStore = (
 	const readSessionHistoryPath = async (
 		sessionId: SessionId
 	): Promise<SessionHistoryPath> => {
-		await ensureDeletedSessionsReconciled();
-		await ensureBoundSessionProjectedIfStale(sessionId);
+		await projected.reconcileDeleted();
+		const handle = await projected.open(sessionId);
+		const view = await handle.atHead();
 		return await withSessionCatalogLifecycleGate(logRoot, async () => {
 			assertSessionHistoryWorkspaceBinding(sessionId, undefined);
 			await checkDeletedMarker(sessionId);
-			const logPath = resolveSessionLogFilePath(
-				await fs.realpath(logRoot),
-				sessionId
-			);
-			const { state } = await readLogForHistoryTree(logPath, sessionId);
-			const tree = buildSessionHistoryTreeEntries(
-				state,
-				sessionId,
-				state.nextSequence - 1
-			);
-			const entries = tree.entries.filter(({ selectedPath }) => selectedPath);
-			const submissionUpdates = new Map(
-				entries.flatMap((entry) =>
-					entry.kind === "submission-status"
+			return await view.read(async () => {
+				const { state } = await sessionLog.readForHistoryTree(sessionId);
+				const tree = buildSessionHistoryTreeEntries(
+					state,
+					sessionId,
+					state.nextSequence - 1
+				);
+				const entries = tree.entries.filter(({ selectedPath }) => selectedPath);
+				const submissionUpdates = new Map(
+					entries.flatMap((entry) =>
+						entry.kind === "submission-status"
+							? [
+									[
+										`${entry.recordId}\0${entry.messageId}\0${entry.submissionId}`,
+										entry,
+									],
+								]
+							: []
+					)
+				);
+				const records = entries.flatMap((entry) =>
+					entry.kind === "record"
 						? [
-								[
-									`${entry.recordId}\0${entry.messageId}\0${entry.submissionId}`,
-									entry,
-								],
+								{
+									...entry.record,
+									messages: entry.record.messages.map((message) => {
+										const submissionId = message.metadata?.submissionId;
+										if (message.role !== "user" || submissionId === undefined) {
+											return message;
+										}
+										const status = submissionUpdates.get(
+											`${entry.recordId}\0${message.id}\0${submissionId}`
+										);
+										return status === undefined
+											? message
+											: withSubmissionStatus(message, {
+													failure: status.failure,
+													status: status.status,
+													submissionId: toSubmissionId(status.submissionId),
+												});
+									}),
+								},
 							]
 						: []
-				)
-			);
-			const records = entries.flatMap((entry) =>
-				entry.kind === "record"
-					? [
-							{
-								...entry.record,
-								messages: entry.record.messages.map((message) => {
-									const submissionId = message.metadata?.submissionId;
-									if (message.role !== "user" || submissionId === undefined) {
-										return message;
-									}
-									const status = submissionUpdates.get(
-										`${entry.recordId}\0${message.id}\0${submissionId}`
-									);
-									return status === undefined
-										? message
-										: withSubmissionStatus(message, {
-												failure: status.failure,
-												status: status.status,
-												submissionId: toSubmissionId(status.submissionId),
-											});
-								}),
-							},
-						]
-					: []
-			);
-			const compactionIds = new Set(
-				entries.flatMap((entry) =>
-					entry.kind === "compaction" ? [entry.compactionId] : []
-				)
-			);
-			const contextEditOperationIds = new Set(
-				entries.flatMap((entry) =>
-					entry.kind === "context-edit" ? [entry.operationId] : []
-				)
-			);
-			const [allCompactions, allContextEdits] = await Promise.all([
-				projectionStore.getCompactions(sessionId),
-				projectionStore.getSessionContextEdits(sessionId),
-			]);
-			let model = state.entries.find(
-				({ envelope }) => envelope.type === "session.created"
-			)?.envelope.payload.model as ProviderModelSelection | undefined;
-			let thinkingLevel = state.entries.find(
-				({ envelope }) => envelope.type === "session.created"
-			)?.envelope.payload.thinkingLevel as ThinkingLevel | undefined;
-			for (const entry of entries) {
-				if (entry.kind !== "record") {
-					continue;
+				);
+				const compactionIds = new Set(
+					entries.flatMap((entry) =>
+						entry.kind === "compaction" ? [entry.compactionId] : []
+					)
+				);
+				const contextEditOperationIds = new Set(
+					entries.flatMap((entry) =>
+						entry.kind === "context-edit" ? [entry.operationId] : []
+					)
+				);
+				const [allCompactions, allContextEdits] = await Promise.all([
+					projectionStore.getCompactions(sessionId),
+					projectionStore.getSessionContextEdits(sessionId),
+				]);
+				let model = state.entries.find(
+					({ envelope }) => envelope.type === "session.created"
+				)?.envelope.payload.model as ProviderModelSelection | undefined;
+				let thinkingLevel = state.entries.find(
+					({ envelope }) => envelope.type === "session.created"
+				)?.envelope.payload.thinkingLevel as ThinkingLevel | undefined;
+				for (const entry of entries) {
+					if (entry.kind !== "record") {
+						continue;
+					}
+					model = entry.sessionModel ?? model;
+					thinkingLevel = entry.sessionThinkingLevel ?? thinkingLevel;
 				}
-				model = entry.sessionModel ?? model;
-				thinkingLevel = entry.sessionThinkingLevel ?? thinkingLevel;
-			}
-			return {
-				activeLeafId: tree.activeLeafId,
-				compactions: allCompactions.filter(({ id }) => compactionIds.has(id)),
-				contextEdits: allContextEdits.filter(({ operationId }) =>
-					contextEditOperationIds.has(operationId)
-				),
-				entries,
-				historyGeneration: tree.historyGeneration,
-				model,
-				records,
-				thinkingLevel,
-			};
+				return {
+					activeLeafId: tree.activeLeafId,
+					compactions: allCompactions.filter(({ id }) => compactionIds.has(id)),
+					contextEdits: allContextEdits.filter(({ operationId }) =>
+						contextEditOperationIds.has(operationId)
+					),
+					entries,
+					historyGeneration: tree.historyGeneration,
+					model,
+					records,
+					thinkingLevel,
+				};
+			});
 		});
 	};
 
@@ -9535,173 +6706,19 @@ export const createSessionJsonlStore = (
 			checkpointRecordId: checkpoint.recordId,
 			sourceSessionId,
 		});
-		return forkOperationQueue.run(
-			`${sourceKey}\0fork\0${operationId}`,
-			async () => {
-				const existingIntent = await withSessionCatalogLifecycleGate(
-					logRoot,
-					async () => {
-						const existing = await readSessionForkIntent(
-							logRoot,
-							operationId,
-							sourceSessionId
-						);
-						if (
-							existing !== undefined &&
-							(existing.sourceSessionId !== sourceSessionId ||
-								existing.checkpointRecordId !== checkpoint.recordId ||
-								existing.operationDigest !== operationDigest)
-						) {
-							throw new SessionForkError(
-								"session_operation_conflict",
-								"Session fork operation ID was reused for a different source or checkpoint.",
-								sourceSessionId,
-								operationId
-							);
-						}
-						return existing;
-					}
-				);
-				let operationIntent = existingIntent;
-				let targetSessionId = toSessionId(
-					operationIntent?.targetSessionId ?? randomUUIDv7()
-				);
-				const forkOperationLogId = `fork-${operationIdFileStem(operationId).slice(0, 40)}`;
-				let targetLogPath = resolveSessionLogFilePath(
-					await fs.realpath(logRoot),
-					targetSessionId
-				);
-				const reconcilePublishedForkCreation = async (
-					createdEntry: SessionLogEntry,
-					publishedBytes: Uint8Array
-				): Promise<void> => {
-					const createdOperationId = `create-${targetSessionId}`;
-					const createdIntent: SessionWriteIntent &
-						Readonly<{ timestamp: string }> = {
-						expectedOffset: 0,
-						operationDigest: creationDigest(createdEntry.envelope.payload),
-						operationId: createdOperationId,
-						sequence: 1,
-						sessionId: targetSessionId,
-						timestamp: createdEntry.envelope.timestamp,
-						type: "session.created",
-						workspaceId: projection.workspaceId,
-					};
-					const pendingIntent = await readSessionWriteIntent(
-						logRoot,
-						targetSessionId,
-						fileIo
-					);
-					if (pendingIntent !== undefined) {
-						assertSameSessionWriteIntent(
-							pendingIntent,
-							createdIntent,
-							targetSessionId
-						);
-					}
-					try {
-						await syncAndVerifyLogPrefix(
-							targetLogPath,
-							publishedBytes,
-							targetSessionId,
-							fileIo
-						);
-						await ensureDurableReceipt(
-							logRoot,
-							targetSessionId,
-							createdEntry,
-							fileIo
-						);
-						if (pendingIntent !== undefined) {
-							await clearSessionWriteIntent(logRoot, createdIntent, fileIo);
-						}
-					} catch (error) {
-						throw indeterminateLogWriteError(
-							targetSessionId,
-							createdIntent,
-							error
-						);
-					}
-				};
-				const publishedForkProjectionReady = async (): Promise<boolean> => {
-					try {
-						await ensureProjected(targetSessionId);
-						return true;
-					} catch (error) {
-						if (!isCode(error, "session_projection_blocked")) {
-							throw error;
-						}
-						return false;
-					}
-				};
-				const returnPublishedFork = async (
-					state: SessionLogState,
-					publishedBytes: Uint8Array
-				): Promise<SessionForkResult> => {
-					const { createdEntry, forked, forkedEntry } =
-						requirePublishedForkEntries(
-							state,
-							sourceSessionId,
-							checkpoint.recordId,
-							operationId,
-							forkOperationLogId
-						);
-					await reconcilePublishedForkCreation(createdEntry, publishedBytes);
-					await checkDeletedMarker(targetSessionId);
-					if (projection.isBoundToAnotherWorkspace(targetSessionId)) {
-						throw new SessionForkError(
-							"session_operation_conflict",
-							"Published fork belongs to another Workspace.",
-							sourceSessionId,
-							operationId
-						);
-					}
-					if (!projection.isBoundToWorkspace(targetSessionId)) {
-						await withSessionCatalogLifecycleGate(logRoot, async () => {
-							await checkDeletedMarker(targetSessionId);
-							projection.bindSessionToWorkspace(targetSessionId);
-						});
-					}
-					const projectionReady = await publishedForkProjectionReady();
-					return {
-						created: false,
-						id: targetSessionId,
-						checkpoint: {
-							recordId: checkpoint.recordId,
-							sequence: forked.sourceSequence,
-							turnId: toAgentTurnId(forked.sourceTurnId),
-						},
-						writeOutcome: toForkReceipt(
-							forkedEntry,
-							operationId,
-							projectionReady ? "ready" : "blocked"
-						),
-					};
-				};
-				if (operationIntent !== undefined) {
-					const existingTarget = await readExistingSessionLog(
-						targetLogPath,
-						targetSessionId
-					);
-					if (existingTarget !== undefined) {
-						return returnPublishedFork(
-							existingTarget.state,
-							existingTarget.bytes
-						);
-					}
-				}
-
-				// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the held source writer spans cut validation, prefix remapping, and staged publication so no source mutation can invalidate the durable fork boundary
-				const forkWithSourceWriter = async (): Promise<SessionForkResult> => {
-					const currentIntent = await withSessionCatalogLifecycleGate(
-						logRoot,
-						() => readSessionForkIntent(logRoot, operationId, sourceSessionId)
+		return sessionLog.withForkQueue(sourceSessionId, operationId, async () => {
+			const existingIntent = await withSessionCatalogLifecycleGate(
+				logRoot,
+				async () => {
+					const existing = await sessionLog.readForkIntent(
+						operationId,
+						sourceSessionId
 					);
 					if (
-						currentIntent !== undefined &&
-						(currentIntent.sourceSessionId !== sourceSessionId ||
-							currentIntent.checkpointRecordId !== checkpoint.recordId ||
-							currentIntent.operationDigest !== operationDigest)
+						existing !== undefined &&
+						(existing.sourceSessionId !== sourceSessionId ||
+							existing.checkpointRecordId !== checkpoint.recordId ||
+							existing.operationDigest !== operationDigest)
 					) {
 						throw new SessionForkError(
 							"session_operation_conflict",
@@ -9710,771 +6727,901 @@ export const createSessionJsonlStore = (
 							operationId
 						);
 					}
-					operationIntent = currentIntent;
-					if (currentIntent !== undefined) {
-						targetSessionId = toSessionId(currentIntent.targetSessionId);
-						targetLogPath = resolveSessionLogFilePath(
-							await fs.realpath(logRoot),
-							targetSessionId
-						);
-						const publishedTarget = await readExistingSessionLog(
-							targetLogPath,
-							targetSessionId
-						);
-						if (publishedTarget !== undefined) {
-							return returnPublishedFork(
-								publishedTarget.state,
-								publishedTarget.bytes
-							);
-						}
-					}
-					assertProjectionReady(sourceSessionId);
-					await assertSessionWritable(sourceSessionId);
-					const sourceState = await ensureProjected(sourceSessionId);
-					const checkpointEntry = sourceState.entries.find(
-						(entry) =>
-							recordFromSessionLogEntry(entry)?.id === checkpoint.recordId
+					return existing;
+				}
+			);
+			let operationIntent = existingIntent;
+			let targetSessionId = toSessionId(
+				operationIntent?.targetSessionId ?? randomUUIDv7()
+			);
+			const forkOperationLogId = `fork-${operationIdFileStem(operationId).slice(0, 40)}`;
+			let targetLogPath = resolveSessionLogFilePath(
+				await fs.realpath(logRoot),
+				targetSessionId
+			);
+			const reconcilePublishedForkCreation = async (
+				createdEntry: SessionLogEntry,
+				publishedBytes: Uint8Array
+			): Promise<void> => {
+				const createdOperationId = `create-${targetSessionId}`;
+				const createdIntent: SessionWriteIntent &
+					Readonly<{ timestamp: string }> = {
+					expectedOffset: 0,
+					operationDigest: creationDigest(createdEntry.envelope.payload),
+					operationId: createdOperationId,
+					sequence: 1,
+					sessionId: targetSessionId,
+					timestamp: createdEntry.envelope.timestamp,
+					type: "session.created",
+					workspaceId: projection.workspaceId,
+				};
+				const pendingIntent = await readSessionWriteIntent(
+					logRoot,
+					targetSessionId,
+					fileIo
+				);
+				if (pendingIntent !== undefined) {
+					assertSameSessionWriteIntent(
+						pendingIntent,
+						createdIntent,
+						targetSessionId
 					);
-					if (checkpointEntry === undefined) {
-						throw new SessionForkError(
-							"session_checkpoint_invalid",
-							"Checkpoint Record was not found in the source Session.",
-							sourceSessionId,
-							operationId
-						);
-					}
-					const checkpointHistoryEntry = buildSessionHistoryTreeEntries(
-						sourceState,
-						sourceSessionId,
-						sourceState.nextSequence - 1
-					).entries.find(
-						(entry) =>
-							entry.kind === "record" && entry.recordId === checkpoint.recordId
-					);
-					if (checkpointHistoryEntry === undefined) {
-						throw new SessionForkError(
-							"session_checkpoint_invalid",
-							"Checkpoint Record has no history entry in the source Session.",
-							sourceSessionId,
-							operationId
-						);
-					}
-					const sourcePathEntryIds = sessionHistoryPathToEntryFromLog(
-						sourceState,
-						sourceSessionId,
-						checkpointHistoryEntry.id,
-						checkpointEntry.envelope.sequence
-					);
-					const sourcePrefixEntries = sourceState.entries.filter(
-						({ envelope }) => {
-							if (
-								envelope.type === "session.created" ||
-								envelope.type === "session.forked"
-							) {
-								return true;
-							}
-							if (envelope.sequence > checkpointEntry.envelope.sequence) {
-								return false;
-							}
-							if (
-								envelope.type === "session.metadata-updated" ||
-								envelope.type === "usage.committed"
-							) {
-								return true;
-							}
-							return (
-								isSessionHistoryEntryEventType(envelope.type) &&
-								sourcePathEntryIds.has(
-									toSessionHistoryEntryId(
-										String(envelope.payload.historyEntryId)
-									)
-								)
-							);
-						}
-					);
-					const sourceRecords = sourcePrefixEntries.flatMap((entry) => {
-						const record = recordFromSessionLogEntry(entry);
-						return record === undefined ? [] : [record];
-					});
-					const checkpointAssessment = assessSessionForkCheckpoint(
-						sourceRecords,
-						checkpoint.recordId
-					);
-					if (checkpointAssessment.kind === "invalid") {
-						throw new SessionForkError(
-							"session_checkpoint_invalid",
-							checkpointAssessment.reason,
-							sourceSessionId,
-							operationId
-						);
-					}
-					const checkpointRecord = checkpointAssessment.record;
-					const sourceCreatedEntry = sourcePrefixEntries.find(
-						({ envelope }) => envelope.type === "session.created"
-					);
-					if (sourceCreatedEntry?.envelope.type !== "session.created") {
-						throw new SessionForkError(
-							"session_checkpoint_invalid",
-							"Source Session creation checkpoint is missing.",
-							sourceSessionId,
-							operationId
-						);
-					}
-					const sourceCompactions = sourcePrefixEntries.flatMap((entry) =>
-						entry.envelope.type === "compaction.committed"
-							? [parseSessionCompactionPayload(entry.envelope.payload)]
-							: []
-					);
-					const sourcePathCompactionIds = new Set(
-						sourceCompactions.map(({ id }) => String(id))
-					);
-					const sourcePathEntryIdStrings = new Set(
-						[...sourcePathEntryIds].map(String)
-					);
-					const selectedPathUsageEntries = sourcePrefixEntries.filter((entry) =>
-						isSessionBundleBranchUsageSourceEntry(
-							entry,
-							sourcePathEntryIdStrings,
-							sourcePathCompactionIds
-						)
-					);
-					const inheritedUsage = filterSessionUsageToSelectedPath(
-						inheritedUsageAtFork(
-							selectedPathUsageEntries,
-							sourceRecords,
-							sourceSessionId
-						),
-						sourceRecords,
-						sourcePathCompactionIds
-					);
-					const identityMap = createSessionForkIdentityMap(
-						targetSessionId,
-						sourceRecords,
-						sourceCompactions.map(({ id }) => id)
-					);
-					const copiedSourceCompactionIds = new Set<string>();
-					const remappedCompactions = new Map<
-						string,
-						SessionCompactionPayload
-					>();
-					for (const compaction of sourceCompactions) {
-						const remapped = remapForkCompactionPayload(
-							compaction,
-							remappedCompactions.size + 1,
-							identityMap,
-							copiedSourceCompactionIds
-						);
-						if (remapped !== undefined) {
-							remappedCompactions.set(compaction.id, remapped);
-							copiedSourceCompactionIds.add(compaction.id);
-						}
-					}
-					const remappedRecords = new Map(
-						sourceRecords.map((record) => [
-							record.id,
-							remapForkSessionRecord(record, identityMap),
-						])
-					);
-					const targetCheckpointRecord = remappedRecords.get(
-						checkpointRecord.id
-					);
-					const targetCheckpointMessage = targetCheckpointRecord?.messages[0];
-					const targetCheckpointRecordId = identityMap.records.get(
-						checkpointRecord.id
-					);
-					const targetCheckpointTurnId = identityMap.turns.get(
-						checkpointRecord.turnId
-					);
-					const targetCheckpointMessageId = identityMap.messages.get(
-						checkpointRecord.messages[0]?.id ?? ""
-					);
-					if (
-						targetCheckpointRecord === undefined ||
-						targetCheckpointMessage === undefined ||
-						targetCheckpointRecordId === undefined ||
-						targetCheckpointTurnId === undefined ||
-						targetCheckpointMessageId === undefined
-					) {
-						throw new SessionForkError(
-							"session_checkpoint_invalid",
-							"Terminal assistant checkpoint identities could not be remapped.",
-							sourceSessionId,
-							operationId
-						);
-					}
-					const sourceInitialRecord = sourceCreatedEntry.envelope.payload
-						.initialRecord as SessionRecord | undefined;
-					const targetInitialRecord =
-						sourceInitialRecord === undefined
-							? undefined
-							: remappedRecords.get(sourceInitialRecord.id);
-					const pendingTargetIntent = await readSessionWriteIntent(
-						logRoot,
+				}
+				try {
+					await syncAndVerifyLogPrefix(
+						targetLogPath,
+						publishedBytes,
 						targetSessionId,
 						fileIo
 					);
-					const createdAt =
-						pendingTargetIntent?.type === "session.created" &&
-						pendingTargetIntent.timestamp !== undefined
-							? pendingTargetIntent.timestamp
-							: new Date().toISOString();
-					const {
-						activeLeafId: _sourceActiveLeafId,
-						initialHistoryEntryId: _sourceHistoryEntryId,
-						initialRecord: _sourceInitialRecord,
-						...sourceCreationPayload
-					} = sourceCreatedEntry.envelope.payload;
-					const targetInitialHistoryEntryId =
-						targetInitialRecord === undefined
-							? undefined
-							: sessionHistoryEntryIdForRecord(
-									targetSessionId,
-									targetInitialRecord.id
-								);
-					let activeLeafId: string | null = targetInitialHistoryEntryId ?? null;
-					const creationPayload = {
-						...sourceCreationPayload,
-						activeLeafId,
-						createdAt,
-						...omitUndefined({
-							initialHistoryEntryId: targetInitialHistoryEntryId,
-							initialRecord: targetInitialRecord,
-						}),
-					};
-					const forkPayload = {
-						sourceLogId: sourceState.logId,
-						sourceMessageId: checkpointRecord.messages[0]?.id ?? "",
-						sourceRecordId: checkpointRecord.id,
-						sourceSequence: checkpointEntry.envelope.sequence,
-						sourceSessionId,
-						sourceTurnId: checkpointRecord.turnId,
-						targetMessageId: targetCheckpointMessageId,
-						targetRecordId: targetCheckpointRecordId,
-						targetTurnId: targetCheckpointTurnId,
-						inheritedRecordIds: sourceRecords.map((record) =>
-							String(identityMap.records.get(record.id))
-						),
-						inheritedCompactionIds: [...remappedCompactions.values()].map(
-							({ id }) => String(id)
-						),
-						inheritedSubmissions: inheritedForkSubmissionsAtCut(
-							sourcePrefixEntries,
-							sourceRecords,
-							identityMap,
-							sourceSessionId,
-							operationId
-						),
-						inheritedUsage: remapForkUsageTurnIds(inheritedUsage, identityMap),
-					};
-					const logLines: Uint8Array[] = [];
-					let nextSequence = 0;
-					let nextOffset = 0;
-					let previousHash: string | null = null;
-					const appendLine = (envelope: SessionLogEnvelope): void => {
-						const line = encodeSessionLogLine(envelope);
-						logLines.push(line);
-						nextOffset += line.byteLength;
-						nextSequence += 1;
-						previousHash = envelope.entryHash;
-					};
-					const header = createSessionLogHeader(
+					await ensureDurableReceipt(
+						logRoot,
 						targetSessionId,
-						randomUUIDv7(),
-						createdAt
+						createdEntry,
+						fileIo
 					);
-					appendLine(header);
-					const createdOperationId = `create-${targetSessionId}`;
-					const createdEnvelope = createSessionLogEvent({
-						operationId: createdOperationId,
-						payload: creationPayload,
-						previousHash,
-						sequence: nextSequence,
-						sessionId: targetSessionId,
-						timestamp: createdAt,
-						type: "session.created",
+					if (pendingIntent !== undefined) {
+						await sessionLog.clearWriteIntent(createdIntent);
+					}
+				} catch (error) {
+					throw indeterminateLogWriteError(
+						targetSessionId,
+						createdIntent,
+						error
+					);
+				}
+			};
+			const publishedForkProjectionReady = async (): Promise<boolean> => {
+				try {
+					await (await projected.open(targetSessionId)).atHead();
+					return true;
+				} catch (error) {
+					if (!isCode(error, "session_projection_blocked")) {
+						throw error;
+					}
+					return false;
+				}
+			};
+			const returnPublishedFork = async (
+				state: SessionLogState,
+				publishedBytes: Uint8Array
+			): Promise<SessionForkResult> => {
+				const { createdEntry, forked, forkedEntry } =
+					requirePublishedForkEntries(
+						state,
+						sourceSessionId,
+						checkpoint.recordId,
+						operationId,
+						forkOperationLogId
+					);
+				await reconcilePublishedForkCreation(createdEntry, publishedBytes);
+				await checkDeletedMarker(targetSessionId);
+				if (projection.isBoundToAnotherWorkspace(targetSessionId)) {
+					throw new SessionForkError(
+						"session_operation_conflict",
+						"Published fork belongs to another Workspace.",
+						sourceSessionId,
+						operationId
+					);
+				}
+				if (!projection.isBoundToWorkspace(targetSessionId)) {
+					await withSessionCatalogLifecycleGate(logRoot, async () => {
+						await checkDeletedMarker(targetSessionId);
+						projection.bindSessionToWorkspace(targetSessionId);
 					});
-					appendLine(createdEnvelope);
-					const forkEnvelope = createSessionLogEvent({
-						operationId: forkOperationLogId,
-						payload: forkPayload,
-						previousHash,
-						sequence: nextSequence,
-						sessionId: targetSessionId,
-						timestamp: createdAt,
-						type: "session.forked",
-					});
-					appendLine(forkEnvelope);
-					for (const entry of sourcePrefixEntries) {
-						if (entry.envelope.sequence <= 1) {
-							continue;
+				}
+				const projectionReady = await publishedForkProjectionReady();
+				return {
+					created: false,
+					id: targetSessionId,
+					checkpoint: {
+						recordId: checkpoint.recordId,
+						sequence: forked.sourceSequence,
+						turnId: toAgentTurnId(forked.sourceTurnId),
+					},
+					writeOutcome: toForkReceipt(
+						forkedEntry,
+						operationId,
+						projectionReady ? "ready" : "blocked"
+					),
+				};
+			};
+			if (operationIntent !== undefined) {
+				const existingTarget = await readExistingSessionLog(
+					targetLogPath,
+					targetSessionId
+				);
+				if (existingTarget !== undefined) {
+					return returnPublishedFork(
+						existingTarget.state,
+						existingTarget.bytes
+					);
+				}
+			}
+
+			// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the held source writer spans cut validation, prefix remapping, and staged publication so no source mutation can invalidate the durable fork boundary
+			const forkWithSourceWriter = async (): Promise<SessionForkResult> => {
+				const currentIntent = await withSessionCatalogLifecycleGate(
+					logRoot,
+					() => readSessionForkIntent(logRoot, operationId, sourceSessionId)
+				);
+				if (
+					currentIntent !== undefined &&
+					(currentIntent.sourceSessionId !== sourceSessionId ||
+						currentIntent.checkpointRecordId !== checkpoint.recordId ||
+						currentIntent.operationDigest !== operationDigest)
+				) {
+					throw new SessionForkError(
+						"session_operation_conflict",
+						"Session fork operation ID was reused for a different source or checkpoint.",
+						sourceSessionId,
+						operationId
+					);
+				}
+				operationIntent = currentIntent;
+				if (currentIntent !== undefined) {
+					targetSessionId = toSessionId(currentIntent.targetSessionId);
+					targetLogPath = resolveSessionLogFilePath(
+						await fs.realpath(logRoot),
+						targetSessionId
+					);
+					const publishedTarget = await readExistingSessionLog(
+						targetLogPath,
+						targetSessionId
+					);
+					if (publishedTarget !== undefined) {
+						return returnPublishedFork(
+							publishedTarget.state,
+							publishedTarget.bytes
+						);
+					}
+				}
+				projected.ready(sourceSessionId);
+				await assertSessionWritable(sourceSessionId);
+				const sourceState = await (
+					await projected.open(sourceSessionId)
+				).atHeadState();
+				const checkpointEntry = sourceState.entries.find(
+					(entry) =>
+						recordFromSessionLogEntry(entry)?.id === checkpoint.recordId
+				);
+				if (checkpointEntry === undefined) {
+					throw new SessionForkError(
+						"session_checkpoint_invalid",
+						"Checkpoint Record was not found in the source Session.",
+						sourceSessionId,
+						operationId
+					);
+				}
+				const checkpointHistoryEntry = buildSessionHistoryTreeEntries(
+					sourceState,
+					sourceSessionId,
+					sourceState.nextSequence - 1
+				).entries.find(
+					(entry) =>
+						entry.kind === "record" && entry.recordId === checkpoint.recordId
+				);
+				if (checkpointHistoryEntry === undefined) {
+					throw new SessionForkError(
+						"session_checkpoint_invalid",
+						"Checkpoint Record has no history entry in the source Session.",
+						sourceSessionId,
+						operationId
+					);
+				}
+				const sourcePathEntryIds = sessionHistoryPathToEntryFromLog(
+					sourceState,
+					sourceSessionId,
+					checkpointHistoryEntry.id,
+					checkpointEntry.envelope.sequence
+				);
+				const sourcePrefixEntries = sourceState.entries.filter(
+					({ envelope }) => {
+						if (
+							envelope.type === "session.created" ||
+							envelope.type === "session.forked"
+						) {
+							return true;
 						}
-						if (entry.envelope.type === "plugin.entry-appended") {
-							const operationId = `fork-plugin-history-${entry.envelope.sequence}`;
-							const historyEntryId = sessionHistoryEntryIdForOperation(
-								targetSessionId,
-								operationId
-							);
-							appendLine(
-								createSessionLogEvent({
-									operationId,
-									payload: {
-										...entry.envelope.payload,
-										activeLeafId: historyEntryId,
-										historyEntryId,
-										parentEntryId: activeLeafId,
-									},
-									previousHash,
-									sequence: nextSequence,
-									sessionId: targetSessionId,
-									timestamp: entry.envelope.timestamp,
-									type: "plugin.entry-appended",
-								})
-							);
-							activeLeafId = historyEntryId;
-							continue;
+						if (envelope.sequence > checkpointEntry.envelope.sequence) {
+							return false;
 						}
 						if (
-							entry.envelope.type === "plugin.state-replaced" ||
-							entry.envelope.type === "plugin.state-deleted"
+							envelope.type === "session.metadata-updated" ||
+							envelope.type === "usage.committed"
 						) {
-							const operationId = `fork-plugin-state-${entry.envelope.sequence}`;
-							const historyEntryId = sessionHistoryEntryIdForOperation(
-								targetSessionId,
-								operationId
-							);
-							appendLine(
-								createSessionLogEvent({
-									operationId,
-									payload: {
-										...entry.envelope.payload,
-										activeLeafId: historyEntryId,
-										historyEntryId,
-										parentEntryId: activeLeafId,
-									},
-									previousHash,
-									sequence: nextSequence,
-									sessionId: targetSessionId,
-									timestamp: entry.envelope.timestamp,
-									type: entry.envelope.type,
-								})
-							);
-							activeLeafId = historyEntryId;
-							continue;
+							return true;
 						}
-						const sourceRecord = recordFromSessionLogEntry(entry);
-						if (
-							sourceRecord !== undefined &&
-							sourceRecord.id !== sourceInitialRecord?.id
-						) {
-							const record = remappedRecords.get(sourceRecord.id);
-							if (record === undefined) {
-								throw new SessionForkError(
-									"session_checkpoint_invalid",
-									"A source Session Record could not be remapped.",
-									sourceSessionId,
-									operationId
-								);
-							}
-							const sourcePayload = entry.envelope.payload;
-							const historyEntryId = sessionHistoryEntryIdForRecord(
+						return (
+							isSessionHistoryEntryEventType(envelope.type) &&
+							sourcePathEntryIds.has(
+								toSessionHistoryEntryId(String(envelope.payload.historyEntryId))
+							)
+						);
+					}
+				);
+				const sourceRecords = sourcePrefixEntries.flatMap((entry) => {
+					const record = recordFromSessionLogEntry(entry);
+					return record === undefined ? [] : [record];
+				});
+				const checkpointAssessment = assessSessionForkCheckpoint(
+					sourceRecords,
+					checkpoint.recordId
+				);
+				if (checkpointAssessment.kind === "invalid") {
+					throw new SessionForkError(
+						"session_checkpoint_invalid",
+						checkpointAssessment.reason,
+						sourceSessionId,
+						operationId
+					);
+				}
+				const checkpointRecord = checkpointAssessment.record;
+				const sourceCreatedEntry = sourcePrefixEntries.find(
+					({ envelope }) => envelope.type === "session.created"
+				);
+				if (sourceCreatedEntry?.envelope.type !== "session.created") {
+					throw new SessionForkError(
+						"session_checkpoint_invalid",
+						"Source Session creation checkpoint is missing.",
+						sourceSessionId,
+						operationId
+					);
+				}
+				const sourceCompactions = sourcePrefixEntries.flatMap((entry) =>
+					entry.envelope.type === "compaction.committed"
+						? [parseSessionCompactionPayload(entry.envelope.payload)]
+						: []
+				);
+				const sourcePathCompactionIds = new Set(
+					sourceCompactions.map(({ id }) => String(id))
+				);
+				const sourcePathEntryIdStrings = new Set(
+					[...sourcePathEntryIds].map(String)
+				);
+				const selectedPathUsageEntries = sourcePrefixEntries.filter((entry) =>
+					isSessionBundleBranchUsageSourceEntry(
+						entry,
+						sourcePathEntryIdStrings,
+						sourcePathCompactionIds
+					)
+				);
+				const inheritedUsage = filterSessionUsageToSelectedPath(
+					inheritedUsageAtFork(
+						selectedPathUsageEntries,
+						sourceRecords,
+						sourceSessionId
+					),
+					sourceRecords,
+					sourcePathCompactionIds
+				);
+				const identityMap = createSessionForkIdentityMap(
+					targetSessionId,
+					sourceRecords,
+					sourceCompactions.map(({ id }) => id)
+				);
+				const copiedSourceCompactionIds = new Set<string>();
+				const remappedCompactions = new Map<string, SessionCompactionPayload>();
+				for (const compaction of sourceCompactions) {
+					const remapped = remapForkCompactionPayload(
+						compaction,
+						remappedCompactions.size + 1,
+						identityMap,
+						copiedSourceCompactionIds
+					);
+					if (remapped !== undefined) {
+						remappedCompactions.set(compaction.id, remapped);
+						copiedSourceCompactionIds.add(compaction.id);
+					}
+				}
+				const remappedRecords = new Map(
+					sourceRecords.map((record) => [
+						record.id,
+						remapForkSessionRecord(record, identityMap),
+					])
+				);
+				const targetCheckpointRecord = remappedRecords.get(checkpointRecord.id);
+				const targetCheckpointMessage = targetCheckpointRecord?.messages[0];
+				const targetCheckpointRecordId = identityMap.records.get(
+					checkpointRecord.id
+				);
+				const targetCheckpointTurnId = identityMap.turns.get(
+					checkpointRecord.turnId
+				);
+				const targetCheckpointMessageId = identityMap.messages.get(
+					checkpointRecord.messages[0]?.id ?? ""
+				);
+				if (
+					targetCheckpointRecord === undefined ||
+					targetCheckpointMessage === undefined ||
+					targetCheckpointRecordId === undefined ||
+					targetCheckpointTurnId === undefined ||
+					targetCheckpointMessageId === undefined
+				) {
+					throw new SessionForkError(
+						"session_checkpoint_invalid",
+						"Terminal assistant checkpoint identities could not be remapped.",
+						sourceSessionId,
+						operationId
+					);
+				}
+				const sourceInitialRecord = sourceCreatedEntry.envelope.payload
+					.initialRecord as SessionRecord | undefined;
+				const targetInitialRecord =
+					sourceInitialRecord === undefined
+						? undefined
+						: remappedRecords.get(sourceInitialRecord.id);
+				const pendingTargetIntent = await readSessionWriteIntent(
+					logRoot,
+					targetSessionId,
+					fileIo
+				);
+				const createdAt =
+					pendingTargetIntent?.type === "session.created" &&
+					pendingTargetIntent.timestamp !== undefined
+						? pendingTargetIntent.timestamp
+						: new Date().toISOString();
+				const {
+					activeLeafId: _sourceActiveLeafId,
+					initialHistoryEntryId: _sourceHistoryEntryId,
+					initialRecord: _sourceInitialRecord,
+					...sourceCreationPayload
+				} = sourceCreatedEntry.envelope.payload;
+				const targetInitialHistoryEntryId =
+					targetInitialRecord === undefined
+						? undefined
+						: sessionHistoryEntryIdForRecord(
 								targetSessionId,
-								record.id
+								targetInitialRecord.id
 							);
-							const recordEnvelope = createSessionLogEvent({
-								operationId: `record-${record.id}`,
+				let activeLeafId: string | null = targetInitialHistoryEntryId ?? null;
+				const creationPayload = {
+					...sourceCreationPayload,
+					activeLeafId,
+					createdAt,
+					...omitUndefined({
+						initialHistoryEntryId: targetInitialHistoryEntryId,
+						initialRecord: targetInitialRecord,
+					}),
+				};
+				const forkPayload = {
+					sourceLogId: sourceState.logId,
+					sourceMessageId: checkpointRecord.messages[0]?.id ?? "",
+					sourceRecordId: checkpointRecord.id,
+					sourceSequence: checkpointEntry.envelope.sequence,
+					sourceSessionId,
+					sourceTurnId: checkpointRecord.turnId,
+					targetMessageId: targetCheckpointMessageId,
+					targetRecordId: targetCheckpointRecordId,
+					targetTurnId: targetCheckpointTurnId,
+					inheritedRecordIds: sourceRecords.map((record) =>
+						String(identityMap.records.get(record.id))
+					),
+					inheritedCompactionIds: [...remappedCompactions.values()].map(
+						({ id }) => String(id)
+					),
+					inheritedSubmissions: inheritedForkSubmissionsAtCut(
+						sourcePrefixEntries,
+						sourceRecords,
+						identityMap,
+						sourceSessionId,
+						operationId
+					),
+					inheritedUsage: remapForkUsageTurnIds(inheritedUsage, identityMap),
+				};
+				const logLines: Uint8Array[] = [];
+				let nextSequence = 0;
+				let nextOffset = 0;
+				let previousHash: string | null = null;
+				const appendLine = (envelope: SessionLogEnvelope): void => {
+					const line = encodeSessionLogLine(envelope);
+					logLines.push(line);
+					nextOffset += line.byteLength;
+					nextSequence += 1;
+					previousHash = envelope.entryHash;
+				};
+				const header = createSessionLogHeader(
+					targetSessionId,
+					randomUUIDv7(),
+					createdAt
+				);
+				appendLine(header);
+				const createdOperationId = `create-${targetSessionId}`;
+				const createdEnvelope = createSessionLogEvent({
+					operationId: createdOperationId,
+					payload: creationPayload,
+					previousHash,
+					sequence: nextSequence,
+					sessionId: targetSessionId,
+					timestamp: createdAt,
+					type: "session.created",
+				});
+				appendLine(createdEnvelope);
+				const forkEnvelope = createSessionLogEvent({
+					operationId: forkOperationLogId,
+					payload: forkPayload,
+					previousHash,
+					sequence: nextSequence,
+					sessionId: targetSessionId,
+					timestamp: createdAt,
+					type: "session.forked",
+				});
+				appendLine(forkEnvelope);
+				for (const entry of sourcePrefixEntries) {
+					if (entry.envelope.sequence <= 1) {
+						continue;
+					}
+					if (entry.envelope.type === "plugin.entry-appended") {
+						const operationId = `fork-plugin-history-${entry.envelope.sequence}`;
+						const historyEntryId = sessionHistoryEntryIdForOperation(
+							targetSessionId,
+							operationId
+						);
+						appendLine(
+							createSessionLogEvent({
+								operationId,
 								payload: {
+									...entry.envelope.payload,
 									activeLeafId: historyEntryId,
 									historyEntryId,
 									parentEntryId: activeLeafId,
-									record,
-									...omitUndefined({
-										sessionModel: sourcePayload.sessionModel,
-										sessionThinkingLevel: sourcePayload.sessionThinkingLevel,
-									}),
 								},
 								previousHash,
 								sequence: nextSequence,
 								sessionId: targetSessionId,
 								timestamp: entry.envelope.timestamp,
-								type: "record.committed",
-							});
-							appendLine(recordEnvelope);
-							activeLeafId = historyEntryId;
-							continue;
-						}
-						if (entry.envelope.type === "submission.status-updated") {
-							const status = parseSessionSubmissionStatusPayload(
-								entry.envelope.payload
-							);
-							const recordId = identityMap.records.get(status.recordId);
-							const messageId = identityMap.messages.get(status.messageId);
-							const submissionId = identityMap.submissions.get(
-								status.submissionId
-							);
-							if (
-								recordId !== undefined &&
-								messageId !== undefined &&
-								submissionId !== undefined
-							) {
-								const statusOperationId = `fork-submission-status-${entry.envelope.sequence}`;
-								const historyEntryId = sessionHistoryEntryIdForOperation(
-									targetSessionId,
-									statusOperationId
-								);
-								appendLine(
-									createSessionLogEvent({
-										operationId: statusOperationId,
-										payload: {
-											activeLeafId: historyEntryId,
-											historyEntryId,
-											messageId,
-											parentEntryId: activeLeafId,
-											recordId,
-											status: "processed",
-											submissionId,
-										},
-										previousHash,
-										sequence: nextSequence,
-										sessionId: targetSessionId,
-										timestamp: entry.envelope.timestamp,
-										type: "submission.status-updated",
-									})
-								);
-								activeLeafId = historyEntryId;
-							}
-							continue;
-						}
-						if (entry.envelope.type === "compaction.committed") {
-							const sourceCompaction = parseSessionCompactionPayload(
-								entry.envelope.payload
-							);
-							const compaction = remappedCompactions.get(sourceCompaction.id);
-							if (compaction !== undefined) {
-								const operationId = `compaction-${compaction.id}`;
-								const historyEntryId = sessionHistoryEntryIdForOperation(
-									targetSessionId,
-									operationId
-								);
-								appendLine(
-									createSessionLogEvent({
-										operationId,
-										payload: {
-											...compaction,
-											activeLeafId: historyEntryId,
-											historyEntryId,
-											parentEntryId: activeLeafId,
-										},
-										previousHash,
-										sequence: nextSequence,
-										sessionId: targetSessionId,
-										timestamp: entry.envelope.timestamp,
-										type: "compaction.committed",
-									})
-								);
-								activeLeafId = historyEntryId;
-							}
-							continue;
-						}
-						if (entry.envelope.type === "context.edited") {
-							const edit = parseSessionContextEditPayload(
-								entry.envelope.payload
-							);
-							const targetId = identityMap.messages.get(edit.targetId);
-							if (targetId !== undefined) {
-								const editOperationId = isFailedAttemptContextEdit(
-									edit.operationId
-								)
-									? `${FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX}fork-${entry.envelope.sequence}`
-									: `fork-context-${entry.envelope.sequence}`;
-								const historyEntryId = sessionHistoryEntryIdForOperation(
-									targetSessionId,
-									editOperationId
-								);
-								appendLine(
-									createSessionLogEvent({
-										operationId: editOperationId,
-										payload: {
-											...edit,
-											activeLeafId: historyEntryId,
-											historyEntryId,
-											operationId: editOperationId,
-											parentEntryId: activeLeafId,
-											targetId,
-										},
-										previousHash,
-										sequence: nextSequence,
-										sessionId: targetSessionId,
-										timestamp: entry.envelope.timestamp,
-										type: "context.edited",
-									})
-								);
-								activeLeafId = historyEntryId;
-							}
-							continue;
-						}
-						if (entry.envelope.type === "session.metadata-updated") {
-							appendLine(
-								createSessionLogEvent({
-									operationId: `fork-metadata-${entry.envelope.sequence}`,
-									payload: entry.envelope.payload,
-									previousHash,
-									sequence: nextSequence,
-									sessionId: targetSessionId,
-									timestamp: entry.envelope.timestamp,
-									type: "session.metadata-updated",
-								})
-							);
-						}
+								type: "plugin.entry-appended",
+							})
+						);
+						activeLeafId = historyEntryId;
+						continue;
 					}
-					const logBytes = new Uint8Array(nextOffset);
-					let byteOffset = 0;
-					for (const line of logLines) {
-						logBytes.set(line, byteOffset);
-						byteOffset += line.byteLength;
-					}
-					const targetState = decodeSessionLog(targetSessionId, logBytes);
-					const createdEntry = targetState.entries[1];
-					if (createdEntry === undefined) {
-						throw new SessionForkError(
-							"session_checkpoint_invalid",
-							"Staged fork is missing its creation checkpoint.",
-							sourceSessionId,
+					if (
+						entry.envelope.type === "plugin.state-replaced" ||
+						entry.envelope.type === "plugin.state-deleted"
+					) {
+						const operationId = `fork-plugin-state-${entry.envelope.sequence}`;
+						const historyEntryId = sessionHistoryEntryIdForOperation(
+							targetSessionId,
 							operationId
 						);
-					}
-					const createdIntent: SessionWriteIntent &
-						Readonly<{ timestamp: string }> = {
-						expectedOffset: 0,
-						operationDigest: creationDigest(creationPayload),
-						operationId: createdOperationId,
-						sequence: 1,
-						sessionId: targetSessionId,
-						timestamp: createdAt,
-						type: "session.created",
-						workspaceId: projection.workspaceId,
-					};
-					if (pendingTargetIntent !== undefined) {
-						assertSameSessionWriteIntent(
-							pendingTargetIntent,
-							createdIntent,
-							targetSessionId
+						appendLine(
+							createSessionLogEvent({
+								operationId,
+								payload: {
+									...entry.envelope.payload,
+									activeLeafId: historyEntryId,
+									historyEntryId,
+									parentEntryId: activeLeafId,
+								},
+								previousHash,
+								sequence: nextSequence,
+								sessionId: targetSessionId,
+								timestamp: entry.envelope.timestamp,
+								type: entry.envelope.type,
+							})
 						);
+						activeLeafId = historyEntryId;
+						continue;
 					}
-					const canonicalRoot = await fs.realpath(logRoot);
-					const forkIntentCandidate: SessionForkIntent = {
-						checkpointRecordId: checkpoint.recordId,
-						operationDigest,
-						operationId,
-						sourceSessionId,
-						targetSessionId,
-						version: 1,
-					};
-					let forkIntentCreated = false;
-					let publicationAttempted = false;
-					let published = false;
-					let staged: StagedSessionLog | undefined;
-					try {
-						let durableForkIntent = operationIntent;
-						if (durableForkIntent === undefined) {
-							durableForkIntent = await withSessionCatalogLifecycleGate(
-								canonicalRoot,
-								async () => {
-									const existing = await readSessionForkIntent(
-										logRoot,
-										operationId,
-										sourceSessionId
-									);
-									if (
-										existing !== undefined &&
-										(existing.sourceSessionId !== sourceSessionId ||
-											existing.checkpointRecordId !== checkpoint.recordId ||
-											existing.operationDigest !== operationDigest ||
-											existing.targetSessionId !== targetSessionId)
-									) {
-										throw new SessionForkError(
-											"session_operation_conflict",
-											"Session fork operation ID was reused for a different source or checkpoint.",
-											sourceSessionId,
-											operationId
-										);
-									}
-									if (existing !== undefined) {
-										return existing;
-									}
-									forkIntentCreated = true;
-									const created = await writeSessionForkIntent(
-										logRoot,
-										forkIntentCandidate,
-										sourceSessionId,
-										fileIo
-									);
-									if (!Bun.deepEquals(created, forkIntentCandidate, true)) {
-										throw new SessionForkError(
-											"session_operation_conflict",
-											"Session fork operation ID was reused for a different source or checkpoint.",
-											sourceSessionId,
-											operationId
-										);
-									}
-									return created;
-								}
-							);
-						}
-						if (durableForkIntent.targetSessionId !== targetSessionId) {
+					const sourceRecord = recordFromSessionLogEntry(entry);
+					if (
+						sourceRecord !== undefined &&
+						sourceRecord.id !== sourceInitialRecord?.id
+					) {
+						const record = remappedRecords.get(sourceRecord.id);
+						if (record === undefined) {
 							throw new SessionForkError(
-								"session_operation_conflict",
-								"Session fork operation ID was reused for a different target.",
+								"session_checkpoint_invalid",
+								"A source Session Record could not be remapped.",
 								sourceSessionId,
 								operationId
 							);
 						}
-						const stagedLog = await stageSessionLog(
-							canonicalRoot,
+						const sourcePayload = entry.envelope.payload;
+						const historyEntryId = sessionHistoryEntryIdForRecord(
 							targetSessionId,
-							createdOperationId,
-							logBytes,
-							fileIo
+							record.id
 						);
-						staged = stagedLog;
-						await writeSessionWriteIntent(logRoot, createdIntent, fileIo);
-						await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
-							await checkDeletedMarker(targetSessionId);
-							if (projection.isBoundToAnotherWorkspace(targetSessionId)) {
-								throw new SessionForkError(
-									"session_operation_conflict",
-									"Fork target belongs to another Workspace.",
-									sourceSessionId,
-									operationId
-								);
-							}
-							publicationAttempted = true;
-							await publishSessionFileNoReplaceDurably(
-								stagedLog.filePath,
-								targetLogPath,
-								async (directory) => await syncDirectory(directory, fileIo),
-								fileIo.syncDirectory !== undefined,
-								() => {
-									published = true;
-								}
-							);
-							await syncDirectoryAfterDurablePublication(
-								stagedLog.root,
-								fileIo
-							);
-							projection.bindSessionToWorkspace(targetSessionId);
-						});
-						const publishedLog = await readLog(targetLogPath, targetSessionId);
-						await syncAndVerifyLogPrefix(
-							targetLogPath,
-							publishedLog.bytes,
-							targetSessionId,
-							fileIo
-						);
-						try {
-							await ensureDurableReceipt(
-								logRoot,
-								targetSessionId,
-								createdEntry,
-								fileIo
-							);
-							await clearSessionWriteIntent(logRoot, createdIntent, fileIo);
-						} catch (error) {
-							throw indeterminateLogWriteError(
-								targetSessionId,
-								createdIntent,
-								error
-							);
-						}
-						let projectionReady = true;
-						try {
-							projection.projectEntries(
-								targetSessionId,
-								publishedLog.state.entries,
-								publishedLog.state,
-								projection.getCursor(targetSessionId)
-							);
-						} catch {
-							projectionReady = projectionMatchesState(
-								projection.getCursor(targetSessionId),
-								publishedLog.state,
-								projection.getMaintenanceState().generation
-							);
-						}
-						const forkedEntry = publishedLog.state.entries.find(
-							({ envelope }) =>
-								envelope.type === "session.forked" &&
-								envelope.operationId === forkOperationLogId
-						);
-						if (forkedEntry?.envelope.type !== "session.forked") {
-							throw new SessionLogError(
-								"session_log_corrupt",
-								targetSessionId,
-								"Published fork is missing its provenance checkpoint.",
-								{ operationId }
-							);
-						}
-						return {
-							created: true,
-							id: targetSessionId,
-							checkpoint: {
-								recordId: checkpointRecord.id,
-								sequence: checkpointEntry.envelope.sequence,
-								turnId: checkpointRecord.turnId,
+						const recordEnvelope = createSessionLogEvent({
+							operationId: `record-${record.id}`,
+							payload: {
+								activeLeafId: historyEntryId,
+								historyEntryId,
+								parentEntryId: activeLeafId,
+								record,
+								...omitUndefined({
+									sessionModel: sourcePayload.sessionModel,
+									sessionThinkingLevel: sourcePayload.sessionThinkingLevel,
+								}),
 							},
-							writeOutcome: toForkReceipt(
-								forkedEntry,
-								operationId,
-								projectionReady ? "ready" : "blocked"
-							),
-						};
-					} catch (error) {
-						if (published) {
-							if (
-								error instanceof SessionLogError &&
-								error.code === "session_operation_conflict"
-							) {
-								throw error;
-							}
-							throw indeterminateLogWriteError(
+							previousHash,
+							sequence: nextSequence,
+							sessionId: targetSessionId,
+							timestamp: entry.envelope.timestamp,
+							type: "record.committed",
+						});
+						appendLine(recordEnvelope);
+						activeLeafId = historyEntryId;
+						continue;
+					}
+					if (entry.envelope.type === "submission.status-updated") {
+						const status = parseSessionSubmissionStatusPayload(
+							entry.envelope.payload
+						);
+						const recordId = identityMap.records.get(status.recordId);
+						const messageId = identityMap.messages.get(status.messageId);
+						const submissionId = identityMap.submissions.get(
+							status.submissionId
+						);
+						if (
+							recordId !== undefined &&
+							messageId !== undefined &&
+							submissionId !== undefined
+						) {
+							const statusOperationId = `fork-submission-status-${entry.envelope.sequence}`;
+							const historyEntryId = sessionHistoryEntryIdForOperation(
 								targetSessionId,
-								createdIntent,
-								error
+								statusOperationId
+							);
+							appendLine(
+								createSessionLogEvent({
+									operationId: statusOperationId,
+									payload: {
+										activeLeafId: historyEntryId,
+										historyEntryId,
+										messageId,
+										parentEntryId: activeLeafId,
+										recordId,
+										status: "processed",
+										submissionId,
+									},
+									previousHash,
+									sequence: nextSequence,
+									sessionId: targetSessionId,
+									timestamp: entry.envelope.timestamp,
+									type: "submission.status-updated",
+								})
+							);
+							activeLeafId = historyEntryId;
+						}
+						continue;
+					}
+					if (entry.envelope.type === "compaction.committed") {
+						const sourceCompaction = parseSessionCompactionPayload(
+							entry.envelope.payload
+						);
+						const compaction = remappedCompactions.get(sourceCompaction.id);
+						if (compaction !== undefined) {
+							const operationId = `compaction-${compaction.id}`;
+							const historyEntryId = sessionHistoryEntryIdForOperation(
+								targetSessionId,
+								operationId
+							);
+							appendLine(
+								createSessionLogEvent({
+									operationId,
+									payload: {
+										...compaction,
+										activeLeafId: historyEntryId,
+										historyEntryId,
+										parentEntryId: activeLeafId,
+									},
+									previousHash,
+									sequence: nextSequence,
+									sessionId: targetSessionId,
+									timestamp: entry.envelope.timestamp,
+									type: "compaction.committed",
+								})
+							);
+							activeLeafId = historyEntryId;
+						}
+						continue;
+					}
+					if (entry.envelope.type === "context.edited") {
+						const edit = parseSessionContextEditPayload(entry.envelope.payload);
+						const targetId = identityMap.messages.get(edit.targetId);
+						if (targetId !== undefined) {
+							const editOperationId = isFailedAttemptContextEdit(
+								edit.operationId
+							)
+								? `${FAILED_ATTEMPT_CONTEXT_EDIT_OPERATION_PREFIX}fork-${entry.envelope.sequence}`
+								: `fork-context-${entry.envelope.sequence}`;
+							const historyEntryId = sessionHistoryEntryIdForOperation(
+								targetSessionId,
+								editOperationId
+							);
+							appendLine(
+								createSessionLogEvent({
+									operationId: editOperationId,
+									payload: {
+										...edit,
+										activeLeafId: historyEntryId,
+										historyEntryId,
+										operationId: editOperationId,
+										parentEntryId: activeLeafId,
+										targetId,
+									},
+									previousHash,
+									sequence: nextSequence,
+									sessionId: targetSessionId,
+									timestamp: entry.envelope.timestamp,
+									type: "context.edited",
+								})
+							);
+							activeLeafId = historyEntryId;
+						}
+						continue;
+					}
+					if (entry.envelope.type === "session.metadata-updated") {
+						appendLine(
+							createSessionLogEvent({
+								operationId: `fork-metadata-${entry.envelope.sequence}`,
+								payload: entry.envelope.payload,
+								previousHash,
+								sequence: nextSequence,
+								sessionId: targetSessionId,
+								timestamp: entry.envelope.timestamp,
+								type: "session.metadata-updated",
+							})
+						);
+					}
+				}
+				const logBytes = new Uint8Array(nextOffset);
+				let byteOffset = 0;
+				for (const line of logLines) {
+					logBytes.set(line, byteOffset);
+					byteOffset += line.byteLength;
+				}
+				const targetState = decodeSessionLog(targetSessionId, logBytes);
+				const createdEntry = targetState.entries[1];
+				if (createdEntry === undefined) {
+					throw new SessionForkError(
+						"session_checkpoint_invalid",
+						"Staged fork is missing its creation checkpoint.",
+						sourceSessionId,
+						operationId
+					);
+				}
+				const createdIntent: SessionWriteIntent &
+					Readonly<{ timestamp: string }> = {
+					expectedOffset: 0,
+					operationDigest: creationDigest(creationPayload),
+					operationId: createdOperationId,
+					sequence: 1,
+					sessionId: targetSessionId,
+					timestamp: createdAt,
+					type: "session.created",
+					workspaceId: projection.workspaceId,
+				};
+				if (pendingTargetIntent !== undefined) {
+					assertSameSessionWriteIntent(
+						pendingTargetIntent,
+						createdIntent,
+						targetSessionId
+					);
+				}
+				const canonicalRoot = await fs.realpath(logRoot);
+				const forkIntentCandidate: SessionForkIntent = {
+					checkpointRecordId: checkpoint.recordId,
+					operationDigest,
+					operationId,
+					sourceSessionId,
+					targetSessionId,
+					version: 1,
+				};
+				let forkIntentCreated = false;
+				let publicationAttempted = false;
+				let published = false;
+				let staged: StagedSessionLog | undefined;
+				try {
+					let durableForkIntent = operationIntent;
+					if (durableForkIntent === undefined) {
+						durableForkIntent = await withSessionCatalogLifecycleGate(
+							canonicalRoot,
+							async () => {
+								const existing = await sessionLog.readForkIntent(
+									operationId,
+									sourceSessionId
+								);
+								if (
+									existing !== undefined &&
+									(existing.sourceSessionId !== sourceSessionId ||
+										existing.checkpointRecordId !== checkpoint.recordId ||
+										existing.operationDigest !== operationDigest ||
+										existing.targetSessionId !== targetSessionId)
+								) {
+									throw new SessionForkError(
+										"session_operation_conflict",
+										"Session fork operation ID was reused for a different source or checkpoint.",
+										sourceSessionId,
+										operationId
+									);
+								}
+								if (existing !== undefined) {
+									return existing;
+								}
+								forkIntentCreated = true;
+								const created = await sessionLog.writeForkIntent(
+									forkIntentCandidate,
+									sourceSessionId
+								);
+								if (!Bun.deepEquals(created, forkIntentCandidate, true)) {
+									throw new SessionForkError(
+										"session_operation_conflict",
+										"Session fork operation ID was reused for a different source or checkpoint.",
+										sourceSessionId,
+										operationId
+									);
+								}
+								return created;
+							}
+						);
+					}
+					if (durableForkIntent.targetSessionId !== targetSessionId) {
+						throw new SessionForkError(
+							"session_operation_conflict",
+							"Session fork operation ID was reused for a different target.",
+							sourceSessionId,
+							operationId
+						);
+					}
+					const stagedLog = await stageSessionLog(
+						canonicalRoot,
+						targetSessionId,
+						createdOperationId,
+						logBytes,
+						fileIo
+					);
+					staged = stagedLog;
+					await sessionLog.writeIntent(createdIntent);
+					await withSessionCatalogLifecycleGate(canonicalRoot, async () => {
+						await checkDeletedMarker(targetSessionId);
+						if (projection.isBoundToAnotherWorkspace(targetSessionId)) {
+							throw new SessionForkError(
+								"session_operation_conflict",
+								"Fork target belongs to another Workspace.",
+								sourceSessionId,
+								operationId
 							);
 						}
-						if (forkIntentCreated && !publicationAttempted) {
-							try {
-								await clearSessionWriteIntent(logRoot, createdIntent, fileIo);
-								await withSessionCatalogLifecycleGate(canonicalRoot, () =>
-									clearSessionForkIntent(
-										logRoot,
-										forkIntentCandidate,
-										sourceSessionId,
-										fileIo
-									)
-								);
-							} catch (cleanupError) {
-								throw new SessionLogError(
-									"session_log_write_indeterminate",
-									targetSessionId,
-									"Fork failed before publication, but its operation intent could not be cleared.",
-									{ cause: cleanupError, operationId }
-								);
-							}
+						publicationAttempted = true;
+						await sessionLog.publishStaged(stagedLog, targetLogPath, () => {
+							published = true;
+						});
+						projection.bindSessionToWorkspace(targetSessionId);
+					});
+					const publishedLog = await readLog(targetLogPath, targetSessionId);
+					await syncAndVerifyLogPrefix(
+						targetLogPath,
+						publishedLog.bytes,
+						targetSessionId,
+						fileIo
+					);
+					try {
+						await ensureDurableReceipt(
+							logRoot,
+							targetSessionId,
+							createdEntry,
+							fileIo
+						);
+						await sessionLog.clearWriteIntent(createdIntent);
+					} catch (error) {
+						throw indeterminateLogWriteError(
+							targetSessionId,
+							createdIntent,
+							error
+						);
+					}
+					let projectionReady = true;
+					try {
+						projection.projectEntries(
+							targetSessionId,
+							publishedLog.state.entries,
+							publishedLog.state,
+							projection.getCursor(targetSessionId)
+						);
+					} catch {
+						projectionReady = sessionProjectionMatchesState(
+							projection.getCursor(targetSessionId),
+							publishedLog.state,
+							projection.getMaintenanceState().generation
+						);
+					}
+					const forkedEntry = publishedLog.state.entries.find(
+						({ envelope }) =>
+							envelope.type === "session.forked" &&
+							envelope.operationId === forkOperationLogId
+					);
+					if (forkedEntry?.envelope.type !== "session.forked") {
+						throw new SessionLogError(
+							"session_log_corrupt",
+							targetSessionId,
+							"Published fork is missing its provenance checkpoint.",
+							{ operationId }
+						);
+					}
+					return {
+						created: true,
+						id: targetSessionId,
+						checkpoint: {
+							recordId: checkpointRecord.id,
+							sequence: checkpointEntry.envelope.sequence,
+							turnId: checkpointRecord.turnId,
+						},
+						writeOutcome: toForkReceipt(
+							forkedEntry,
+							operationId,
+							projectionReady ? "ready" : "blocked"
+						),
+					};
+				} catch (error) {
+					if (published) {
+						if (
+							error instanceof SessionLogError &&
+							error.code === "session_operation_conflict"
+						) {
+							throw error;
 						}
-						throw error;
-					} finally {
-						if (staged !== undefined) {
-							await fs
-								.rm(staged.filePath, { force: true })
-								.catch(() => undefined);
+						throw indeterminateLogWriteError(
+							targetSessionId,
+							createdIntent,
+							error
+						);
+					}
+					if (forkIntentCreated && !publicationAttempted) {
+						try {
+							await sessionLog.clearWriteIntent(createdIntent);
+							await withSessionCatalogLifecycleGate(canonicalRoot, () =>
+								clearSessionForkIntent(
+									logRoot,
+									forkIntentCandidate,
+									sourceSessionId,
+									fileIo
+								)
+							);
+						} catch (cleanupError) {
+							throw new SessionLogError(
+								"session_log_write_indeterminate",
+								targetSessionId,
+								"Fork failed before publication, but its operation intent could not be cleared.",
+								{ cause: cleanupError, operationId }
+							);
 						}
 					}
-				};
-				return sourceWriterAlreadyHeld
-					? await forkWithSourceWriter()
-					: await withTemporaryWriter(sourceSessionId, forkWithSourceWriter);
-			}
-		);
+					throw error;
+				} finally {
+					if (staged !== undefined) {
+						await fs
+							.rm(staged.filePath, { force: true })
+							.catch(() => undefined);
+					}
+				}
+			};
+			return sourceWriterAlreadyHeld
+				? await forkWithSourceWriter()
+				: await withTemporaryWriter(sourceSessionId, forkWithSourceWriter);
+		});
 	};
 	const forkSession: SessionLifecycle["forkSession"] = (
 		sourceSessionId,
@@ -10487,7 +7634,7 @@ export const createSessionJsonlStore = (
 
 	const getSessionForkProvenance: SessionLifecycle["getSessionForkProvenance"] =
 		async (sessionId) => {
-			await ensureBoundSessionProjectedIfStale(sessionId);
+			await (await projected.open(sessionId)).atHead();
 			return withSessionCatalogLifecycleGate(logRoot, async () => {
 				await checkDeletedMarker(sessionId);
 				const { state } = await readLog(
@@ -10506,11 +7653,7 @@ export const createSessionJsonlStore = (
 				}
 				try {
 					await checkDeletedMarker(provenance.sourceSessionId);
-					const sourceLog = await readLogForProjection(
-						resolveSessionLogFilePath(
-							await fs.realpath(logRoot),
-							provenance.sourceSessionId
-						),
+					const sourceLog = await sessionLog.readWithRetry(
 						provenance.sourceSessionId
 					);
 					return {
@@ -10528,8 +7671,7 @@ export const createSessionJsonlStore = (
 	const getOrCreateSessionForkActionId: SessionLifecycle["getOrCreateSessionForkActionId"] =
 		async (sourceSessionId, checkpoint) =>
 			withSessionCatalogLifecycleGate(logRoot, async () => {
-				const existing = await readSessionForkAction(
-					logRoot,
+				const existing = await sessionLog.readForkAction(
 					sourceSessionId,
 					checkpoint
 				);
@@ -10542,12 +7684,7 @@ export const createSessionJsonlStore = (
 					sourceSessionId,
 					version: 1,
 				};
-				const created = await writeSessionForkAction(
-					logRoot,
-					candidate,
-					checkpoint,
-					fileIo
-				);
+				const created = await sessionLog.writeForkAction(candidate, checkpoint);
 				if (
 					created.sourceSessionId !== sourceSessionId ||
 					created.checkpointRecordId !== checkpoint.recordId
@@ -10581,9 +7718,11 @@ export const createSessionJsonlStore = (
 			options.readPoint === undefined
 				? undefined
 				: decodeSessionHistoryReadPointToken(options.readPoint);
-		if (requestedReadPoint === undefined) {
-			await ensureBoundSessionProjectedIfStale(sessionId);
-		}
+		const handle = await projected.open(sessionId);
+		const view =
+			requestedReadPoint === undefined
+				? await handle.atHead()
+				: await handle.at(requestedReadPoint);
 		return withSessionCatalogLifecycleGate(logRoot, async () => {
 			assertSessionStatisticsWorkspaceBinding(
 				sessionId,
@@ -10603,58 +7742,56 @@ export const createSessionJsonlStore = (
 				}
 				throw error;
 			}
-			const statisticsProjection =
-				projectionStore.readSessionStatisticsProjection(
+			return await view.read(async () => {
+				const statisticsProjection =
+					projectionStore.readSessionStatisticsProjection(
+						sessionId,
+						requestedReadPoint,
+						options.turnId
+					);
+				const forkProvenance =
+					statisticsProjection.forkProvenance === undefined
+						? undefined
+						: toSessionForkProvenance(statisticsProjection.forkProvenance);
+				const { state } = await sessionLog.read(sessionId);
+				const historyTree = buildSessionHistoryTreeEntries(
+					state,
 					sessionId,
-					requestedReadPoint,
-					options.turnId
+					statisticsProjection.readPoint.readPointSequence
 				);
-			const forkProvenance =
-				statisticsProjection.forkProvenance === undefined
-					? undefined
-					: toSessionForkProvenance(statisticsProjection.forkProvenance);
-			const logPath = resolveSessionLogFilePath(
-				await fs.realpath(logRoot),
-				sessionId
-			);
-			const { state } = await readLog(logPath, sessionId);
-			const historyTree = buildSessionHistoryTreeEntries(
-				state,
-				sessionId,
-				statisticsProjection.readPoint.readPointSequence
-			);
-			const selectedPath: SessionStatisticsHistoryPath = {
-				compactionIds: new Set(
-					historyTree.entries.flatMap((entry) =>
-						entry.kind === "compaction" && entry.selectedPath
-							? [String(entry.compactionId)]
-							: []
-					)
-				),
-				recordIds: new Set(
-					historyTree.entries.flatMap((entry) =>
-						entry.kind === "record" && entry.selectedPath
-							? [String(entry.recordId)]
-							: []
-					)
-				),
-			};
-			return buildSessionStatistics({
-				compactions: statisticsProjection.compactions,
-				inheritedCompactionIds: new Set(
-					forkProvenance?.inheritedCompactionIds.map(String) ?? []
-				),
-				inheritedRecordIds: new Set(
-					forkProvenance?.inheritedRecordIds.map(String) ?? []
-				),
-				inheritedUsage: forkProvenance?.inheritedUsage,
-				readPoint: encodeSessionPageToken(statisticsProjection.readPoint),
-				records: statisticsProjection.records,
-				selectedPath,
-				sessionId,
-				summary: statisticsProjection.summary,
-				...(options.turnId === undefined ? {} : { turnId: options.turnId }),
-				usageEntries: statisticsProjection.usageEntries,
+				const selectedPath: SessionStatisticsHistoryPath = {
+					compactionIds: new Set(
+						historyTree.entries.flatMap((entry) =>
+							entry.kind === "compaction" && entry.selectedPath
+								? [String(entry.compactionId)]
+								: []
+						)
+					),
+					recordIds: new Set(
+						historyTree.entries.flatMap((entry) =>
+							entry.kind === "record" && entry.selectedPath
+								? [String(entry.recordId)]
+								: []
+						)
+					),
+				};
+				return buildSessionStatistics({
+					compactions: statisticsProjection.compactions,
+					inheritedCompactionIds: new Set(
+						forkProvenance?.inheritedCompactionIds.map(String) ?? []
+					),
+					inheritedRecordIds: new Set(
+						forkProvenance?.inheritedRecordIds.map(String) ?? []
+					),
+					inheritedUsage: forkProvenance?.inheritedUsage,
+					readPoint: encodeSessionPageToken(statisticsProjection.readPoint),
+					records: statisticsProjection.records,
+					selectedPath,
+					sessionId,
+					summary: statisticsProjection.summary,
+					...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+					usageEntries: statisticsProjection.usageEntries,
+				});
 			});
 		});
 	};
@@ -10726,12 +7863,8 @@ export const createSessionJsonlStore = (
 		if (!projection.isBoundToWorkspace(sessionId)) {
 			return;
 		}
-		const marker = await readDeletedMarker(logRoot, sessionId);
-		const pendingIntent = await readSessionWriteIntent(
-			logRoot,
-			sessionId,
-			fileIo
-		);
+		const marker = await sessionLog.readDeletedMarker(sessionId);
+		const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 		if (marker === undefined && pendingIntent?.type !== "session.deleted") {
 			return;
 		}
@@ -10740,17 +7873,6 @@ export const createSessionJsonlStore = (
 			throw Object.assign(new Error(issue.message), {
 				code: issue.code,
 				sessionId,
-			});
-		}
-	};
-
-	const ensureDeletedSessionsReconciled = async (): Promise<void> => {
-		const issues = await reconcileDeletedSessions();
-		const firstIssue = issues[0];
-		if (firstIssue !== undefined) {
-			throw Object.assign(new Error(firstIssue.message), {
-				code: firstIssue.code,
-				sessionId: firstIssue.sessionId,
 			});
 		}
 	};
@@ -10795,7 +7917,7 @@ export const createSessionJsonlStore = (
 	const projectRebuildSession = async (sessionId: SessionId): Promise<void> => {
 		const root = await fs.realpath(logRoot);
 		const logPath = resolveSessionLogFilePath(root, sessionId);
-		const { bytes, state } = await readLogForProjection(logPath, sessionId);
+		const { bytes, state } = await sessionLog.readWithRetry(sessionId);
 		if (
 			state.entries.some(({ envelope }) => envelope.type === "session.deleted")
 		) {
@@ -10805,8 +7927,14 @@ export const createSessionJsonlStore = (
 				"Session deletion must be reconciled before projection rebuild."
 			);
 		}
-		await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
-		await reconcileVisibleWriteIntent(sessionId, logPath, bytes, state);
+		await sessionLog.syncPrefix(logPath, bytes, sessionId);
+		await sessionLog.reconcileVisibleWriteIntent(
+			sessionId,
+			logPath,
+			bytes,
+			state,
+			projection.workspaceId
+		);
 		const cursor = projection.getCursor(sessionId);
 		projection.projectEntries(
 			sessionId,
@@ -10815,11 +7943,7 @@ export const createSessionJsonlStore = (
 			cursor,
 			"maintenance"
 		);
-		assertProjectionAtLogHead(
-			sessionId,
-			projection.getCursor(sessionId),
-			state
-		);
+		projected.assertAtHead(sessionId, projection.getCursor(sessionId), state);
 		await releaseReconciledAttachmentLeases(sessionId, state);
 		const creationLease = pendingCreationAttachmentLeases.get(sessionId);
 		if (
@@ -10869,11 +7993,7 @@ export const createSessionJsonlStore = (
 			submissionId
 		);
 		if (match === undefined) {
-			const unresolvedIntent = await readSessionWriteIntent(
-				logRoot,
-				sessionId,
-				fileIo
-			);
+			const unresolvedIntent = await sessionLog.readWriteIntent(sessionId);
 			if (
 				unresolvedIntent !== undefined &&
 				!state.entries.some(
@@ -10897,7 +8017,7 @@ export const createSessionJsonlStore = (
 		let projectionStatus: SessionWriteReceipt["projection"] = "blocked";
 		try {
 			if (
-				projectionMatchesState(
+				sessionProjectionMatchesState(
 					projection.getCursor(sessionId),
 					state,
 					projection.getMaintenanceState().generation
@@ -10909,7 +8029,7 @@ export const createSessionJsonlStore = (
 			// The Session log remains authoritative when the SQLite cursor is unreadable.
 		}
 		try {
-			await ensureDurableReceipt(logRoot, sessionId, match.entry, fileIo);
+			await sessionLog.ensureReceipt(sessionId, match.entry);
 		} catch (error) {
 			if (
 				error instanceof SessionLogError &&
@@ -10932,16 +8052,22 @@ export const createSessionJsonlStore = (
 	): Promise<SessionSubmissionRecordReceipt | undefined> => {
 		await reconcileDeletedSessionIfNeeded(sessionId);
 		return await withTemporaryWriter(sessionId, async () => {
-			assertProjectionReady(sessionId);
+			projected.ready(sessionId);
 			await checkDeletedMarker(sessionId);
 			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(logRoot),
 				sessionId
 			);
-			const { bytes, state } = await readLogForProjection(logPath, sessionId);
-			await syncAndVerifyLogPrefix(logPath, bytes, sessionId, fileIo);
+			const { bytes, state } = await sessionLog.readWithRetry(sessionId);
+			await sessionLog.syncPrefix(logPath, bytes, sessionId);
 			try {
-				await reconcileVisibleWriteIntent(sessionId, logPath, bytes, state);
+				await sessionLog.reconcileVisibleWriteIntent(
+					sessionId,
+					logPath,
+					bytes,
+					state,
+					projection.workspaceId
+				);
 			} catch (error) {
 				if (
 					!(
@@ -11031,329 +8157,3 @@ export const createSessionJsonlStore = (
 		withSessionBundleImport: importSessionBundle,
 	};
 };
-
-type SessionDeletionReceipt = Readonly<{
-	entryHash: string;
-	operationId: string;
-	sequence: number;
-}>;
-
-function deletionReceiptFromEntry(
-	entry: SessionLogEntry
-): SessionDeletionReceipt {
-	if (entry.envelope.type !== "session.deleted") {
-		throw new Error("Session reset did not produce a deletion event.");
-	}
-	return {
-		entryHash: entry.envelope.entryHash,
-		operationId: entry.envelope.operationId,
-		sequence: entry.envelope.sequence,
-	};
-}
-
-type SessionDeletionMarker = SessionDeletionReceipt &
-	Readonly<{ logId: string }>;
-
-type SessionImportActivationMarker = Readonly<{
-	activationOperationId: string;
-	bundleIdentity: string;
-	cutHash: string;
-	cutSequence: number;
-	logId: string;
-	sessionId: SessionId;
-	version: 1;
-	workspaceId: WorkspaceId;
-}>;
-
-const sessionImportActivationMarkerPath = async (
-	logRoot: string,
-	sessionId: SessionId
-): Promise<string> =>
-	path.join(
-		await sessionControlRoot(logRoot),
-		"imports",
-		`${validSessionId(sessionId)}.json`
-	);
-
-const readSessionImportActivationMarker = async (
-	logRoot: string,
-	sessionId: SessionId
-): Promise<SessionImportActivationMarker | undefined> => {
-	const markerPath = await sessionImportActivationMarkerPath(
-		logRoot,
-		sessionId
-	);
-	let markerText: string;
-	try {
-		markerText = await readUtf8File(markerPath);
-	} catch (error) {
-		if (isCode(error, "ENOENT")) {
-			return;
-		}
-		throw error;
-	}
-	let value: unknown;
-	try {
-		value = JSON.parse(markerText) as unknown;
-	} catch (error) {
-		throw new SessionBundleImportConflictError(
-			"Session import activation marker is invalid.",
-			{ cause: error }
-		);
-	}
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new SessionBundleImportConflictError(
-			"Session import activation marker is invalid."
-		);
-	}
-	const marker = value as Record<string, unknown>;
-	const expectedKeys = [
-		"activationOperationId",
-		"bundleIdentity",
-		"cutHash",
-		"cutSequence",
-		"logId",
-		"sessionId",
-		"version",
-		"workspaceId",
-	].sort();
-	if (
-		Object.keys(marker).sort().join("\0") !== expectedKeys.join("\0") ||
-		marker.version !== 1 ||
-		marker.sessionId !== sessionId ||
-		typeof marker.workspaceId !== "string" ||
-		marker.workspaceId.length === 0 ||
-		typeof marker.logId !== "string" ||
-		marker.logId.length === 0 ||
-		typeof marker.activationOperationId !== "string" ||
-		!isValidSessionLogIdentifier(marker.activationOperationId) ||
-		typeof marker.bundleIdentity !== "string" ||
-		!SESSION_LOG_HASH_PATTERN.test(marker.bundleIdentity) ||
-		typeof marker.cutHash !== "string" ||
-		!SESSION_LOG_HASH_PATTERN.test(marker.cutHash) ||
-		typeof marker.cutSequence !== "number" ||
-		!Number.isSafeInteger(marker.cutSequence) ||
-		marker.cutSequence < 1
-	) {
-		throw new SessionBundleImportConflictError(
-			"Session import activation marker is invalid."
-		);
-	}
-	return {
-		activationOperationId: marker.activationOperationId,
-		bundleIdentity: marker.bundleIdentity,
-		cutHash: marker.cutHash,
-		cutSequence: marker.cutSequence,
-		logId: marker.logId,
-		sessionId,
-		version: 1,
-		workspaceId: toWorkspaceId(marker.workspaceId),
-	};
-};
-
-const writeSessionImportActivationMarker = async (
-	logRoot: string,
-	marker: SessionImportActivationMarker,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const controlRoot = await sessionControlRoot(logRoot);
-	const importRoot = path.join(controlRoot, "imports");
-	await ensureDirectoryDurable(controlRoot, 0o700, fileIo);
-	await ensureDirectoryDurable(importRoot, 0o700, fileIo);
-	const markerPath = await sessionImportActivationMarkerPath(
-		logRoot,
-		marker.sessionId
-	);
-	const temporaryPath = `${markerPath}.${randomUUIDv7()}.tmp`;
-	let handle: fs.FileHandle | undefined;
-	try {
-		handle = await fs.open(temporaryPath, "wx", 0o600);
-		const bytes = new TextEncoder().encode(
-			`${encodeCanonicalSessionJson(marker)}\n`
-		);
-		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
-		await syncFile(temporaryPath, handle, fileIo);
-		await handle.close();
-		handle = undefined;
-		try {
-			await publishSessionFileNoReplaceDurably(
-				temporaryPath,
-				markerPath,
-				async (directory) => await syncDirectory(directory, fileIo),
-				fileIo.syncDirectory !== undefined
-			);
-		} catch (error) {
-			if (!isCode(error, "EEXIST")) {
-				throw error;
-			}
-			const existing = await readSessionImportActivationMarker(
-				logRoot,
-				marker.sessionId
-			);
-			if (
-				existing === undefined ||
-				existing.bundleIdentity !== marker.bundleIdentity ||
-				existing.workspaceId !== marker.workspaceId ||
-				existing.logId !== marker.logId ||
-				existing.cutHash !== marker.cutHash ||
-				existing.cutSequence !== marker.cutSequence
-			) {
-				throw new SessionBundleImportConflictError(
-					"A durable Session import activation marker conflicts with this bundle."
-				);
-			}
-		}
-		await fs.rm(temporaryPath, { force: true });
-		await syncDirectoryAfterDurablePublication(importRoot, fileIo);
-	} catch (error) {
-		await handle?.close().catch(() => undefined);
-		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-		throw error;
-	}
-};
-
-const removeSessionImportActivationMarker = async (
-	logRoot: string,
-	sessionId: SessionId,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const markerPath = await sessionImportActivationMarkerPath(
-		logRoot,
-		sessionId
-	);
-	await removeSessionFileDurably(
-		markerPath,
-		await sessionControlRoot(logRoot),
-		async (directory) => await syncDirectory(directory, fileIo)
-	);
-};
-
-const readDeletedMarker = async (
-	logRoot: string,
-	sessionId: SessionId
-): Promise<SessionDeletionMarker | undefined> => {
-	const markerPath = path.join(
-		await sessionControlRoot(logRoot),
-		"deleted",
-		`${validSessionId(sessionId)}.json`
-	);
-	let markerText: string;
-	try {
-		markerText = await fs.readFile(markerPath, "utf8");
-	} catch (error) {
-		if (isCode(error, "ENOENT")) {
-			return;
-		}
-		throw error;
-	}
-	const value = JSON.parse(markerText) as {
-		entryHash?: unknown;
-		logId?: unknown;
-		operationId?: unknown;
-		sequence?: unknown;
-		sessionId?: unknown;
-	};
-	if (
-		value.sessionId !== sessionId ||
-		value.operationId !== sessionDeletionOperationId(sessionId) ||
-		typeof value.entryHash !== "string" ||
-		!SESSION_LOG_HASH_PATTERN.test(value.entryHash) ||
-		typeof value.logId !== "string" ||
-		value.logId.length === 0 ||
-		typeof value.sequence !== "number" ||
-		!Number.isSafeInteger(value.sequence) ||
-		value.sequence < 2
-	) {
-		throw new SessionLogError(
-			"session_log_corrupt",
-			sessionId,
-			"Session deletion marker is invalid."
-		);
-	}
-	return {
-		entryHash: value.entryHash,
-		logId: value.logId,
-		operationId: value.operationId,
-		sequence: value.sequence,
-	};
-};
-
-const writeDeletedMarker = async (
-	logRoot: string,
-	sessionId: SessionId,
-	logId: string,
-	receipt: SessionDeletionReceipt,
-	fileIo: SessionLogFileIo
-): Promise<void> => {
-	const controlRoot = await sessionControlRoot(logRoot);
-	const deletedRoot = path.join(controlRoot, "deleted");
-	await ensureDirectoryDurable(controlRoot);
-	await ensureDirectoryDurable(deletedRoot);
-	const markerPath = path.join(
-		deletedRoot,
-		`${validSessionId(sessionId)}.json`
-	);
-	const bytes = new TextEncoder().encode(
-		`${encodeCanonicalSessionJson({
-			entryHash: receipt.entryHash,
-			logId,
-			operationId: receipt.operationId,
-			sequence: receipt.sequence,
-			sessionId,
-		})}\n`
-	);
-	const temporaryPath = `${markerPath}.${randomUUIDv7()}.tmp`;
-	let handle: fs.FileHandle | undefined;
-	try {
-		handle = await fs.open(temporaryPath, "wx", 0o600);
-		await writeFully(handle, bytes, 0, temporaryPath, fileIo);
-		await syncFile(temporaryPath, handle, fileIo);
-		await handle.close();
-		handle = undefined;
-		await publishSessionFileNoReplaceDurably(
-			temporaryPath,
-			markerPath,
-			async (directory) => await syncDirectory(directory, fileIo),
-			fileIo.syncDirectory !== undefined
-		);
-	} catch (error) {
-		await handle?.close().catch(() => undefined);
-		if (!isCode(error, "EEXIST")) {
-			throw error;
-		}
-		const existing = await fs.readFile(markerPath);
-		if (!equalBytes(existing, bytes)) {
-			throw new SessionLogError(
-				"session_operation_conflict",
-				sessionId,
-				"A durable Session deletion marker conflicts with its operation."
-			);
-		}
-		const existingHandle = await openFileForSync(markerPath);
-		try {
-			await syncFile(markerPath, existingHandle, fileIo);
-		} finally {
-			await existingHandle.close();
-		}
-		await syncDirectoryAfterDurablePublication(deletedRoot, fileIo);
-	} finally {
-		await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-	}
-};
-
-const indeterminateLogWriteError = (
-	sessionId: SessionId,
-	intent: SessionWriteIntent,
-	cause: unknown
-): SessionLogError =>
-	new SessionLogError(
-		"session_log_write_indeterminate",
-		sessionId,
-		"Session log write outcome is indeterminate; retry the same operation to reconcile it.",
-		{
-			cause,
-			offset: intent.expectedOffset,
-			operationId: intent.operationId,
-			sequence: intent.sequence,
-		}
-	);

@@ -29,3 +29,23 @@ export type SessionWriteReceipt = Extract<
 	SessionWriteOutcome,
 	{ kind: "committed" }
 >;
+
+export class SessionWriteOutcomeError extends Error {
+	readonly code: string;
+	readonly outcome: SessionWriteOutcome;
+
+	constructor(outcome: SessionWriteOutcome, cause?: unknown) {
+		super(
+			outcome.kind === "committed"
+				? "Session log commit is durable, but its SQLite projection or receipt is unavailable."
+				: outcome.error.message,
+			cause === undefined ? undefined : { cause }
+		);
+		this.name = "SessionWriteOutcomeError";
+		this.code =
+			outcome.kind === "committed"
+				? "session_projection_unavailable"
+				: outcome.error.code;
+		this.outcome = outcome;
+	}
+}

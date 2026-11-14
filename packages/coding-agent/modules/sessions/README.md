@@ -227,6 +227,23 @@ only non-hidden `.jsonl` files with valid Session IDs; legacy per-Session
 folders are ignored, not migrated. Deletion unlinks one log file and retains
 its tombstone under `session-control`.
 
+`storage/session-log.ts` owns the write contract: append, verify, reconcile,
+quarantine, durable receipts, and the in-process serial queues keyed by
+**canonical** log root plus Session ID. Two store instances over the same root
+queue instead of racing into the process-owned writer lock, and a symlink alias
+of the root shares the same queue. The module does not depend on the projection.
+
+`storage/projected-session.ts` owns the read contract. A `ProjectedSession`
+handle is minted only by `open(sessionId)`; it binds the Session ID and the
+projection generation and exposes both read modes by name. `atHead()` catches
+the projection up to the authoritative log (or reports
+`session_projection_blocked`) and re-binds the generation after catch-up; the
+returned view runs the projection read. `at(readPoint)` deliberately does not
+catch up, re-checks the captured point immediately before the read, and
+reports `cursor_expired` once it no longer exists. Facet signatures choose the
+mode: a method that accepts a cursor reads at a read point, everything else
+reads at head.
+
 Writable reopen and `wincode sessions verify <session-id> [--json]` use the
 same validated log decoder. Verification is read-only: it does not acquire
 Session Writer authority, sync or truncate the log, or create quarantine files.
@@ -306,6 +323,8 @@ replays them.
 - `plugin-session-state.ts` — durable per-Plugin state.
 - `session-storage.ts` — the six facets as one value, and the shape the factory returns.
 - `session-projection.ts` — internal SQLite seam, joined to the facets by the JSONL store.
+- `session-log.ts` — authoritative JSONL write contract, canonical-root queue registry, intents, receipts, quarantine.
+- `projected-session.ts` — `ProjectedSession` handle, `atHead()`/`at(readPoint)` read modes, projection catch-up.
 - `prompt-history.ts` — workspace prompt history, which is not a Session facet.
 - `get-session-storage.ts` — cached local facet factory.
 - `drizzle-session-store.ts` — Drizzle SQLite implementation.

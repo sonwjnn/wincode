@@ -14,7 +14,7 @@ import {
 	type SessionMessageMetadata,
 	withSubmissionStatus,
 } from "../message";
-import { SessionWriteOutcomeError } from "../storage/session-jsonl-store";
+import { SessionWriteOutcomeError } from "../session-write-outcome";
 import { buildUserSessionRecord } from "../storage/session-record";
 import type { SessionSendInput, SessionSendOutcome } from "../submission-types";
 import { SESSION_SHUT_DOWN_ERROR } from "./session-messages";

@@ -24,10 +24,8 @@ import { findContinuationContextMessages } from "../continuation-context";
 import { isSessionToolPart, type SessionMessage } from "../message";
 import type { CompactionSummaryRetryStatus } from "../session-events";
 import type { SessionWriteOutcome } from "../session-write-outcome";
-import {
-	isCommittedProjectionBlocked,
-	SessionWriteOutcomeError,
-} from "../storage/session-jsonl-store";
+import { SessionWriteOutcomeError } from "../session-write-outcome";
+import { isCommittedProjectionBlocked } from "../storage/session-jsonl-store";
 import type { SessionSendInput } from "../submission-types";
 import { projectSessionRecords } from "../transcript-projection";
 import { createExecutionRegistry } from "./execution-registry";

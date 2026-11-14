@@ -270,6 +270,18 @@ export type SessionProjectionMaintenanceState = Readonly<{
 	status: "ready" | "rebuilding";
 }>;
 
+export const sessionProjectionMatchesState = (
+	cursor: SessionProjectionCursor | undefined,
+	state: SessionLogState,
+	generation: number
+): boolean =>
+	cursor !== undefined &&
+	cursor.generation === generation &&
+	cursor.logId === state.logId &&
+	cursor.nextSequence === state.nextSequence &&
+	cursor.nextByteOffset === state.nextOffset &&
+	cursor.lastHash === state.lastHash;
+
 export const sessionProjectionCursorsEqual = (
 	left: SessionProjectionCursor | undefined,
 	right: SessionProjectionCursor | undefined

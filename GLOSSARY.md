@@ -152,6 +152,12 @@ Phần lịch sử một Session Fork kế thừa từ nguồn, khác với nộ
 **Session Catalog**:
 The local Sessions one workspace holds, used to list and open them: identity, title, pin, model, and last-activity metadata. It is distinct from Stored Session History, which is the contents of one Session, and it never carries a transcript. _Avoid_: Session Store, session list cache
 
+**Session Log**:
+The append-only JSONL file that is the canonical source of one Session's records, metadata, history events, and Plugin entries. It is distinct from the **Session Projection**, the rebuildable SQLite view queried for pages and statistics: a committed log entry survives a projection failure, and a projection is always caught up from the log, never the other way round. `SessionLog` is the module that appends, verifies, reconciles, and quarantines this file. _Avoid_: session storage, Session Store, SQLite history
+
+**Read Point**:
+A minted marker naming the exact log prefix a cursor read promises to return. Reading at a read point deliberately does not catch the projection up to the log head; a rebuild, deletion, or replacement that invalidates the marker reports `cursor_expired` instead of returning another point's page. It is distinct from **head**, which is the current end of the log and the target of every read without a cursor. _Avoid_: cursor position, snapshot version
+
 **Prompt History**:
 A workspace-wide record of the prompts already sent, used for composer recall. It carries no `sessionId`, survives a projection rebuild, and is therefore not part of any one Session's history. _Avoid_: Session Context, Session Transcript, chat history
 

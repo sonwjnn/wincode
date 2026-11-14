@@ -12,10 +12,8 @@ import {
 	resolveLocalSessionProjectionPath,
 	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
-import {
-	createSessionJsonlStore,
-	type SessionLogFileIo,
-} from "@/modules/sessions/storage/session-jsonl-store";
+import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import {
 	createFakeProviderCollection,

@@ -32,12 +32,12 @@ import {
 	isSessionRecord,
 	SessionLogError,
 } from "@/modules/sessions/storage/session-jsonl-codec";
-import type { SessionLogFileIo } from "@/modules/sessions/storage/session-jsonl-store";
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type {
 	SessionForkCheckpoint,
 	SessionForkResult,
 } from "@/modules/sessions/storage/session-lifecycle";
+import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { acquireSessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";

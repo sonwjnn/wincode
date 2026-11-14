@@ -24,10 +24,8 @@ import {
 	decodeSessionLog,
 	encodeSessionLogLine,
 } from "@/modules/sessions/storage/session-jsonl-codec";
-import {
-	createSessionJsonlStore,
-	type SessionLogFileIo,
-} from "@/modules/sessions/storage/session-jsonl-store";
+import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionId } from "@/shared/identifiers";
 import {

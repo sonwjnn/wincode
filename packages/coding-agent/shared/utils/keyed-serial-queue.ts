@@ -1,5 +1,12 @@
+export type KeyedSerialQueue = Readonly<{
+	run: <Result>(
+		key: string,
+		operation: () => Promise<Result>
+	) => Promise<Result>;
+}>;
+
 /** Serializes asynchronous operations independently for each string key. */
-export const createKeyedSerialQueue = () => {
+export const createKeyedSerialQueue = (): KeyedSerialQueue => {
 	const tails = new Map<string, Promise<void>>();
 
 	return {
