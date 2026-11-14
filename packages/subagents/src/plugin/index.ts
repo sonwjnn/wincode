@@ -111,7 +111,10 @@ export const createSubagentsPluginFactory = (
 			if (context.sessionSdk !== undefined) {
 				sessionSdks.set(context.sessionId, context.sessionSdk);
 			}
-			getActiveCoordinator().onSessionStart(context);
+			// The hook is awaited by the plugin runtime, so recovery stays
+			// fire-and-forget here: tests and callers that need a settled start
+			// await the coordinator method directly.
+			void getActiveCoordinator().onSessionStart(context);
 		});
 		plugin.onSessionShutdown((context) => {
 			sessionSdks.delete(context.sessionId);

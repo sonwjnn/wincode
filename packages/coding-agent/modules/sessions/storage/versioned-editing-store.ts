@@ -31,6 +31,23 @@ import {
 const SNAPSHOT_BLOB_PREFIX = "v1";
 const FILE_VERSION_PATTERN = /^[0-9a-f]{32}$/u;
 const SNAPSHOT_PRUNE_GRACE_MS = 30_000;
+
+export type FileObservationClock = Readonly<{
+	delay: (milliseconds: number) => Promise<void>;
+	now: () => number;
+	onInterval: (callback: () => void, milliseconds: number) => () => void;
+}>;
+
+const systemClock: FileObservationClock = {
+	delay: async (milliseconds) => {
+		await Bun.sleep(milliseconds);
+	},
+	now: () => Date.now(),
+	onInterval: (callback, milliseconds) => {
+		const handle = setInterval(callback, milliseconds);
+		return () => clearInterval(handle);
+	},
+};
 const SQLITE_TRANSIENT_ERROR_PATTERN =
 	/(?:SQLITE_BUSY|SQLITE_LOCKED|database is locked)/iu;
 
@@ -211,7 +228,8 @@ const snapshotReferenceKey = (pathName: string, fileVersion: string): string =>
 
 const pruneUnreferencedSnapshots = async (
 	db: SessionDatabase,
-	snapshotRoot: string
+	snapshotRoot: string,
+	clock: FileObservationClock
 ): Promise<void> => {
 	const referenced = new Set(
 		db
@@ -240,7 +258,7 @@ const pruneUnreferencedSnapshots = async (
 		) {
 			continue;
 		}
-		if (Date.now() - timestamp(snapshot.createdAt) < SNAPSHOT_PRUNE_GRACE_MS) {
+		if (clock.now() - timestamp(snapshot.createdAt) < SNAPSHOT_PRUNE_GRACE_MS) {
 			continue;
 		}
 		db.delete(fileSnapshot)
@@ -327,9 +345,6 @@ const PATH_LEASE_WAIT_MS = 25;
 const PATH_LEASE_MAX_WAIT_MS = 5000;
 const PATH_LEASE_HEARTBEAT_MS = 10_000;
 
-const delay = async (milliseconds: number): Promise<void> => {
-	await Bun.sleep(milliseconds);
-};
 const pathLeaseTimeout = (canonicalPath: string): CodingToolError =>
 	new CodingToolError(
 		"path-lease-timeout",
@@ -397,11 +412,12 @@ const releasePathLease = (
 const acquirePathLease = async (
 	db: SessionDatabase,
 	canonicalPath: string,
-	ownerToken: string
+	ownerToken: string,
+	clock: FileObservationClock
 ): Promise<void> => {
-	const deadline = Date.now() + PATH_LEASE_MAX_WAIT_MS;
+	const deadline = clock.now() + PATH_LEASE_MAX_WAIT_MS;
 	while (true) {
-		const now = Date.now();
+		const now = clock.now();
 		let row: { ownerToken: string } | undefined;
 		try {
 			db.delete(fileLease).where(lt(fileLease.expiresAt, now)).run();
@@ -423,24 +439,24 @@ const acquirePathLease = async (
 			if (!isTransientSqliteError(error)) {
 				throw error;
 			}
-			if (Date.now() >= deadline) {
+			if (clock.now() >= deadline) {
 				throw pathLeaseTimeout(canonicalPath);
 			}
-			await delay(PATH_LEASE_WAIT_MS);
+			await clock.delay(PATH_LEASE_WAIT_MS);
 			continue;
 		}
 		if (row?.ownerToken === ownerToken) {
 			return;
 		}
-		if (Date.now() >= deadline) {
+		if (clock.now() >= deadline) {
 			throw pathLeaseTimeout(canonicalPath);
 		}
-		await delay(PATH_LEASE_WAIT_MS);
+		await clock.delay(PATH_LEASE_WAIT_MS);
 	}
 };
 
 const withPersistentPathLeases =
-	(db: SessionDatabase): PathLeaseOperation =>
+	(db: SessionDatabase, clock: FileObservationClock): PathLeaseOperation =>
 	async <T>(
 		paths: readonly string[],
 		operation: (assertLease: LeaseAssertion) => Promise<T>
@@ -454,8 +470,8 @@ const withPersistentPathLeases =
 				throw pathLeaseLost(lostPath);
 			}
 		};
-		const heartbeat = setInterval(() => {
-			const expiresAt = Date.now() + PATH_LEASE_DURATION_MS;
+		const stopHeartbeat = clock.onInterval(() => {
+			const expiresAt = clock.now() + PATH_LEASE_DURATION_MS;
 			for (const acquiredPath of acquired) {
 				if (!renewPathLease(db, acquiredPath, ownerToken, expiresAt)) {
 					lostPath ??= acquiredPath;
@@ -464,13 +480,13 @@ const withPersistentPathLeases =
 		}, PATH_LEASE_HEARTBEAT_MS);
 		try {
 			for (const canonicalPath of orderedPaths) {
-				await acquirePathLease(db, canonicalPath, ownerToken);
+				await acquirePathLease(db, canonicalPath, ownerToken, clock);
 				acquired.push(canonicalPath);
 			}
 			assertLease();
 			return await operation(assertLease);
 		} finally {
-			clearInterval(heartbeat);
+			stopHeartbeat();
 			for (const canonicalPath of acquired.reverse()) {
 				releasePathLease(db, canonicalPath, ownerToken);
 			}
@@ -487,7 +503,8 @@ const withSnapshotStoreLock = <T>(
 export const createDrizzleFileObservationStore = (
 	db: SessionDatabase,
 	snapshotRoot: string,
-	workspaceId?: string
+	workspaceId?: string,
+	clock: FileObservationClock = systemClock
 ): FileObservationStore => {
 	const recovery =
 		workspaceId === undefined
@@ -595,7 +612,7 @@ export const createDrizzleFileObservationStore = (
 		},
 		pruneSnapshots: async () =>
 			withSnapshotStoreLock(lockKey, () =>
-				pruneUnreferencedSnapshots(db, snapshotRoot)
+				pruneUnreferencedSnapshots(db, snapshotRoot, clock)
 			),
 		saveObservation: async (observation) => {
 			db.insert(fileObservation)
@@ -654,7 +671,7 @@ export const createDrizzleFileObservationStore = (
 		},
 		withSnapshotTransaction: (operation) =>
 			withSnapshotStoreLock(lockKey, operation),
-		withPathLeases: withPersistentPathLeases(db),
+		withPathLeases: withPersistentPathLeases(db, clock),
 		recovery,
 	};
 };

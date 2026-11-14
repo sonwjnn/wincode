@@ -185,7 +185,11 @@ for (const factoryCase of providerFactories) {
 	});
 
 	const knownModelId = factoryCase.expectedModelIds[0];
-	if (knownModelId !== undefined) {
+	if (knownModelId === undefined) {
+		test(`${factoryCase.providerId} publishes no static model identities only because it discovers them`, () => {
+			expect(factoryCase.discoverable).toBe(true);
+		});
+	} else {
 		test(`${factoryCase.providerId} requires credentials for a published model before transport`, async () => {
 			const transport = createFakeTransport();
 			const provider = factoryCase.create(transport.fetch);

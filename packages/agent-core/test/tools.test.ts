@@ -130,9 +130,9 @@ describe("Tool Registry", () => {
 	test("require returns the definition or throws an invariant violation", () => {
 		const registry = createToolRegistry([readDefinition]);
 		expect(registry.require("read")).toBe(readDefinition);
-		expect(() => registry.require("write")).toThrow(AgentInvariantError);
 		try {
 			registry.require("write");
+			expect.unreachable();
 		} catch (error) {
 			expect(error).toBeInstanceOf(AgentInvariantError);
 			expect((error as AgentInvariantError).cause).toBe("write");

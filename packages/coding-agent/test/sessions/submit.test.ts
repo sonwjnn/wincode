@@ -84,6 +84,22 @@ const createDependencies = (
 	selections: overrides.selections ?? [],
 });
 
+type CapturedSubmission = { skill?: unknown; text: string };
+
+const createSubmissionCapture = () => {
+	const submissions: CapturedSubmission[] = [];
+	return {
+		record: (submission: { skill?: unknown; text: string }) => {
+			submissions.push(
+				submission.skill === undefined
+					? { text: submission.text }
+					: { skill: submission.skill, text: submission.text }
+			);
+		},
+		submissions,
+	};
+};
+
 const submitPrompt = async (
 	dependencies: SubmitDependencies,
 	snapshot: SubmitSnapshot
@@ -97,43 +113,31 @@ const submitPrompt = async (
 
 describe("preparePromptSubmission", () => {
 	test("sends typed command lookalikes as literal prompt text", async () => {
-		const submissions: Array<{ skill?: unknown; text: string }> = [];
+		const captured = createSubmissionCapture();
 		const accepted = await submitPrompt(
 			createDependencies({
 				discoverCustomCommands: async () => [TEST_CUSTOM_COMMAND],
 				discoverSkills: async () => [TEST_SKILL],
-				onSubmit: (submission) => {
-					submissions.push({
-						...("skill" in submission && submission.skill !== undefined
-							? { skill: submission.skill }
-							: {}),
-						text: submission.text,
-					});
-				},
+				onSubmit: captured.record,
 			}),
 			{ ...emptySnapshot(), rawText: "/skill:review focus on auth" }
 		);
 
 		expect(accepted).toBe(true);
-		expect(submissions).toEqual([{ text: "/skill:review focus on auth" }]);
+		expect(captured.submissions).toEqual([
+			{ text: "/skill:review focus on auth" },
+		]);
 	});
 
 	test("activates the leftmost selected Skill and strips every selected marker", async () => {
 		const rawText = "please /skill:audit and /skill:review now";
 		const auditAt = rawText.indexOf("/skill:audit");
 		const reviewAt = rawText.indexOf("/skill:review");
-		const submissions: Array<{ skill?: unknown; text: string }> = [];
+		const captured = createSubmissionCapture();
 		const accepted = await submitPrompt(
 			createDependencies({
 				discoverSkills: async () => [TEST_SKILL, AUDIT_SKILL],
-				onSubmit: (submission) => {
-					submissions.push({
-						...(submission.skill === undefined
-							? {}
-							: { skill: submission.skill }),
-						text: submission.text,
-					});
-				},
+				onSubmit: captured.record,
 				selections: [
 					selection("skill", "audit", "/skill:audit", auditAt),
 					selection("skill", "review", "/skill:review", reviewAt),
@@ -143,7 +147,7 @@ describe("preparePromptSubmission", () => {
 		);
 
 		expect(accepted).toBe(true);
-		expect(submissions).toEqual([
+		expect(captured.submissions).toEqual([
 			{
 				skill: { instructions: AUDIT_SKILL.body, name: "audit" },
 				text: "please and now",
@@ -184,18 +188,11 @@ describe("preparePromptSubmission", () => {
 	});
 
 	test("drops a selection whose marker the user edited", async () => {
-		const submissions: Array<{ skill?: unknown; text: string }> = [];
+		const captured = createSubmissionCapture();
 		const accepted = await submitPrompt(
 			createDependencies({
 				discoverSkills: async () => [TEST_SKILL],
-				onSubmit: (submission) => {
-					submissions.push({
-						...(submission.skill === undefined
-							? {}
-							: { skill: submission.skill }),
-						text: submission.text,
-					});
-				},
+				onSubmit: captured.record,
 				// The tracked range points at a marker the user since edited.
 				selections: [
 					{
@@ -211,7 +208,7 @@ describe("preparePromptSubmission", () => {
 		);
 
 		expect(accepted).toBe(true);
-		expect(submissions).toEqual([{ text: "/skil:review do it" }]);
+		expect(captured.submissions).toEqual([{ text: "/skil:review do it" }]);
 	});
 
 	test("expands a selected Custom Command with the text that follows it", async () => {
@@ -306,18 +303,11 @@ describe("preparePromptSubmission", () => {
 		const token = "[Pasted ~2 lines]";
 		const rawText = `/skill:review ${token}`;
 		const start = rawText.indexOf(token);
-		const submissions: Array<{ skill?: unknown; text: string }> = [];
+		const captured = createSubmissionCapture();
 		const accepted = await submitPrompt(
 			createDependencies({
 				discoverSkills: async () => [TEST_SKILL],
-				onSubmit: (submission) => {
-					submissions.push({
-						...(submission.skill === undefined
-							? {}
-							: { skill: submission.skill }),
-						text: submission.text,
-					});
-				},
+				onSubmit: captured.record,
 				selections: [selection("skill", "review", "/skill:review", 0)],
 			}),
 			{
@@ -335,7 +325,7 @@ describe("preparePromptSubmission", () => {
 		);
 
 		expect(accepted).toBe(true);
-		expect(submissions).toEqual([
+		expect(captured.submissions).toEqual([
 			{
 				skill: { instructions: TEST_SKILL.body, name: "review" },
 				text: "focus on auth",

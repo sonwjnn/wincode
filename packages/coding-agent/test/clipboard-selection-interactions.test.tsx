@@ -91,7 +91,6 @@ test("right-click copies a selection in manual mode", async () => {
 	try {
 		await act(async () => {
 			await setup.mockMouse.click(1, 0, MouseButtons.RIGHT);
-			await Bun.sleep(20);
 		});
 		await flush(setup);
 
@@ -107,7 +106,6 @@ test("right-click does not copy in select mode", async () => {
 	try {
 		await act(async () => {
 			await setup.mockMouse.click(1, 0, MouseButtons.RIGHT);
-			await Bun.sleep(20);
 		});
 		await flush(setup);
 
@@ -126,7 +124,6 @@ test("right-click defers to a dialog keyboard layer", async () => {
 	try {
 		await act(async () => {
 			await setup.mockMouse.click(1, 0, MouseButtons.RIGHT);
-			await Bun.sleep(20);
 		});
 		await flush(setup);
 
@@ -141,7 +138,6 @@ test("the copy shortcut copies a selection in manual mode", async () => {
 	try {
 		await act(async () => {
 			pressCopyShortcut(setup);
-			await Bun.sleep(20);
 		});
 		await flush(setup);
 
@@ -157,7 +153,6 @@ test("the copy shortcut copies a selected range without clearing it", async () =
 	try {
 		await act(async () => {
 			pressCopyShortcut(setup);
-			await Bun.sleep(20);
 		});
 		await flush(setup);
 
@@ -173,13 +168,11 @@ test("Escape clears a selection and typing clears a non-editor selection", async
 	try {
 		await act(async () => {
 			setup.mockInput.pressEscape();
-			await Bun.sleep(20);
 		});
 		expect(clears()).toBe(1);
 
 		await act(async () => {
 			setup.mockInput.pressKey("a");
-			await Bun.sleep(20);
 		});
 		expect(clears()).toBe(2);
 	} finally {
@@ -195,13 +188,11 @@ test("selection keys run before other global key handlers without swallowing typ
 	try {
 		await act(async () => {
 			pressCopyShortcut(setup);
-			await Bun.sleep(20);
 		});
 		expect(probeCalls).toBe(0);
 
 		await act(async () => {
 			setup.mockInput.pressKey("a");
-			await Bun.sleep(20);
 		});
 		expect(probeCalls).toBe(1);
 	} finally {
@@ -220,7 +211,6 @@ test("selection keys defer to a dialog keyboard layer", async () => {
 		await act(async () => {
 			setup.mockInput.pressEscape();
 			pressCopyShortcut(setup);
-			await Bun.sleep(20);
 		});
 
 		expect(clipboard.writes).toEqual([]);

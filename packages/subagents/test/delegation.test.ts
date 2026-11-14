@@ -33,7 +33,7 @@ const unavailableAgentCatalog = {
 const taskCoordinator = {
 	getTaskForChild: () => null,
 	onSessionShutdown: async () => undefined,
-	onSessionStart: () => undefined,
+	onSessionStart: async () => undefined,
 	settleTask: async () => false,
 	startTask: async () => {
 		throw new Error("Unavailable agents must not start child tasks.");

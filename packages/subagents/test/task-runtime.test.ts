@@ -78,11 +78,9 @@ test("a durable Subagents report is idempotently delivered through the public Se
 				};
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
+		await getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
 			pluginSessionContext(sessionSdk)
 		);
-		await deliveryAttempted.promise;
-		await Bun.sleep(0);
 
 		expect(deliveries).toEqual([
 			{
@@ -125,8 +123,7 @@ test("concurrent task completions deliver durable reports in FIFO order", async 
 			},
 		});
 		const coordinator = getSubagentsTaskCoordinator(taskStore, pluginFactory);
-		coordinator.onSessionStart(pluginSessionContext(sessionSdk));
-		await Bun.sleep(0);
+		await coordinator.onSessionStart(pluginSessionContext(sessionSdk));
 
 		const firstTask = taskStore.createTask({
 			id: toDelegationTaskId("task-z"),
@@ -192,11 +189,9 @@ test("a rejected SDK delivery leaves the durable report available for retry", as
 				return { reason: "Parent is unavailable.", rejected: true };
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
+		await getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
 			pluginSessionContext(sessionSdk)
 		);
-		await deliveryAttempted.promise;
-		await Bun.sleep(0);
 
 		expect(taskStore.listPendingReports(parentSessionId)).toEqual([report]);
 	} finally {
@@ -241,7 +236,7 @@ test("active Subagents tasks do not pin the parent Session view and cancel on sh
 		},
 	});
 	const coordinator = getSubagentsTaskCoordinator(taskStore, pluginFactory);
-	coordinator.onSessionStart(pluginSessionContext(parentSdk));
+	await coordinator.onSessionStart(pluginSessionContext(parentSdk));
 
 	try {
 		const started = await coordinator.startTask({
@@ -308,7 +303,7 @@ test("task persistence uses the child runtime's capability ceiling snapshot", as
 	});
 	const coordinator = getSubagentsTaskCoordinator(taskStore, pluginFactory);
 	const context = pluginSessionContext(parentSdk);
-	coordinator.onSessionStart(context);
+	await coordinator.onSessionStart(context);
 
 	try {
 		const startingTask = coordinator.startTask({
@@ -351,7 +346,7 @@ test("awaiting-report children survive recovery and parent shutdown for explicit
 		});
 		const context = pluginSessionContext(sessionSdk);
 		const coordinator = getSubagentsTaskCoordinator(taskStore, pluginFactory);
-		coordinator.onSessionStart(context);
+		await coordinator.onSessionStart(context);
 
 		expect(childRecoveryStarted).toBe(false);
 		expect(taskStore.getTask(task.id)).toMatchObject({
@@ -419,10 +414,9 @@ test("recovery marks an abandoned child interrupted without auto-continuing it",
 				};
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
+		await getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
 			pluginSessionContext(parentSdk)
 		);
-		await deliveryAttempted.promise;
 
 		expect(openOptions).toEqual({ autoContinue: false, view: true });
 		expect(runtimeOptions).toEqual({
@@ -456,10 +450,9 @@ test("recovery reports an interrupted task when its child Session cannot be reop
 				throw new Error("Parent Session is unavailable.");
 			},
 		});
-		getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
+		await getSubagentsTaskCoordinator(taskStore, pluginFactory).onSessionStart(
 			pluginSessionContext(sessionSdk)
 		);
-		await reportDeliveryAttempted.promise;
 
 		expect(taskStore.getTask(task.id)).toMatchObject({
 			outcome: {

@@ -58,12 +58,28 @@ import {
 } from "./tools";
 import type { AgentTurn, AgentTurnMessage, AgentTurnPart } from "./turn";
 
+export type RuntimeClock = Readonly<{
+	now: () => number;
+	sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+}>;
+
+const systemClock: RuntimeClock = {
+	now: () => Date.now(),
+	sleep: async (delayMs, signal) => {
+		// Bun.sleep cannot cancel its timer; abort must also release the backoff resource.
+		await sleep(delayMs, undefined, signal === undefined ? {} : { signal });
+	},
+};
+
 export type AgentRuntimeOptions = Readonly<{
 	/** Direct public SDK invocation; model identity carries no authorization. */
 	providerCollection: ProviderCollection;
+	/** Test seam: defaults to the system clock and a real cancellable sleep. */
+	clock?: RuntimeClock;
 }>;
 
 type AgentModelInvocation = Readonly<{
+	clock: RuntimeClock;
 	providerCollection: ProviderCollection;
 }>;
 
@@ -533,10 +549,11 @@ const toAgentTurnTerminalEvent = (
 	turn: AgentTurn,
 	error: unknown,
 	sequence: number,
+	clock: RuntimeClock,
 	usage?: ModelUsage
 ): AgentTurnTerminalEvent => ({
 	failure: resolveTerminalFailure(error, turn),
-	finishedAt: Date.now(),
+	finishedAt: clock.now(),
 	sequence,
 	turnId: turn.id,
 	type: "agent-turn-failed",
@@ -553,6 +570,7 @@ export const createAgentRuntime = (
 	options: AgentRuntimeOptions
 ): AgentRuntime => {
 	const invocation: AgentModelInvocation = {
+		clock: options.clock ?? systemClock,
 		providerCollection: options.providerCollection,
 	};
 	const run = (
@@ -702,6 +720,7 @@ const failureForIncompleteCompletion = (
 	completion: ProviderGenerationCompletion,
 	turn: AgentTurn,
 	sequence: number,
+	clock: RuntimeClock,
 	usage: ModelUsage | undefined
 ):
 	| Extract<AgentTurnTerminalEvent, { type: "agent-turn-failed" }>
@@ -722,7 +741,7 @@ const failureForIncompleteCompletion = (
 			retry: "never",
 			source: "model",
 		}),
-		finishedAt: Date.now(),
+		finishedAt: clock.now(),
 		sequence,
 		turnId: turn.id,
 		type: "agent-turn-failed",
@@ -1173,7 +1192,7 @@ const recoverModelStepFailure = async function* (
 			kind: "stopped",
 		};
 	}
-	const retryAt = Date.now() + decision.delayMs;
+	const retryAt = options.invocation.clock.now() + decision.delayMs;
 	const retryStatus = {
 		attempt: attempt + 1,
 		maxAttempts: maxRetries,
@@ -1190,8 +1209,7 @@ const recoverModelStepFailure = async function* (
 	});
 	notifyRetryStatus(decision.policy, retryStatus);
 	try {
-		// Bun.sleep cannot cancel its timer; abort must also release the backoff resource.
-		await sleep(decision.delayMs, undefined, { signal: options.signal });
+		await options.invocation.clock.sleep(decision.delayMs, options.signal);
 	} catch (sleepError) {
 		const sleepFailure = resolveTerminalFailure(sleepError, options.turn);
 		yield retryEndedEvent(options, {
@@ -1250,6 +1268,7 @@ const finishModelStepRetrySequence = async function* (
 		output.completion,
 		options.turn,
 		0,
+		options.invocation.clock,
 		output.usage
 	);
 	if (incompleteFailure !== undefined) {
@@ -1650,6 +1669,7 @@ const prepareModelStepHistory = async (
 
 type ProcessModelStepOutputOptions = BuildChatRequestOptions &
 	Readonly<{
+		clock: RuntimeClock;
 		emit: EventEmitter;
 		modelStepObserver?: AgentRuntimeRunOptions["modelStepObserver"];
 		output: ModelStepOutput;
@@ -1669,6 +1689,7 @@ type ProcessModelStepOutputResult = Readonly<{
 
 const processModelStepOutput = async function* ({
 	cacheWarming,
+	clock,
 	emit,
 	modelMessages,
 	modelStepObserver,
@@ -1719,7 +1740,7 @@ const processModelStepOutput = async function* ({
 		yield emit(
 			terminalEventWithAttempts(
 				{
-					finishedAt: Date.now(),
+					finishedAt: clock.now(),
 					sequence: emit.nextSequence(),
 					turnId: turn.id,
 					type: "agent-turn-completed",
@@ -1750,7 +1771,7 @@ const processModelStepOutput = async function* ({
 		yield emit(
 			terminalEventWithAttempts(
 				{
-					finishedAt: Date.now(),
+					finishedAt: clock.now(),
 					sequence: emit.nextSequence(),
 					turnId: turn.id,
 					type: "agent-turn-completed",
@@ -1855,7 +1876,7 @@ const runLoop = async function* ({
 								retry: "never",
 								source: "runtime",
 							}),
-							finishedAt: Date.now(),
+							finishedAt: invocation.clock.now(),
 							sequence: emit.nextSequence(),
 							turnId: turn.id,
 							type: "agent-turn-failed",
@@ -1902,6 +1923,7 @@ const runLoop = async function* ({
 				output.completion,
 				turn,
 				emit.nextSequence(),
+				invocation.clock,
 				sumUsage(totalUsage, output.usage)
 			);
 			if (incompleteFailure !== undefined) {
@@ -1913,6 +1935,7 @@ const runLoop = async function* ({
 			const stepResult = yield* processModelStepOutput({
 				attemptHistory,
 				cacheWarming,
+				clock: invocation.clock,
 				emit,
 				modelMessages,
 				modelStepObserver,
@@ -1974,7 +1997,7 @@ const runAgentTurn = async function* (
 		yield emit({
 			agentId: turn.agent.id,
 			sequence: emit.nextSequence(),
-			startedAt: Date.now(),
+			startedAt: invocation.clock.now(),
 			turnId: turn.id,
 			type: "agent-turn-started",
 		});
@@ -2044,6 +2067,7 @@ const runAgentTurn = async function* (
 						turn,
 						cause,
 						emit.nextSequence(),
+						invocation.clock,
 						executionFailure?.usage
 					),
 					attemptHistory

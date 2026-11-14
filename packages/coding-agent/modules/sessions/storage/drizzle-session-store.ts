@@ -135,7 +135,10 @@ import {
 	type UpdateSessionSubmissionInput,
 } from "./session-store";
 import { acquireSessionWriterLock } from "./session-writer-lock";
-import { createDrizzleFileObservationStore } from "./versioned-editing-store";
+import {
+	createDrizzleFileObservationStore,
+	type FileObservationClock,
+} from "./versioned-editing-store";
 
 const createSessionId = (): SessionId => toSessionId(randomUUIDv7());
 const createCompactionId = (): CompactionId => toCompactionId(randomUUIDv7());
@@ -480,6 +483,7 @@ const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
 export type DrizzleSessionStoreOptions = {
 	attachmentRoot?: string;
 	attachmentStore?: SessionAttachmentStore;
+	clock?: FileObservationClock;
 	operationalDatabase?: SessionDatabase;
 	sessionLogRoot?: string;
 	snapshotRoot?: string;
@@ -1999,7 +2003,8 @@ export const createDrizzleSessionStore = (
 	const fileObservationStore = createDrizzleFileObservationStore(
 		operationalDb,
 		snapshotRoot,
-		workspace.id
+		workspace.id,
+		options.clock
 	);
 	let attachmentCollectionBarrier: (() => Promise<void>) | undefined;
 	const collectAttachments = async (
