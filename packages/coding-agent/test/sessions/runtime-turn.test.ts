@@ -447,6 +447,31 @@ test("places the Skill context before the user message it was selected for", () 
 	]);
 });
 
+test("delivers the volatile environment context beside the user message, not in the system instructions", () => {
+	const turn = buildAgentTurn({
+		agent: agentId("build"),
+		modelMessages: [
+			{
+				id: sessionMessageId("environment-message"),
+				parts: [{ text: "Check the tree", type: "text" }],
+				role: "user",
+			},
+		],
+		model: createTurn().model,
+		resolvedAgent: buildAgent,
+		systemInstructions: "Stable instructions",
+		turnId: agentTurnId("turn-environment-context"),
+		volatileContext:
+			"<untrusted-environment-context>\n- branch: main\n</untrusted-environment-context>",
+	});
+
+	expect(turn.agent.instructions).toBe("Stable instructions");
+	expect(turn.input.messages.map(({ id }) => id)).toEqual([
+		sessionMessageId("environment-context"),
+		sessionMessageId("environment-message"),
+	]);
+});
+
 test("appends the Skill context when the current user message is absent", () => {
 	const turn = buildAgentTurn({
 		agent: agentId("build"),

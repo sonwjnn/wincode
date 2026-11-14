@@ -14,4 +14,5 @@ export * from "./runtime";
 export * from "./skill-activation";
 export * from "./stateful-agent";
 export * from "./tools";
+export * from "./transient-context";
 export * from "./turn";

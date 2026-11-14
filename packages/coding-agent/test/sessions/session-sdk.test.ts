@@ -1550,18 +1550,25 @@ test("public Session SDK drives multiple Agent Model Steps through exact Provide
 		expect(requests[0]?.tools?.map(({ name }) => name)).toContain("read");
 		expect(requests[1]?.messages.map(({ role }) => role)).toEqual([
 			"user",
+			"user",
 			"assistant",
 			"tool",
 			"tool",
 		]);
-		expect(requests[1]?.messages[1]).toMatchObject({
+		expect(requests[1]?.messages[0]).toMatchObject({
+			content: [
+				{ text: expect.stringContaining("<untrusted-environment-context>") },
+			],
+			role: "user",
+		});
+		expect(requests[1]?.messages[2]).toMatchObject({
 			continuation: { responseId: "sdk-continuation-1" },
 			role: "assistant",
 		});
-		expect(requests[1]?.messages[2]?.content[0]).toMatchObject({
+		expect(requests[1]?.messages[3]?.content[0]).toMatchObject({
 			type: "tool-result",
 		});
-		expect(requests[1]?.messages[3]?.content[0]).toMatchObject({
+		expect(requests[1]?.messages[4]?.content[0]).toMatchObject({
 			type: "tool-failure",
 		});
 

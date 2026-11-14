@@ -228,3 +228,64 @@ test("invalidating context rebases same-ID edits before the next model request",
 	expect(runtimeInputs[1]).toEqual([editedUser, nextUser]);
 	await agent.shutdown();
 });
+
+test("replaces the turn-scoped environment context instead of accumulating it", async () => {
+	const runtimeInputs: (readonly AgentTurnMessage[])[] = [];
+	const runtime: AgentRuntime = {
+		run(turn) {
+			runtimeInputs.push(turn.input.messages);
+			return {
+				async *[Symbol.asyncIterator]() {
+					yield {
+						finishedAt: 1,
+						sequence: 0,
+						turnId: turn.id,
+						type: "agent-turn-completed",
+					};
+				},
+			};
+		},
+	};
+	const agent = createStatefulAgent({ runtime });
+	const firstUser = message("user-1", "user", "first request");
+	const firstEnvironment = message(
+		"environment-context",
+		"user",
+		"status: clean"
+	);
+	await consume(agent.run(buildTurn("turn-1", [firstEnvironment, firstUser])));
+
+	const firstAssistant = message(
+		"assistant-turn-1",
+		"assistant",
+		"response-turn-1"
+	);
+	const secondUser = message("user-2", "user", "second request");
+	const secondEnvironment = message(
+		"environment-context",
+		"user",
+		"status: dirty"
+	);
+	await consume(
+		agent.run(
+			buildTurn("turn-2", [
+				firstUser,
+				firstAssistant,
+				secondEnvironment,
+				secondUser,
+			])
+		)
+	);
+
+	expect(runtimeInputs[0]?.map(({ id }) => id)).toEqual([
+		firstEnvironment.id,
+		firstUser.id,
+	]);
+	expect(runtimeInputs[1]?.map(({ id }) => id)).toEqual([
+		firstUser.id,
+		secondEnvironment.id,
+		secondUser.id,
+	]);
+	expect(agent.getSnapshot().context).toEqual([firstUser, secondUser]);
+	await agent.shutdown();
+});

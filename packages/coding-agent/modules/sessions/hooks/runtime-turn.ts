@@ -18,6 +18,7 @@ import {
 	createAgentTurnAbortEvent,
 	createAgentTurnLifecycle,
 	createOperationalFailure,
+	ENVIRONMENT_CONTEXT_MESSAGE_ID,
 	getAgentTurnFailureDetails,
 	isAgentInvariantError,
 	isToolCallId,
@@ -28,6 +29,7 @@ import {
 	type SessionMessageId,
 	type SessionRecord,
 	type SessionToolCallBatch,
+	SKILL_CONTEXT_MESSAGE_ID,
 	type ToolCallId,
 	type ToolCallOutput,
 	type ToolDefinition,
@@ -588,6 +590,7 @@ export const buildAgentTurn = ({
 	systemInstructions,
 	tools = [],
 	turnId,
+	volatileContext,
 }: {
 	agent: AgentId;
 	modelMessages: readonly SessionMessage[];
@@ -598,20 +601,31 @@ export const buildAgentTurn = ({
 	systemInstructions?: string;
 	tools?: readonly ResolvedTool[];
 	turnId: AgentTurnId;
+	volatileContext?: string;
 }): AgentTurn => {
 	const messages =
 		expandSessionMessagesForModel(modelMessages).flatMap(toAgentTurnMessages);
 	const effectiveRole = role ?? "primary";
+	// Turn-scoped context rides beside the submission's own user message, which
+	// is the last model message; a Skill-only submission records an empty user
+	// message that the model input drops, so the context is appended after
+	// history instead of attaching to a stale message.
+	const transientMessages: (typeof messages)[number][] = [];
+	if (!isUndefined(volatileContext) && volatileContext.length > 0) {
+		transientMessages.push({
+			id: ENVIRONMENT_CONTEXT_MESSAGE_ID,
+			parts: [{ text: volatileContext, type: "text" }],
+			role: "user",
+		});
+	}
 	if (!isUndefined(skill)) {
-		// The Skill context belongs to the submission's own user message, which
-		// is the last model message; a Skill-only submission records an empty
-		// user message that the model input drops, so the context is appended
-		// after history instead of attaching to a stale message.
-		const skillContext = {
-			id: toSessionMessageId("skill-context"),
+		transientMessages.push({
+			id: SKILL_CONTEXT_MESSAGE_ID,
 			parts: [{ text: formatSkillUserContext(skill), type: "text" }],
 			role: "user",
-		} satisfies (typeof messages)[number];
+		});
+	}
+	if (transientMessages.length > 0) {
 		const currentUserMessage = modelMessages.at(-1);
 		const lastMessage = messages.at(-1);
 		if (
@@ -619,9 +633,9 @@ export const buildAgentTurn = ({
 			lastMessage !== undefined &&
 			lastMessage.id === currentUserMessage.id
 		) {
-			messages.splice(messages.length - 1, 0, skillContext);
+			messages.splice(messages.length - 1, 0, ...transientMessages);
 		} else {
-			messages.push(skillContext);
+			messages.push(...transientMessages);
 		}
 	}
 	return {

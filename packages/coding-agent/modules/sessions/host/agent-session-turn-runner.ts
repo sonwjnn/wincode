@@ -483,6 +483,7 @@ export const createAgentSessionTurnRunner = ({
 			systemInstructions: prompt.instructions,
 			tools: availableTools,
 			turnId: execution.turnId,
+			volatileContext: prompt.volatileContext,
 		});
 	};
 	/** Runs one Agent Turn execution and reports its outcome. */

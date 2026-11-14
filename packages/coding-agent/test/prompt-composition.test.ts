@@ -121,13 +121,15 @@ describe("Prompt Composition", () => {
 		const projectIndex = result.instructions.indexOf("Use the package rules.");
 		const stableIndex = result.instructions.indexOf("Stable environment");
 		const toolIndex = result.instructions.indexOf("Available tools");
-		const volatileIndex = result.instructions.indexOf("Volatile environment");
 		expect(baseIndex).toBeGreaterThanOrEqual(0);
 		expect(agentIndex).toBeGreaterThan(baseIndex);
 		expect(projectIndex).toBeGreaterThan(agentIndex);
 		expect(stableIndex).toBeGreaterThan(projectIndex);
 		expect(toolIndex).toBeGreaterThan(stableIndex);
-		expect(volatileIndex).toBeGreaterThan(toolIndex);
+		expect(result.instructions).not.toContain("Volatile environment");
+		expect(result.volatileContext).toContain("Volatile environment");
+		expect(result.volatileContext).toContain("branch: main");
+		expect(result.volatileContext).toContain("status: clean");
 		expect(result.instructions).toContain("&lt;/project-instructions&gt;");
 		expect(result.instructions).toContain("write");
 		expect(result.instructions).not.toContain("inputSchema");
@@ -471,13 +473,13 @@ describe("Prompt Composition", () => {
 			},
 			projectInstructions: project,
 		});
-		const volatileStart = main.instructions.indexOf("Volatile environment");
-		expect(volatileStart).toBeGreaterThan(0);
-		expect(dirty.instructions.slice(0, volatileStart)).toBe(
-			main.instructions.slice(0, volatileStart)
-		);
-		expect(dirty.instructions).toContain("feature");
-		expect(dirty.instructions).toContain("dirty (2 files)");
+		// A working-tree change must not touch the cacheable system instructions:
+		// an explicit provider cache keys on the whole system instruction.
+		expect(dirty.instructions).toBe(main.instructions);
+		expect(main.instructions).not.toContain("Volatile environment");
+		expect(dirty.volatileContext).toContain("branch: feature");
+		expect(dirty.volatileContext).toContain("status: dirty (2 files)");
+		expect(main.volatileContext).toContain("branch: main");
 	});
 
 	test("captures stable and volatile environment without secrets", async () => {

@@ -3,6 +3,7 @@ import {
 	agentTurnAssistantMessageId,
 	createAgentTurnId,
 	isSessionToolCallPart,
+	isTransientContextMessageId,
 	type SessionMessageId,
 	type SessionRecord,
 	type StatefulAgentNextInput,
@@ -210,7 +211,7 @@ const registerCommittedSessionRecord = (
 		record.model === undefined ? [] : projectSessionRecords([record]);
 	let projectedIndex = 0;
 	for (const recordMessage of record.messages) {
-		if (recordMessage.id === "skill-context") {
+		if (isTransientContextMessageId(recordMessage.id)) {
 			continue;
 		}
 		const projectedMessage = projectedMessages[projectedIndex];
@@ -315,7 +316,7 @@ const removeUncommittedSessionRecordMessages = (
 	const uncommittedMessageIds = new Set<SessionMessageId>();
 	const uncommittedToolCallIds = new Set<ToolCallId>();
 	for (const message of record.messages) {
-		if (message.id !== "skill-context") {
+		if (!isTransientContextMessageId(message.id)) {
 			const messageId = toSessionMessageId(message.id);
 			if (!order.committedMessageIds.has(messageId)) {
 				uncommittedMessageIds.add(messageId);

@@ -3,6 +3,7 @@ import {
 	isSessionAttachmentReferencePart,
 	isSessionFileMentionPart,
 	isSessionToolCallPart,
+	isTransientContextMessageId,
 	type SessionMessageMetadataRecord,
 	type SessionMessageRecord,
 	type SessionRecord,
@@ -173,7 +174,7 @@ export const projectSessionMessageRecords = (
 
 const projectRecord = (record: SessionRecord): SessionMessage[] =>
 	record.messages.flatMap((message) => {
-		if (message.id === "skill-context") {
+		if (isTransientContextMessageId(message.id)) {
 			return [];
 		}
 		const projected = toSessionMessage(message, record);

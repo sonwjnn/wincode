@@ -3977,6 +3977,10 @@ test("an SDK Session handle forks its committed terminal checkpoint into a new i
 					text: "Finish the source Agent Turn before creating a fork.",
 				},
 				{ role: "assistant", text: "E2E chat response" },
+				{
+					role: "user",
+					text: expect.stringContaining("<untrusted-environment-context>"),
+				},
 			],
 		});
 	} finally {

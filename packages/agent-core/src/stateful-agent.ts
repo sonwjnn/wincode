@@ -6,6 +6,7 @@ import type {
 	AgentRuntimeRunOptions,
 	AgentTurnEventStream,
 } from "./runtime";
+import { isTransientContextMessageId } from "./transient-context";
 import type {
 	AgentTurn,
 	AgentTurnId,
@@ -536,9 +537,11 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 		contextInvalidated = true;
 	};
 	const prepareRuntimeTurn = (turn: AgentTurn): AgentTurn => {
-		const transientContextId = toSessionMessageId("skill-context");
+		const transientMessages = turn.input.messages.filter((message) =>
+			isTransientContextMessageId(message.id)
+		);
 		const inputMessages = turn.input.messages.filter(
-			(message) => message.id !== transientContextId
+			(message) => !isTransientContextMessageId(message.id)
 		);
 		const inputIds = new Set(inputMessages.map(({ id }) => id));
 		const existingUserIds = new Set(
@@ -564,16 +567,11 @@ export const createStatefulAgent = <TQueuedSubmission = never>({
 			}
 		}
 		const runtimeMessages = [...context];
-		const transientMessage = turn.input.messages.find(
-			(message) => message.id === transientContextId
-		);
-		if (transientMessage !== undefined) {
-			const transientIndex = turn.input.messages.findIndex(
-				(message) => message.id === transientContextId
-			);
+		for (const transientMessage of transientMessages) {
+			const transientIndex = turn.input.messages.indexOf(transientMessage);
 			const followingMessage = turn.input.messages
 				.slice(transientIndex + 1)
-				.find((message) => message.id !== transientContextId);
+				.find((message) => !isTransientContextMessageId(message.id));
 			const followingIndex =
 				followingMessage === undefined
 					? -1

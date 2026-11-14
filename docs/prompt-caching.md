@@ -40,6 +40,24 @@ Wincode adds explicit prompt-cache breakpoints to supported Claude models. The
 default `short` tier uses Anthropic's default five-minute lifetime, while `long`
 selects the documented one-hour TTL.
 
+## Google
+
+For Gemini models whose metadata declares cache TTLs, Wincode creates an
+explicit `CachedContent` resource per logical Session instead of relying on
+provider-managed implicit caching. The resource holds the System Instructions
+and Tool declarations, so a cached-content request may not also send
+`systemInstruction`, `tools`, or `toolConfig`; Gemini rejects that combination.
+A recognized cache-control rejection falls back to one uncached request.
+
+Because the whole System Instruction is the cache unit, anything per-turn in it
+would invalidate the resource. Current Git branch and working-tree status are
+therefore delivered as turn-scoped `<untrusted-environment-context>` user input
+rather than System Prompt text, and the resource survives working-tree changes.
+The remaining identity inputs are the Agent instructions, Project Instructions,
+the stable environment, Tool declarations, the Provider Model, retention, and
+the credential. See
+[Gemini context caching](https://ai.google.dev/gemini-api/docs/caching).
+
 `off` removes Wincode-initiated cache directives, keys, retention options, and
 breakpoints. It is best-effort: OpenAI and Gemini may still apply
 provider-managed implicit caching, which Wincode cannot reliably disable. Prompt caching reuses provider-processed prefixes but does

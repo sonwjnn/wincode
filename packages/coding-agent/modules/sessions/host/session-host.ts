@@ -3,6 +3,7 @@ import {
 	type AgentTurnId,
 	createAgentRuntime,
 	createStatefulAgent,
+	isTransientContextMessageId,
 	type SessionRecord,
 	type StatefulAgent,
 	toSessionMessageId,
@@ -371,7 +372,7 @@ const openSession = async (
 			continue;
 		}
 		for (const message of record.messages) {
-			if (message.role === "user" || message.id === "skill-context") {
+			if (message.role === "user" || isTransientContextMessageId(message.id)) {
 				continue;
 			}
 			const targetId = toSessionMessageId(message.id);
