@@ -11,6 +11,7 @@ import { act, useEffect, useState } from "react";
 import { MarkdownMessagePart } from "@/modules/sessions/ui/messages/markdown-message-part";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import { flushTestRenderer } from "../support/opentui";
 
 /**
  * Grows the rendered text once after mount, matching a live `useAgentSession`
@@ -135,10 +136,7 @@ class SectionTitleTreeSitterClient extends CountingTreeSitterClient {
 
 /** Settles the async highlight/block pass before capturing output. */
 const settleRenders = async (setup: TestRendererSetup): Promise<void> => {
-	for (let index = 0; index < 3; index++) {
-		await Bun.sleep(10);
-		await setup.renderOnce();
-	}
+	await flushTestRenderer(setup, 3);
 };
 
 const foregroundsForText = (

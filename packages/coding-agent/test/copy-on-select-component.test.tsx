@@ -92,7 +92,6 @@ test("a Settings write immediately changes the root selection handler", async ()
 	}
 	await act(async () => {
 		setup.renderer.emit("selection", createSelection("enabled"));
-		await Bun.sleep(20);
 	});
 	await flush(setup);
 	await act(async () => {
@@ -101,7 +100,6 @@ test("a Settings write immediately changes the root selection handler", async ()
 	await flush(setup);
 	await act(async () => {
 		setup.renderer.emit("selection", createSelection("disabled"));
-		await Bun.sleep(20);
 	});
 	await flush(setup);
 	await act(async () => {
@@ -110,7 +108,6 @@ test("a Settings write immediately changes the root selection handler", async ()
 	await flush(setup);
 	await act(async () => {
 		setup.renderer.emit("selection", createSelection("enabled again"));
-		await Bun.sleep(20);
 	});
 	await flush(setup);
 
@@ -156,7 +153,6 @@ test("does not copy until a saved manual preference loads", async () => {
 	await delayedStore.initialReadStarted;
 	await act(async () => {
 		setup.renderer.emit("selection", createSelection("before preference load"));
-		await Bun.sleep(20);
 	});
 	await flush(setup);
 	expect(clipboard.writes).toEqual([]);
@@ -168,7 +164,6 @@ test("does not copy until a saved manual preference loads", async () => {
 	}
 	await act(async () => {
 		setup.renderer.emit("selection", createSelection("saved manual"));
-		await Bun.sleep(20);
 	});
 	await flush(setup);
 

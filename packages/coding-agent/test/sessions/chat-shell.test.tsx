@@ -442,6 +442,9 @@ const renderChatShell = async (
 	return { agent, holder, modelSetterHolder, setup };
 };
 
+// Local variant of `flushTestRenderer`: this harness settles through
+// `renderOnce` alone, so wrapping the shared helper's `waitForVisualIdle` pass
+// here changes the focus state four tests assert on.
 const flushUi = async (setup: TestRendererSetup): Promise<void> => {
 	await Bun.sleep(20);
 	await setup.renderOnce();
@@ -2141,7 +2144,7 @@ describe("ChatShell activity footer", () => {
 			setup.renderer.destroy();
 		}
 	});
-	test("refreshes Provider Model usage metadata after model discovery changes", async () => {
+	test("refreshes Provider Model pricing after model discovery changes", async () => {
 		const selection = {
 			modelId: modelId("provider-context-model"),
 			providerId: "plugin-provider",
@@ -2183,7 +2186,11 @@ describe("ChatShell activity footer", () => {
 		});
 
 		try {
-			const initialFrame = await waitForFrameText(setup, "200K");
+			// The footer renders pricing as `~$0.10` and the context window as
+			// `~0.0%/272k`, so the needles have to be what the frame actually
+			// contains: polling for "200K" never matched, spent the whole 2s budget
+			// twice, and still passed on the price assertions.
+			const initialFrame = await waitForFrameText(setup, "~$0.10");
 			expect(initialFrame).toContain("~$0.10");
 			await act(() => {
 				knownModels = [
@@ -2203,9 +2210,8 @@ describe("ChatShell activity footer", () => {
 					listener();
 				}
 			});
-			const updatedFrame = await waitForFrameText(setup, "300K");
+			const updatedFrame = await waitForFrameText(setup, "~$1.00");
 			expect(updatedFrame).toContain("~$1.00");
-			expect(updatedFrame).not.toContain("200K");
 			expect(updatedFrame).not.toContain("~$0.10");
 		} finally {
 			setup.renderer.destroy();

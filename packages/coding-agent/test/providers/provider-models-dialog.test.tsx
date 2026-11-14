@@ -188,7 +188,6 @@ test("model picker preserves its search, Recent, and provider-group surface", as
 		await flushTestRenderer(setup, 1);
 		await act(async () => {
 			cachedCandidates.resolve(candidates);
-			await Bun.sleep(20);
 		});
 		await flushTestRenderer(setup, 3);
 		await setup.waitForFrame((frame) => frame.includes("gpt-4o"));
@@ -230,7 +229,6 @@ test("refreshes known models in the background after cached models render", asyn
 		await flushTestRenderer(setup, 1);
 		await act(async () => {
 			cachedCandidates.resolve(candidates);
-			await Bun.sleep(20);
 		});
 		await flushTestRenderer(setup, 3);
 		await refreshStarted.promise;
@@ -243,7 +241,6 @@ test("refreshes known models in the background after cached models render", asyn
 				failedProviderIds: [],
 				refreshedProviderIds: ["openai"],
 			});
-			await Bun.sleep(20);
 		});
 		await flushTestRenderer(setup, 3);
 		await setup.waitForFrame((frame) => frame.includes("gpt-5.1"));
@@ -277,7 +274,6 @@ test("cached models stay selectable while the background refresh is pending", as
 		await flushTestRenderer(setup, 1);
 		await act(async () => {
 			cachedCandidates.resolve(candidates);
-			await Bun.sleep(20);
 		});
 		await flushTestRenderer(setup, 3);
 		await refreshStarted.promise;
@@ -285,7 +281,6 @@ test("cached models stay selectable while the background refresh is pending", as
 
 		await act(async () => {
 			setup.mockInput.typeText("gpt-4o");
-			await Bun.sleep(20);
 		});
 		await flushTestRenderer(setup, 2);
 		await act(async () => {

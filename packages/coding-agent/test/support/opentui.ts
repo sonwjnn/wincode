@@ -60,3 +60,28 @@ export const flushTestRenderer = async (
 		});
 	}
 };
+
+/**
+ * Renders until the frame stops changing, so work whose commit is asynchronous
+ * lands before an assertion reads it. Two passes minimum: the first gives an
+ * asynchronous commit a window to land, the second sees whether it did. A
+ * command slower than that needs a wait of its own, which is what the
+ * assertions using it rely on.
+ */
+export const flushTestRendererUntilStable = async (
+	setup: TestRendererSetup,
+	maxAttempts = 50
+): Promise<void> => {
+	await setup.waitForVisualIdle();
+	let previous = captureTestFrame(setup) ?? "";
+	for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+		await Bun.sleep(20);
+		await setup.renderOnce();
+		await setup.waitForVisualIdle();
+		const frame = captureTestFrame(setup) ?? "";
+		if (attempt >= 1 && frame === previous) {
+			return;
+		}
+		previous = frame;
+	}
+};
