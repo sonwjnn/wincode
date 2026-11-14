@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { fromAny } from "@total-typescript/shoehorn";
 import type {
 	LocalMcpServerConfig,
+	McpCatalogSnapshot,
 	McpClient,
 	McpClientResource,
 	McpClientResourceContent,
@@ -136,6 +137,16 @@ const tool = (name: string, description?: string): McpClientTool => ({
 	inputSchema: { type: "object" },
 	...(isUndefined(description) ? {} : { description }),
 });
+
+const contentText = (content: unknown): string => JSON.stringify(content);
+
+const manifestToolName = (snapshot: McpCatalogSnapshot): string => {
+	const [entry] = snapshot.manifest;
+	if (entry === undefined) {
+		throw new Error("Expected the snapshot manifest to expose one tool.");
+	}
+	return entry.name;
+};
 
 const DEFAULT_TIMEOUTS = {
 	startup: 30_000,
@@ -278,7 +289,11 @@ describe("createMcpRegistry", () => {
 			{}
 		);
 		expect(hiddenResult.isError).toBe(true);
-		expect(JSON.stringify(hiddenResult.content)).toContain("Unknown MCP tool");
+		expect(hiddenResult.content).toContainEqual(
+			expect.objectContaining({
+				text: expect.stringContaining("Unknown MCP tool"),
+			})
+		);
 		await registry.close();
 	});
 
@@ -436,7 +451,7 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo")],
 		});
 		const snapshot = await registry.createSnapshot(agentId("build"));
-		const name = snapshot.manifest[0]?.name ?? "";
+		const name = manifestToolName(snapshot);
 		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(false);
 	});
@@ -457,10 +472,12 @@ describe("createMcpRegistry", () => {
 			],
 		});
 		const snapshot = await registry.createSnapshot(agentId("build"));
-		const name = snapshot.manifest[0]?.name ?? "";
+		const name = manifestToolName(snapshot);
 		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(true);
-		expect(JSON.stringify(result.content)).toContain("timed out");
+		expect(result.content).toContainEqual(
+			expect.objectContaining({ text: expect.stringContaining("timed out") })
+		);
 		expect(JSON.stringify(result.content)).not.toContain("AbortError");
 		expect(demo.closeCount).toBeGreaterThan(0);
 		expect(registry.getStatuses()).toEqual(
@@ -486,7 +503,7 @@ describe("createMcpRegistry", () => {
 			],
 		});
 		const snapshot = await registry.createSnapshot(agentId("build"));
-		const name = snapshot.manifest[0]?.name ?? "";
+		const name = manifestToolName(snapshot);
 		const result = await registry.execute(snapshot, name, {});
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).not.toContain("super-secret-token");
@@ -506,7 +523,9 @@ describe("createMcpRegistry", () => {
 			{}
 		);
 		expect(result.isError).toBe(true);
-		expect(JSON.stringify(result.content)).toContain("Unknown");
+		expect(result.content).toContainEqual(
+			expect.objectContaining({ text: expect.stringContaining("Unknown") })
+		);
 	});
 
 	test("rejects snapshots that are no longer current", async () => {
@@ -517,10 +536,12 @@ describe("createMcpRegistry", () => {
 		});
 		const first = await registry.createSnapshot(agentId("build"));
 		await registry.createSnapshot(agentId("build"));
-		const name = first.manifest[0]?.name ?? "";
+		const name = manifestToolName(first);
 		const result = await registry.execute(first, name, {});
 		expect(result.isError).toBe(true);
-		expect(JSON.stringify(result.content)).toContain("stale");
+		expect(result.content).toContainEqual(
+			expect.objectContaining({ text: expect.stringContaining("stale") })
+		);
 	});
 
 	test("reflects list changes in the next snapshot and keeps the old one executable", async () => {
@@ -530,15 +551,15 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo")],
 		});
 		const first = await registry.createSnapshot(agentId("build"));
-		const firstName = first.manifest[0]?.name ?? "";
+		const firstName = manifestToolName(first);
 		demo.publishTools([tool("two")]);
 		const result = await registry.execute(first, firstName, {});
 		expect(result.isError).toBe(false);
 		const second = await registry.createSnapshot(agentId("build"));
 		expect(second.manifest).toHaveLength(1);
-		expect(
-			second.tools.get(second.manifest[0]?.name ?? "")?.originalToolName
-		).toBe("two");
+		expect(second.tools.get(manifestToolName(second))?.originalToolName).toBe(
+			"two"
+		);
 		expect(first.tools.get(firstName)?.originalToolName).toBe("one");
 	});
 
@@ -554,7 +575,7 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo")],
 		});
 		const snapshot = await registry.createSnapshot(agentId("build"));
-		const name = snapshot.manifest[0]?.name ?? "";
+		const name = manifestToolName(snapshot);
 		const pending = registry.execute(snapshot, name, {});
 		demo.publishTools([tool("two")]);
 		await registry.createSnapshot(agentId("build"));
@@ -580,7 +601,7 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo", { type: "remote" })],
 		});
 		const snapshot = await registry.createSnapshot(agentId("same-turn"));
-		const toolName = snapshot.manifest[0]?.name ?? "missing";
+		const toolName = manifestToolName(snapshot);
 		const firstResult = await registry.execute(snapshot, toolName, {
 			request: "first",
 		});
@@ -636,7 +657,7 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo", { type: "remote" })],
 		});
 		const snapshot = await registry.createSnapshot(agentId("same-turn"));
-		const toolName = snapshot.manifest[0]?.name ?? "missing";
+		const toolName = manifestToolName(snapshot);
 
 		const firstResult = await registry.execute(snapshot, toolName, {
 			request: "first",
@@ -647,8 +668,10 @@ describe("createMcpRegistry", () => {
 
 		expect(firstResult.isError).toBe(true);
 		expect(nextResult).toMatchObject({ isError: true });
-		expect(JSON.stringify(nextResult.content) ?? "").toContain(
-			"changed after reconnect"
+		expect(nextResult.content).toContainEqual(
+			expect.objectContaining({
+				text: expect.stringContaining("changed after reconnect"),
+			})
 		);
 		expect(callCount).toBe(1);
 		expect(demo.connectCount).toBe(2);
@@ -675,14 +698,18 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo", { type: "remote" })],
 		});
 		const snapshot = await registry.createSnapshot(agentId("same-turn"));
-		const toolName = snapshot.manifest[0]?.name ?? "missing";
+		const toolName = manifestToolName(snapshot);
 
 		const failedCall = await registry.execute(snapshot, toolName, {});
 		const nextCall = await registry.execute(snapshot, toolName, {});
 
 		expect(failedCall.isError).toBe(true);
 		expect(nextCall.isError).toBe(true);
-		expect(JSON.stringify(nextCall.content)).toContain("reconnect refused");
+		expect(nextCall.content).toContainEqual(
+			expect.objectContaining({
+				text: expect.stringContaining("reconnect refused"),
+			})
+		);
 		expect(JSON.stringify(nextCall.content)).not.toContain(
 			"changed after reconnect"
 		);
@@ -786,6 +813,7 @@ describe("createMcpRegistry", () => {
 				);
 				releases.push(() => resolve());
 			});
+		const secondClientCreated = Promise.withResolvers<void>();
 		const { registry } = harness({
 			configs: [serverConfig("demo")],
 			deps: {
@@ -794,6 +822,7 @@ describe("createMcpRegistry", () => {
 					created.push(client);
 					if (created.length > 1) {
 						client.connectImpl = gatedConnect;
+						secondClientCreated.resolve();
 					}
 					return client;
 				},
@@ -804,7 +833,7 @@ describe("createMcpRegistry", () => {
 		const first = registry.reconnect("demo");
 		const second = registry.reconnect("demo");
 		expect(second).toBe(first);
-		await Bun.sleep(0);
+		await secondClientCreated.promise;
 		expect(created).toHaveLength(2);
 		expect(created[1]?.connectCount).toBe(1);
 		for (const release of releases) {
@@ -826,14 +855,17 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo")],
 		});
 		await registry.initialize();
+		const reconnectStarted = Promise.withResolvers<void>();
 		let releaseReconnect: (() => void) | undefined;
-		demo.connectImpl = () =>
-			new Promise<void>((resolve) => {
+		demo.connectImpl = () => {
+			reconnectStarted.resolve();
+			return new Promise<void>((resolve) => {
 				releaseReconnect = resolve;
 			});
+		};
 
 		const reconnecting = registry.reconnect("demo");
-		await Bun.sleep(0);
+		await reconnectStarted.promise;
 		const toggling = registry.toggle("demo");
 		releaseReconnect?.();
 		await Promise.all([reconnecting, toggling]);
@@ -881,7 +913,7 @@ describe("createMcpRegistry", () => {
 		);
 		const staleResult = await registry.execute(
 			snapshot,
-			snapshot.manifest[0]?.name ?? "",
+			manifestToolName(snapshot),
 			{}
 		);
 		expect(staleResult).toMatchObject({
@@ -1046,6 +1078,8 @@ describe("createMcpRegistry", () => {
 		};
 		let loadCount = 0;
 		let releaseReconnectLoad: (() => void) | undefined;
+		const reconnectLoadStarted = Promise.withResolvers<void>();
+		const refreshLoadStarted = Promise.withResolvers<void>();
 		const clients: FakeMcpClient[] = [];
 		const { registry } = harness({
 			deps: {
@@ -1062,10 +1096,12 @@ describe("createMcpRegistry", () => {
 						return invalidConfig;
 					}
 					if (loadCount === 2) {
+						reconnectLoadStarted.resolve();
 						return new Promise((resolve) => {
 							releaseReconnectLoad = () => resolve(repairedConfig);
 						});
 					}
+					refreshLoadStarted.resolve();
 					return repairedConfig;
 				},
 			},
@@ -1073,9 +1109,9 @@ describe("createMcpRegistry", () => {
 		await registry.initialize();
 
 		const reconnecting = registry.reconnect("websearch");
-		await Bun.sleep(0);
+		await reconnectLoadStarted.promise;
 		const refreshing = registry.initialize();
-		await Bun.sleep(0);
+		await refreshLoadStarted.promise;
 		expect(clients).toHaveLength(0);
 
 		releaseReconnectLoad?.();
@@ -1121,6 +1157,9 @@ describe("createMcpRegistry", () => {
 	test("serializes refresh with an in-flight reconnect for the same server", async () => {
 		let config = serverConfig("demo");
 		let releaseReconnect: (() => void) | undefined;
+		let loadCount = 0;
+		const reconnectConnectStarted = Promise.withResolvers<void>();
+		const refreshLoadStarted = Promise.withResolvers<void>();
 		const created: FakeMcpClient[] = [];
 		const { registry } = harness({
 			deps: {
@@ -1128,26 +1167,31 @@ describe("createMcpRegistry", () => {
 					const client = new FakeMcpClient(server.name, [tool("echo")]);
 					created.push(client);
 					if (created.length === 2) {
-						client.connectImpl = () =>
-							new Promise<void>((resolve) => {
+						client.connectImpl = () => {
+							reconnectConnectStarted.resolve();
+							return new Promise<void>((resolve) => {
 								releaseReconnect = resolve;
 							});
+						};
 					}
 					return client;
 				},
-				loadConfig: async (): Promise<McpConfigResult> => ({
-					diagnostics: [],
-					servers: { demo: config },
-				}),
+				loadConfig: async (): Promise<McpConfigResult> => {
+					loadCount += 1;
+					if (loadCount === 3) {
+						refreshLoadStarted.resolve();
+					}
+					return { diagnostics: [], servers: { demo: config } };
+				},
 			},
 		});
 		await registry.initialize();
 		const reconnecting = registry.reconnect("demo");
-		await Bun.sleep(0);
+		await reconnectConnectStarted.promise;
 		config = serverConfig("demo", { command: ["bun", "x", "demo-next"] });
 
 		const refreshing = registry.initialize();
-		await Bun.sleep(0);
+		await refreshLoadStarted.promise;
 		expect(created).toHaveLength(2);
 
 		releaseReconnect?.();
@@ -1179,7 +1223,12 @@ describe("createMcpRegistry", () => {
 
 	test("disabling aborts an in-flight tool execution", async () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		demo.callImpl = hangingCall();
+		const callStarted = Promise.withResolvers<void>();
+		const hang = hangingCall();
+		demo.callImpl = (name, input, signal) => {
+			callStarted.resolve();
+			return hang(name, input, signal);
+		};
 		const { registry } = harness({
 			clients: { demo },
 			configs: [serverConfig("demo")],
@@ -1187,10 +1236,10 @@ describe("createMcpRegistry", () => {
 		const snapshot = await registry.createSnapshot(agentId("build"));
 		const execution = registry.execute(
 			snapshot,
-			snapshot.manifest[0]?.name ?? "",
+			manifestToolName(snapshot),
 			{}
 		);
-		await Bun.sleep(0);
+		await callStarted.promise;
 
 		await registry.toggle("demo");
 		const result = await execution;
@@ -1203,12 +1252,14 @@ describe("createMcpRegistry", () => {
 
 	test("close awaits in-flight init so the SDK client is closed exactly once", async () => {
 		const created: FakeMcpClient[] = [];
+		const clientCreated = Promise.withResolvers<void>();
 		const { registry } = harness({
 			configs: [serverConfig("demo")],
 			deps: {
 				createClient: (config) => {
 					const client = new FakeMcpClient(config.name, [tool("echo")]);
 					created.push(client);
+					clientCreated.resolve();
 					client.connectImpl = (signal) =>
 						new Promise<void>((_resolve, reject) => {
 							if (signal?.aborted) {
@@ -1224,7 +1275,7 @@ describe("createMcpRegistry", () => {
 			},
 		});
 		const pending = registry.createSnapshot(agentId("build"));
-		await Bun.sleep(0);
+		await clientCreated.promise;
 		expect(created).toHaveLength(1);
 		await registry.close();
 		const snapshot = await pending;
@@ -1234,10 +1285,10 @@ describe("createMcpRegistry", () => {
 
 	test("returns a distinct cancelled result when the caller aborts execution", async () => {
 		const demo = new FakeMcpClient("demo", [tool("echo")]);
-		let callStarted = false;
+		const callStarted = Promise.withResolvers<void>();
 		const hang = hangingCall();
 		demo.callImpl = (name, input, signal) => {
-			callStarted = true;
+			callStarted.resolve();
 			return hang(name, input, signal);
 		};
 		const { registry } = harness({
@@ -1245,16 +1296,17 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo")],
 		});
 		const snapshot = await registry.createSnapshot(agentId("build"));
-		const name = snapshot.manifest[0]?.name ?? "";
+		const name = manifestToolName(snapshot);
 		const controller = new AbortController();
 		const pending = registry.execute(snapshot, name, {}, controller.signal);
-		await Bun.sleep(0);
-		expect(callStarted).toBe(true);
+		await callStarted.promise;
 		controller.abort();
 		const result = await pending;
 		expect(result.isError).toBe(true);
-		const text = JSON.stringify(result.content);
-		expect(text).toContain("cancelled");
+		expect(result.content).toContainEqual(
+			expect.objectContaining({ text: expect.stringContaining("cancelled") })
+		);
+		const text = contentText(result.content);
 		expect(text).not.toContain("timed out");
 		expect(text).not.toContain("closing");
 		expect(demo.closeCount).toBe(0);
@@ -1407,7 +1459,7 @@ describe("createMcpRegistry", () => {
 			configs: [serverConfig("demo")],
 		});
 		const snapshot = await registry.createSnapshot(agentId("build"));
-		const name = snapshot.manifest[0]?.name ?? "";
+		const name = manifestToolName(snapshot);
 		const pending = registry.execute(snapshot, name, {});
 		await registry.close();
 		const result = await pending;
