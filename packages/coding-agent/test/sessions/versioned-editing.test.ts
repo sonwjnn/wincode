@@ -2,13 +2,22 @@ import type { Database as SqliteDatabase } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { eq } from "drizzle-orm";
 import { resolveTurnTools } from "@/modules/sessions/hooks/runtime-turn";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
+import { fileLease } from "@/modules/sessions/storage/schema";
 import type { SessionProjectionStore } from "@/modules/sessions/storage/session-store";
 import {
+	createDrizzleFileObservationStore,
+	type FileObservationClock,
+} from "@/modules/sessions/storage/versioned-editing-store";
+import {
+	CodingToolError,
 	computeFileVersion,
+	FILE_VERSION_ALGORITHM,
 	type FileObservationStore,
+	type FileSnapshot,
 	type FileVersion,
 	getToolResourceLimits,
 	type VersionedEditingContext,
@@ -427,6 +436,167 @@ test("smoke: multi-file artifacts, restart recovery, and a later edit", async ()
 		expect(await Bun.file(firstPath).text()).toBe("FINAL\n");
 	} finally {
 		activeDatabase?.sqlite.close();
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+const advancingClock = (): FileObservationClock => {
+	let now = 0;
+	return {
+		delay: async (milliseconds) => {
+			now += milliseconds;
+		},
+		now: () => now,
+		onInterval: () => () => undefined,
+	};
+};
+
+const leasesOf = (
+	store: FileObservationStore
+): NonNullable<FileObservationStore["withPathLeases"]> => {
+	const { withPathLeases } = store;
+	if (withPathLeases === undefined) {
+		throw new Error("The file observation store must support path leases.");
+	}
+	return withPathLeases;
+};
+
+test("a conflicting edit lease times out instead of waiting forever", async () => {
+	const root = await fs.mkdtemp(
+		path.join(process.cwd(), ".wincode-lease-timeout-")
+	);
+	const databasePath = path.join(root, "sessions.sqlite");
+	const snapshotRoot = path.join(root, "snapshots");
+	const filePath = path.join(root, "note.txt");
+	const holderDatabase = createDatabase(databasePath);
+	const contenderDatabase = createDatabase(databasePath);
+	try {
+		const holder = createDrizzleFileObservationStore(
+			holderDatabase.db,
+			snapshotRoot
+		);
+		const contender = createDrizzleFileObservationStore(
+			contenderDatabase.db,
+			snapshotRoot,
+			undefined,
+			advancingClock()
+		);
+		const holderStarted = Promise.withResolvers<void>();
+		const releaseHolder = Promise.withResolvers<void>();
+		const held = leasesOf(holder)([filePath], async () => {
+			holderStarted.resolve();
+			await releaseHolder.promise;
+		});
+		await holderStarted.promise;
+
+		const error = await leasesOf(contender)(
+			[filePath],
+			async () => undefined
+		).catch((cause: unknown) => cause);
+
+		expect(error).toBeInstanceOf(CodingToolError);
+		expect(error).toMatchObject({
+			code: "path-lease-timeout",
+			recovery: { action: "reread", path: filePath },
+		});
+
+		releaseHolder.resolve();
+		await held;
+	} finally {
+		holderDatabase.sqlite.close();
+		contenderDatabase.sqlite.close();
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("a lease that cannot be renewed is reported before the operation mutates", async () => {
+	const root = await fs.mkdtemp(
+		path.join(process.cwd(), ".wincode-lease-loss-")
+	);
+	const database = createDatabase(path.join(root, "sessions.sqlite"));
+	const filePath = path.join(root, "note.txt");
+	let heartbeat: (() => void) | undefined;
+	const clock: FileObservationClock = {
+		delay: async () => undefined,
+		now: () => 1_700_000_000_000,
+		onInterval: (callback) => {
+			heartbeat = callback;
+			return () => {
+				heartbeat = undefined;
+			};
+		},
+	};
+	try {
+		const store = createDrizzleFileObservationStore(
+			database.db,
+			path.join(root, "snapshots"),
+			undefined,
+			clock
+		);
+
+		const error = await leasesOf(store)([filePath], async (assertLease) => {
+			database.db
+				.delete(fileLease)
+				.where(eq(fileLease.canonicalPath, filePath))
+				.run();
+			heartbeat?.();
+			assertLease();
+		}).catch((cause: unknown) => cause);
+
+		expect(error).toBeInstanceOf(CodingToolError);
+		expect(error).toMatchObject({
+			code: "path-lease-lost",
+			recovery: { action: "reread", path: filePath },
+		});
+	} finally {
+		database.sqlite.close();
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("prunes an unreferenced snapshot only after the prune grace window", async () => {
+	const root = await fs.mkdtemp(path.join(process.cwd(), ".wincode-prune-"));
+	const database = createDatabase(path.join(root, "sessions.sqlite"));
+	const snapshotRoot = path.join(root, "snapshots");
+	let now = 1_700_000_000_000;
+	const clock: FileObservationClock = {
+		delay: async () => undefined,
+		now: () => now,
+		onInterval: () => () => undefined,
+	};
+	try {
+		const store = createDrizzleFileObservationStore(
+			database.db,
+			snapshotRoot,
+			undefined,
+			clock
+		);
+		const bytes = new TextEncoder().encode("prunable\n");
+		const snapshot: FileSnapshot = {
+			algorithm: FILE_VERSION_ALGORITHM,
+			bytes,
+			createdAt: now,
+			fileVersion: computeFileVersion(bytes),
+			lineCount: 1,
+			path: path.join(root, "note.txt"),
+		};
+		const { getSnapshot, pruneSnapshots } = store;
+		if (getSnapshot === undefined || pruneSnapshots === undefined) {
+			throw new Error("The store must support snapshot pruning.");
+		}
+		await store.saveSnapshot(snapshot);
+
+		now += 29_999;
+		await pruneSnapshots();
+		expect(
+			await getSnapshot(snapshot.path, snapshot.fileVersion)
+		).not.toBeNull();
+
+		now += 1;
+		await pruneSnapshots();
+		expect(await getSnapshot(snapshot.path, snapshot.fileVersion)).toBeNull();
+	} finally {
+		database.sqlite.close();
 		await fs.rm(root, { force: true, recursive: true });
 	}
 });
