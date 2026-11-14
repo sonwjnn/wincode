@@ -9,6 +9,8 @@ describe("runtime object predicates", () => {
 		expect(isPlainObject(Object.create(nullPrototype))).toBe(false);
 		expect(isPlainObject(Object.create({ constructor: Object }))).toBe(false);
 		expect(isPlainObject([])).toBe(false);
+		expect(isPlainObject(null)).toBe(false);
+		expect(isPlainObject("object")).toBe(false);
 		expect(isPlainObject(new Date())).toBe(false);
 		expect(isPlainObject(new Map())).toBe(false);
 		expect(isPlainObject(new (class CustomObject {})())).toBe(false);

@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+	isArrayLike,
 	isError,
 	isFiniteNonNegativeNumber,
+	isInteger,
+	isLength,
 	isNonEmptyString,
 	isNonEmptyStringWithinUtf8ByteLimit,
 	isNonNegativeInteger,
+	isNumber,
 	isPositiveInteger,
 	isPositiveSafeInteger,
 	isString,
@@ -38,6 +42,43 @@ describe("runtime scalar predicates", () => {
 		expect(isString(" ")).toBe(true);
 		expect(isString(null)).toBe(false);
 		expect(isString(1)).toBe(false);
+	});
+
+	test("accepts any number including NaN, because it checks only the runtime type", () => {
+		expect(isNumber(1)).toBe(true);
+		expect(isNumber(Number.NaN)).toBe(true);
+		expect(isNumber("1")).toBe(false);
+		expect(isNumber(null)).toBe(false);
+	});
+
+	test("accepts integers beyond the safe range and rejects fractional values", () => {
+		expect(isInteger(0)).toBe(true);
+		expect(isInteger(-3)).toBe(true);
+		expect(isInteger(Number.MAX_SAFE_INTEGER + 1)).toBe(true);
+		expect(isInteger(1.5)).toBe(false);
+		expect(isInteger(Number.NaN)).toBe(false);
+		expect(isInteger(Number.POSITIVE_INFINITY)).toBe(false);
+		expect(isInteger("1")).toBe(false);
+	});
+
+	test("accepts only non-negative safe integers as lengths", () => {
+		expect(isLength(0)).toBe(true);
+		expect(isLength(Number.MAX_SAFE_INTEGER)).toBe(true);
+		expect(isLength(-1)).toBe(false);
+		expect(isLength(1.5)).toBe(false);
+		expect(isLength(Number.MAX_SAFE_INTEGER + 1)).toBe(false);
+		expect(isLength("1")).toBe(false);
+		expect(isLength(undefined)).toBe(false);
+	});
+
+	test("treats strings as array-like but excludes functions and negative lengths", () => {
+		expect(isArrayLike([1, 2])).toBe(true);
+		expect(isArrayLike("abc")).toBe(true);
+		expect(isArrayLike({ length: 2 })).toBe(true);
+		expect(isArrayLike({ length: -1 })).toBe(false);
+		expect(isArrayLike(() => undefined)).toBe(false);
+		expect(isArrayLike(null)).toBe(false);
+		expect(isArrayLike(42)).toBe(false);
 	});
 
 	test("accepts only undefined values", () => {
