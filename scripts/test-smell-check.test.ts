@@ -83,8 +83,51 @@ describe("fixed-wait ratchet", () => {
 		expect(report.findings).toEqual([]);
 		expect(report.scannedFiles).toBe(1);
 		expect(formatFixedWaitReport(report)).toBe(
-			"Fixed-wait ratchet holds across 1 test files."
+			"Fixed-wait ratchet holds across 1 test-tree files."
 		);
+	});
+
+	test("fails a shared test helper that gains a fixed wait", () => {
+		// A wait added to `test/support/*` gates every test file that imports the
+		// helper, so a ratchet that only reads `*.test.*` would let the widest
+		// synchronization guess in the suite grow unseen.
+		const root = createFixtureRoot();
+		writeTestFile(
+			root,
+			"packages/demo/test/chat.test.ts",
+			'import { test } from "bun:test";\ntest("ok", () => {});\n'
+		);
+		writeTestFile(
+			root,
+			"packages/demo/test/support/renderer.ts",
+			"export const flush = async (): Promise<void> => {\n\tawait Bun.sleep(20);\n};\n"
+		);
+
+		const report = evaluateFixedWaits(root, { counts: {}, version: 1 });
+
+		expect(report.findings).toEqual([
+			{
+				baselineCount: 0,
+				count: 1,
+				file: "packages/demo/test/support/renderer.ts",
+				lines: [2],
+			},
+		]);
+		expect(report.scannedFiles).toBe(2);
+	});
+
+	test("ignores helper files outside a package test tree", () => {
+		const root = createFixtureRoot();
+		writeTestFile(
+			root,
+			"packages/demo/src/renderer.ts",
+			"export const flush = async (): Promise<void> => {\n\tawait Bun.sleep(20);\n};\n"
+		);
+
+		const report = evaluateFixedWaits(root, { counts: {}, version: 1 });
+
+		expect(report.findings).toEqual([]);
+		expect(report.scannedFiles).toBe(0);
 	});
 
 	test("rejects a baseline entry that is not a non-negative integer", () => {
@@ -108,9 +151,15 @@ describe("fixed-wait ratchet", () => {
 			"packages/demo/test/clean.test.ts",
 			'import { test } from "bun:test";\ntest("ok", () => {});\n'
 		);
+		writeTestFile(
+			root,
+			"packages/demo/test/support/renderer.ts",
+			"export const flush = async (): Promise<void> => {\n\tawait Bun.sleep(20);\n};\n"
+		);
 
 		expect(collectFixedWaitCounts(root)).toEqual({
 			"packages/demo/test/chat.test.ts": 2,
+			"packages/demo/test/support/renderer.ts": 1,
 		});
 	});
 

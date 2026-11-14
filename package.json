@@ -24,8 +24,9 @@
   "scripts": {
     "build:utils": "bun run --cwd packages/utils build",
     "check-types": "bun run --parallel --filter '*' check-types",
-    "test": "bun --no-env-file run test:scripts && bun --no-env-file scripts/test-portfolio.ts default",
+    "test": "bun --no-env-file run test:scripts && bun --no-env-file run check:test-smells && bun --no-env-file scripts/test-portfolio.ts default",
     "test:scripts": "bun --no-env-file test scripts/*.test.ts",
+    "check:test-smells": "bun --no-env-file scripts/test-smell-check.ts",
     "test:e2e": "bun --no-env-file scripts/test-portfolio.ts e2e",
     "test:tui": "bash scripts/interactive-smoke.sh",
     "sync-provider-model-catalog": "bun run packages/ai/scripts/sync-provider-model-catalog.ts",

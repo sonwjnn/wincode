@@ -215,6 +215,35 @@ export const testsForClassification = (
 ): readonly DiscoveredTestFile[] =>
 	discovery.files.filter((file) => file.classification === classification);
 
+/**
+ * Test-tree files that are not tests: shared renderer/harness/driver helpers.
+ *
+ * They gate the tests that import them, so a fixed wait added here is a
+ * synchronization guess with the same effect as one written in a test file. The
+ * test-file scan does not see them, which is why the fixed-wait ratchet covers
+ * both kinds of file.
+ */
+export const discoverTestSupportFiles = (root: string): readonly string[] => {
+	const absoluteRoot = path.resolve(root);
+	const files: string[] = [];
+	walk(absoluteRoot, "packages", (relativePath) => {
+		const normalizedPath = normalizePath(relativePath);
+		if (!normalizedPath.includes("/test/")) {
+			return;
+		}
+		const fileName = normalizedPath.split("/").at(-1) ?? normalizedPath;
+		const extension = fileName.split(".").at(-1) ?? "";
+		if (!Object.hasOwn(SUPPORTED_EXTENSIONS, extension)) {
+			return;
+		}
+		if (isTestLikeFile(fileName)) {
+			return;
+		}
+		files.push(normalizedPath);
+	});
+	return files.sort(compareStableStrings);
+};
+
 export const groupTestsByPackage = (
 	files: readonly DiscoveredTestFile[]
 ): ReadonlyMap<string, readonly DiscoveredTestFile[]> => {

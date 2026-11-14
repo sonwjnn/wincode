@@ -1,17 +1,26 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { compareStableStrings, discoverTests } from "./test-discovery";
+import {
+	compareStableStrings,
+	discoverTestSupportFiles,
+	discoverTests,
+} from "./test-discovery";
 
 /**
- * Fixed-wait ratchet for test files.
+ * Fixed-wait ratchet for the test tree.
  *
  * A fixed wait (`Bun.sleep(20)`, `setTimeout`, `waitForTimeout`) is only a
  * synchronization guess: it passes until the machine is slower or faster than
- * the author assumed. The reviewed suite already contains 124 of them, so a
- * blanket ban would fail every run. Instead the current counts are recorded as
- * a baseline and the check fails only when a file gains new fixed waits. A test
- * that removes a wait lowers the number, and `--update` locks the improvement
- * in.
+ * the author assumed. The reviewed suite already contains a baseline number of
+ * them, so a blanket ban would fail every run. Instead the current counts are
+ * recorded as a baseline and the check fails only when a file gains new fixed
+ * waits. A test that removes a wait lowers the number, and `--update` locks the
+ * improvement in.
+ *
+ * Both test files and the shared helpers under the same `test` tree are
+ * scanned: a wait in `test/support/opentui.ts` gates every file that imports it,
+ * so leaving helpers out let the framework-wide synchronization be a number the
+ * gate never saw.
  */
 
 const FIXED_WAIT_PATTERN = /\b(?:Bun\.sleep|waitForTimeout|setTimeout)\s*\(/g;
@@ -88,16 +97,22 @@ const toRecordedPath = (root: string, filePath: string): string =>
 const toReadablePath = (root: string, filePath: string): string =>
 	path.resolve(root, filePath);
 
+/** Every file the ratchet owns: discovered tests plus shared test-tree helpers. */
+const scannedTestTreeFiles = (root: string): readonly string[] => [
+	...discoverTests(root).files.map((file) => file.path),
+	...discoverTestSupportFiles(root),
+];
+
 export const collectFixedWaitCounts = (
 	root: string
 ): Readonly<Record<string, number>> => {
 	const counts: Record<string, number> = {};
-	for (const discovered of discoverTests(root).files) {
+	for (const relativePath of scannedTestTreeFiles(root)) {
 		const lines = lineNumbersOf(
-			fs.readFileSync(toReadablePath(root, discovered.path), "utf8")
+			fs.readFileSync(toReadablePath(root, relativePath), "utf8")
 		);
 		if (lines.length > 0) {
-			counts[toRecordedPath(root, discovered.path)] = lines.length;
+			counts[toRecordedPath(root, relativePath)] = lines.length;
 		}
 	}
 	return counts;
@@ -108,19 +123,18 @@ export const evaluateFixedWaits = (
 	baseline: FixedWaitBaseline
 ): FixedWaitReport => {
 	const findings: FixedWaitFinding[] = [];
-	let scannedFiles = 0;
-	for (const discovered of discoverTests(root).files) {
-		scannedFiles += 1;
-		const relativePath = toRecordedPath(root, discovered.path);
+	const scanned = scannedTestTreeFiles(root);
+	for (const relativePath of scanned) {
+		const recordedPath = toRecordedPath(root, relativePath);
 		const lines = lineNumbersOf(
-			fs.readFileSync(toReadablePath(root, discovered.path), "utf8")
+			fs.readFileSync(toReadablePath(root, relativePath), "utf8")
 		);
-		const baselineCount = baseline.counts[relativePath] ?? 0;
+		const baselineCount = baseline.counts[recordedPath] ?? 0;
 		if (lines.length > baselineCount) {
 			findings.push({
 				baselineCount,
 				count: lines.length,
-				file: relativePath,
+				file: recordedPath,
 				lines: lines.slice(baselineCount),
 			});
 		}
@@ -129,15 +143,17 @@ export const evaluateFixedWaits = (
 		findings: [...findings].sort((left, right) =>
 			compareStableStrings(left.file, right.file)
 		),
-		scannedFiles,
+		scannedFiles: scanned.length,
 	};
 };
 
 export const formatFixedWaitReport = (report: FixedWaitReport): string => {
 	if (report.findings.length === 0) {
-		return `Fixed-wait ratchet holds across ${report.scannedFiles} test files.`;
+		return `Fixed-wait ratchet holds across ${report.scannedFiles} test-tree files.`;
 	}
-	const lines = [`${report.findings.length} test file(s) gained a fixed wait:`];
+	const lines = [
+		`${report.findings.length} test-tree file(s) gained a fixed wait:`,
+	];
 	for (const finding of report.findings) {
 		lines.push(
 			`  ${finding.file}: ${finding.count} fixed wait(s), baseline ${finding.baselineCount} (new at line ${finding.lines.join(", ")})`

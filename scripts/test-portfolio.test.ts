@@ -457,7 +457,7 @@ test("silently skipped when the manifest is stale", () => {
 		}
 	});
 
-	test("root test runs script contracts before the Default portfolio", async () => {
+	test("root test runs script contracts and the fixed-wait gate before the Default portfolio", async () => {
 		const packageDocument: unknown = await Bun.file(
 			path.join(repositoryRoot, "package.json")
 		).json();
@@ -467,8 +467,13 @@ test("silently skipped when the manifest is stale", () => {
 		expect(scripts["test:scripts"]).toBe(
 			"bun --no-env-file test scripts/*.test.ts"
 		);
+		// The ratchet only holds while something runs it; a suite entrypoint that
+		// skips it leaves the baseline recorded and unenforced.
+		expect(scripts["check:test-smells"]).toBe(
+			"bun --no-env-file scripts/test-smell-check.ts"
+		);
 		expect(scripts.test).toBe(
-			"bun --no-env-file run test:scripts && bun --no-env-file scripts/test-portfolio.ts default"
+			"bun --no-env-file run test:scripts && bun --no-env-file run check:test-smells && bun --no-env-file scripts/test-portfolio.ts default"
 		);
 	});
 
