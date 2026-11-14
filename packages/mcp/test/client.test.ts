@@ -345,7 +345,7 @@ describe("createSdkMcpClient", () => {
 	});
 
 	test("combines a caller signal with the startup signal", async () => {
-		const callerSignal = new AbortController().signal;
+		const caller = new AbortController();
 		const calls: { signal?: AbortSignal }[] = [];
 		const adapter = createSdkMcpClient(
 			localConfig(),
@@ -364,11 +364,12 @@ describe("createSdkMcpClient", () => {
 				createHttpTransport: failHttp,
 			})
 		);
-		await adapter.connect(callerSignal);
+		await adapter.connect(caller.signal);
 		const combined = calls[0]?.signal;
 		expect(combined).toBeInstanceOf(AbortSignal);
 		expect(combined?.aborted).toBe(false);
-		callerSignal.dispatchEvent(new Event("abort"));
+		caller.abort();
+		expect(combined?.aborted).toBe(true);
 	});
 
 	test("times out connect with a sanitized error naming the server", async () => {
