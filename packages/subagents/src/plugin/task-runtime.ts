@@ -50,7 +50,7 @@ export type SubagentsTaskCoordinator = Readonly<{
 		childSessionId: DelegationTask["childSessionId"]
 	) => DelegationTask | null;
 	onSessionShutdown: (context: PluginSessionContext) => Promise<void>;
-	onSessionStart: (context: PluginSessionContext) => void;
+	onSessionStart: (context: PluginSessionContext) => Promise<void>;
 	settleTask: (
 		taskId: DelegationTask["id"],
 		outcome: DelegationTaskOutcome
@@ -324,10 +324,10 @@ const createCoordinator = (
 		};
 		activeSessions.set(sessionId, active);
 		if (context.sessionSdk === undefined) {
-			return;
+			return Promise.resolve();
 		}
 		recovery ??= recoverAbandonedTasks(context.sessionSdk);
-		void recovery
+		return recovery
 			.then(() => deliverPendingReports(sessionId))
 			.catch(() => undefined);
 	};
