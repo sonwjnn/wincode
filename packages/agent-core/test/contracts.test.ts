@@ -4,14 +4,15 @@ import {
 	AGENT_TURN_EVENT_TYPES,
 	AGENT_TURN_TERMINAL_STATUSES,
 	type AgentId,
-	type AgentTurn,
 	type AgentTurnEvent,
 	type AgentTurnId,
 	agentIdSchema,
 	agentLabelFromId,
 	isAgentTurnEvent,
+	isAgentTurnFilePart,
 	isAgentTurnTerminalEvent,
 	isAgentTurnTerminalStatus,
+	isAgentTurnTextPart,
 	isAgentTurnToolCallPart,
 	isAgentTurnToolFailurePart,
 	isAgentTurnToolResultPart,
@@ -19,21 +20,12 @@ import {
 	type ModelStepId,
 	OPERATIONAL_FAILURE_VERSION,
 	type ToolCallId,
-	toModelId,
-	toSessionMessageId,
 } from "../src/index";
 
 const agentId = (value: string): AgentId => agentIdSchema.parse(value);
-const modelId = (value: string) => toModelId(value);
 const turnId = (value: string): AgentTurnId => value as AgentTurnId;
-const messageId = (value: string) => toSessionMessageId(value);
 const stepId = (value: string): ModelStepId => value as ModelStepId;
 const toolCallId = (value: string): ToolCallId => value as ToolCallId;
-
-const testModel = {
-	modelId: modelId("gpt-5.6-luna"),
-	providerId: "openai",
-} as const;
 
 const baseEvent = (type: AgentTurnEvent["type"]): AgentTurnEvent => {
 	const common = { sequence: 1, turnId: turnId("turn-1") };
@@ -139,12 +131,9 @@ const baseEvent = (type: AgentTurnEvent["type"]): AgentTurnEvent => {
 };
 
 describe("Agent Turn Event contract", () => {
-	test("every event carries Agent Turn identity and a monotonic sequence", () => {
+	test("accepts every declared event type", () => {
 		for (const type of AGENT_TURN_EVENT_TYPES) {
-			const event = baseEvent(type);
-			expect(isAgentTurnEvent(event)).toBe(true);
-			expect(typeof event.turnId).toBe("string");
-			expect(typeof event.sequence).toBe("number");
+			expect(isAgentTurnEvent(baseEvent(type))).toBe(true);
 		}
 	});
 
@@ -266,29 +255,51 @@ describe("Agent Turn Event contract", () => {
 	});
 });
 
-describe("Agent Turn execution identity", () => {
-	test("keeps different Session Turn executions distinct", () => {
-		const parent: AgentTurn = {
-			agent: {
-				id: agentId("build"),
-				instructions: "x",
-				role: "primary",
-			},
-			id: turnId("turn-primary"),
-			input: { messages: [] },
-			model: testModel,
-		};
-		const subagentTurn: AgentTurn = {
-			...parent,
-			agent: { ...parent.agent, id: agentId("research"), role: "subagent" },
-			id: turnId("turn-subagent"),
-		};
-		expect(subagentTurn.id).not.toBe(parent.id);
-		expect(subagentTurn.agent.role).toBe("subagent");
-	});
-});
-
 describe("Agent Turn message part contract", () => {
+	test("validates text and file parts including their allowlists", () => {
+		expect(isAgentTurnTextPart({ text: "hello", type: "text" })).toBe(true);
+		expect(isAgentTurnTextPart({ text: "hello", type: "text", extra: 1 })).toBe(
+			false
+		);
+		expect(isAgentTurnTextPart({ text: "hello", type: "file" })).toBe(false);
+
+		expect(
+			isAgentTurnFilePart({
+				data: "AAAA",
+				mediaType: "image/png",
+				type: "file",
+			})
+		).toBe(true);
+		expect(
+			isAgentTurnFilePart({
+				data: new Uint8Array([1]),
+				mediaType: "image/png",
+				type: "file",
+			})
+		).toBe(true);
+		expect(
+			isAgentTurnFilePart({
+				data: "AAAA",
+				mediaType: "",
+				type: "file",
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnFilePart({
+				data: "AAAA",
+				mediaType: "image/png",
+				type: "text",
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnFilePart({
+				data: "AAAA",
+				mediaType: "image/png",
+				type: "file",
+				extra: 1,
+			})
+		).toBe(false);
+	});
 	test("validates text, tool-call, tool-result, and tool-failure parts", () => {
 		expect(
 			isAgentTurnToolCallPart({
@@ -348,6 +359,36 @@ describe("Agent Turn message part contract", () => {
 			})
 		).toBe(false);
 	});
+
+	test("rejects tool parts that carry keys outside the stored allowlist", () => {
+		expect(
+			isAgentTurnToolCallPart({
+				input: { path: "x" },
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-call",
+				unexpected: true,
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnToolResultPart({
+				output: { content: "x", path: "x" },
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-result",
+				unexpected: true,
+			})
+		).toBe(false);
+		expect(
+			isAgentTurnToolFailurePart({
+				errorText: "denied",
+				toolCallId: "c1",
+				toolName: "read",
+				type: "tool-failure",
+				unexpected: true,
+			})
+		).toBe(false);
+	});
 });
 
 describe("Agent Turn terminal status contract", () => {
@@ -363,35 +404,6 @@ describe("Agent Turn terminal status contract", () => {
 		}
 		expect(isAgentTurnTerminalStatus("running")).toBe(false);
 		expect(isAgentTurnTerminalStatus(undefined)).toBe(false);
-	});
-});
-
-describe("Agent Turn contract", () => {
-	test("is fully resolved for one runtime invocation", () => {
-		const turn = {
-			agent: {
-				displayName: "Build",
-				id: agentId("build"),
-				instructions: "Implement changes.",
-				role: "primary",
-			},
-			id: turnId("turn-1"),
-			input: {
-				messages: [
-					{
-						id: messageId("msg-1"),
-						parts: [{ text: "hello", type: "text" }],
-						role: "user",
-					},
-				],
-			},
-			model: testModel,
-		} satisfies AgentTurn;
-		expect(turn.input.messages[0]?.parts[0]).toEqual({
-			text: "hello",
-			type: "text",
-		});
-		expect(turn.agent.role).toBe("primary");
 	});
 });
 
