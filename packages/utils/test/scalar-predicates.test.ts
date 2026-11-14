@@ -9,11 +9,42 @@ import {
 	isNonEmptyStringWithinUtf8ByteLimit,
 	isNonNegativeInteger,
 	isNumber,
+	isObjectLike,
+	isPlainObject,
 	isPositiveInteger,
 	isPositiveSafeInteger,
 	isString,
 	isUndefined,
 } from "../src/index";
+
+describe("runtime object predicates", () => {
+	test("accepts objects and arrays but not null, primitives, or functions", () => {
+		expect(isObjectLike({})).toBe(true);
+		expect(isObjectLike([])).toBe(true);
+		expect(isObjectLike(new Date(0))).toBe(true);
+		expect(isObjectLike(null)).toBe(false);
+		expect(isObjectLike(undefined)).toBe(false);
+		expect(isObjectLike("text")).toBe(false);
+		expect(isObjectLike(1)).toBe(false);
+		expect(isObjectLike(() => undefined)).toBe(false);
+	});
+
+	test("accepts prototype-less and literal objects but not class instances or arrays", () => {
+		expect(isPlainObject({})).toBe(true);
+		expect(isPlainObject({ key: "value" })).toBe(true);
+		expect(isPlainObject(Object.create(null))).toBe(true);
+		expect(isPlainObject(null)).toBe(false);
+		expect(isPlainObject([])).toBe(false);
+		expect(isPlainObject(new Date(0))).toBe(false);
+		expect(
+			isPlainObject(
+				new (class Fixture {
+					readonly key = "value";
+				})()
+			)
+		).toBe(false);
+	});
+});
 
 describe("runtime scalar predicates", () => {
 	test("accepts Error instances without accepting error-shaped objects", () => {
