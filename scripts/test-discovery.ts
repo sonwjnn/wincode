@@ -50,6 +50,7 @@ const DEFAULT_TEST_FILE_PATTERN = /\.test\.(?:ts|tsx)$/;
 const PACKAGE_TEST_PATH_PATTERN = /^packages\/([^/]+)\/test(?:\/|$)/;
 const IGNORED_TEST_PATHS: Record<string, true> = {
 	"scripts/test-portfolio.test.ts": true,
+	"scripts/test-smell-check.test.ts": true,
 };
 export const compareStableStrings = (left: string, right: string): number => {
 	if (left < right) {
