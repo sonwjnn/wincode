@@ -8,6 +8,7 @@ import {
 	createStatefulAgent,
 	type ModelStepObserver,
 	type ResolvedTool,
+	type RuntimeClock,
 	type ToolCallId,
 	type ToolDefinition,
 	toAgentTurnId,
@@ -704,16 +705,26 @@ for (const scenario of [
 
 test("rate-limit countdown honors Retry-After and can be cancelled before another request", async () => {
 	const controller = new AbortController();
-	let failedAt = 0;
+	let now = 1_700_000_000_000;
+	const sleeps: number[] = [];
+	const clock: RuntimeClock = {
+		now: () => now,
+		sleep: async (delayMs, signal) => {
+			sleeps.push(delayMs);
+			if (signal?.aborted) {
+				throw new DOMException("Aborted", "AbortError");
+			}
+			now += delayMs;
+		},
+	};
 	const { providerCollection, requests } = scriptedProvider(() => {
-		failedAt = Date.now();
 		throw new ProviderError("provider", "private rate-limit detail", {
 			cause: { statusCode: 429, retryAfterMs: 25 },
 		});
 	});
 	let retryAt = 0;
 	const events = await consume(
-		createAgentRuntime({ providerCollection }).run(buildTurn(), {
+		createAgentRuntime({ providerCollection, clock }).run(buildTurn(), {
 			signal: controller.signal,
 			modelRetry: {
 				maxRetries: 2,
@@ -728,7 +739,8 @@ test("rate-limit countdown honors Retry-After and can be cancelled before anothe
 			},
 		})
 	);
-	expect(retryAt).toBeGreaterThanOrEqual(failedAt + 25);
+	expect(retryAt).toBe(1_700_000_000_025);
+	expect(sleeps).toEqual([25]);
 	expect(requests).toHaveLength(1);
 	expect(events.at(-1)?.type).toBe("agent-turn-cancelled");
 });
