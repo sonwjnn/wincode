@@ -13,6 +13,7 @@ import { getErrorCode } from "@/shared/utils/error-log-fields";
 import { SessionWriterLockFailureError } from "./session-writer-lock";
 
 const DATABASE_FILE_NAME = "sessions.db";
+const IN_MEMORY_DATABASE_PATH = ":memory:";
 const ATTACHMENT_DIRECTORY_NAME = "attachments";
 const SNAPSHOT_DIRECTORY_NAME = "file-snapshots";
 const SESSION_LOG_DIRECTORY_NAME = "sessions";
@@ -145,7 +146,7 @@ const resolveDatabasePathIndexDirectory = (): string => {
  * Retaining a symlink name also keeps its legacy WAL visible on reopening.
  */
 export const resolveSessionDatabasePath = (databasePath: string): string => {
-	if (databasePath === "" || databasePath === ":memory:") {
+	if (databasePath === "" || databasePath === IN_MEMORY_DATABASE_PATH) {
 		return databasePath;
 	}
 
@@ -246,8 +247,12 @@ export const parseSessionLogFileName = (
 };
 export const resolveLocalSessionProjectionPath = (
 	databasePath: string = resolveLocalDatabasePath()
-): string =>
-	path.join(
-		path.dirname(resolveSessionDatabasePath(databasePath)),
-		SESSION_PROJECTION_FILE_NAME
-	);
+): string => {
+	const operationalPath = resolveSessionDatabasePath(databasePath);
+	// A non-file database has no directory: joining its projection would put the
+	// file beside the process working directory instead of beside the database.
+	if (operationalPath === "" || operationalPath === IN_MEMORY_DATABASE_PATH) {
+		return operationalPath;
+	}
+	return path.join(path.dirname(operationalPath), SESSION_PROJECTION_FILE_NAME);
+};
