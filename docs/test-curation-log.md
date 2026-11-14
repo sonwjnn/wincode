@@ -3,50 +3,50 @@
 Status: **audit only**. No test was deleted, skipped, moved or retagged by this run.
 Approver: pending. Observation window once anything is quarantined: **2 releases**.
 
-Scope: every Default-portfolio test in the monorepo (262 files, 2542 test cases).
+Scope: every Default-portfolio test in the monorepo (263 files, 2552 test cases).
 Reproduce with the harness in `scripts/test-curation/` (run order in its README); artifacts stay under `.tmp/test-curation/`.
 
 ## 1. What this audit measured, and what it could not
 
 | Input | How | Result |
 |---|---|---|
-| Per-test outcomes | `bun test --reporter=junit` per package, 3 independent runs on one commit | 2542 tests, 36,193 assertions, 109 s wall clock |
-| Per-test covered lines | each test run alone (`-t <name>`) with `--coverage --coverage-reporter=lcov` | 77,674 distinct application lines |
-| Near-duplicate clustering | normalized token 5-gram shingles, MinHash LSH, Jaccard >= 0.85 structural **and** >= 0.7 literal-preserving, >= 20 tokens | 39 clusters / 82 tests |
-| Defect kill-sets | 47 operator mutants on covered lines + 30 reverse-applied historical fixes, inside a detached git worktree | 19 + 12 defects detected |
-| Defect history | 1,096 commits, 295 `fix:` commits, 471 test cases added by fixes | 181 test files involved in a fix |
+| Per-test outcomes | `bun test --reporter=junit` per package, 3 independent runs on one commit | 2552 tests, 36,210 assertions, 109 s wall clock |
+| Per-test covered lines | each test run alone (`-t <name>`) with `--coverage --coverage-reporter=lcov` | 77,790 distinct application lines |
+| Near-duplicate clustering | normalized token 5-gram shingles, MinHash LSH, Jaccard >= 0.85 structural **and** >= 0.7 literal-preserving, >= 20 tokens | 38 clusters / 82 tests |
+| Defect kill-sets | 47 operator mutants on covered lines + 29 reverse-applied historical fixes, inside a detached git worktree | 19 + 12 defects detected |
+| Defect history | 1,109 commits, 304 `fix:` commits, 613 test cases added by fixes | 189 test files involved in a fix |
 | CI history | `gh run list` (job level only) | no per-test history available |
 
 Three constraints bound every conclusion below:
 
 1. **No true per-test coverage contexts.** Bun 1.4 has no `--cov-context` equivalent. Per-test fingerprints come from running each test alone, which discards cross-test state and cannot observe tests that only fail in file context. 7 tests have duplicate names and matched more than one case; their fingerprints are unions and are marked ambiguous below.
 2. **Line coverage only, no branches.** Bun's lcov reporter emits no `BRDA` records: 0 branch records across the shard reports. Every `coverage_delta` in this log is lines only.
-3. **Coverage is dominated by module loading.** 69,940 of 77,674 application lines (90.0%) are covered by two or more tests, and 131 groups of tests have **identical** covered-line sets. In this stack, coverage equality is a property of the import graph, not of the assertion. Section 4 shows what that does to a naive prune.
+3. **Coverage is dominated by module loading.** 69,979 of 77,790 application lines (90.0%) are covered by two or more tests, and 129 groups of tests have **identical** covered-line sets. In this stack, coverage equality is a property of the import graph, not of the assertion. Section 4 shows what that does to a naive prune.
 
 ## 2. Corpus
 
 | Metric | Value |
 |---|---|
-| Default test files | 262 |
-| Test cases | 2542 |
-| Assertions | 36,193 |
+| Default test files | 263 |
+| Test cases | 2552 |
+| Assertions | 36,210 |
 | Wall clock (sum of per-file durations) | 109 s |
-| Slowest file | `executable.test.ts` 21.8 s, then `new-session-view-focus.test.tsx` 14.6 s, `session-view.test.tsx` 11.7 s (top 3 = 48 s, 44% of the suite) |
+| Slowest file | `executable.test.ts` 21.8 s, then `new-session-view-focus.test.tsx` 15.7 s, `session-view.test.tsx` 11.8 s (top 3 = 49 s, 45% of the suite) |
 | Portfolios today | `default` and `e2e`, split by `scripts/test-discovery.ts`; no tier markers |
 
 ## 3. Coverage fingerprints
 
-- 77,674 distinct application lines covered.
-- 7,734 lines are covered by **exactly one** test (`10.0%`). Losing the owning test loses that coverage outright.
-- 69,940 lines are covered by two or more tests.
+- 77,790 distinct application lines covered.
+- 7,811 lines are covered by **exactly one** test (`10.0%`). Losing the owning test loses that coverage outright.
+- 69,979 lines are covered by two or more tests.
 - 49 tests cover **zero** application lines: they exercise subprocesses, spawn the built binary, or assert on generated data. They are invisible to coverage-based pruning and are protected by construction.
-- 64 of the 82 clustered tests own no line that another test does not also cover, and 49 tests cover no application line at all. Both groups are invisible to coverage-based justification and are protected by construction.
+- 63 of the 82 clustered tests own no line that another test does not also cover, and 49 tests cover no application line at all. Both groups are invisible to coverage-based justification and are protected by construction.
 
 Files with the most singly-owned lines (deleting their sole owner loses the line):
 
 | Source file | Lines owned by exactly one test |
 |---|---|
-| `packages/coding-agent/modules/sessions/storage/session-jsonl-store.ts` | 785 |
+| `packages/coding-agent/modules/sessions/storage/session-jsonl-store.ts` | 775 |
 | `packages/coding-agent/modules/application/sessions-cli.ts` | 324 |
 | `packages/coding-agent/modules/application/rpc/request-handler.ts` | 258 |
 | `packages/mcp/src/registry.ts` | 235 |
@@ -59,22 +59,22 @@ Files with the most singly-owned lines (deleting their sole owner loses the line
 
 ## 4. The coverage-equality trap, measured on this repo
 
-131 groups of tests have byte-identical covered-line sets (group sizes up to 11). A coverage-only prune would pick a survivor in each group and delete the rest. Review of every group containing a near-duplicate cluster produced this verdict table:
+129 groups of tests have byte-identical covered-line sets (group sizes up to 11). A coverage-only prune would pick a survivor in each group and delete the rest. Review of every group containing a near-duplicate cluster produced this verdict table:
 
 | Cluster | Tests | Identical coverage | Verdict | Why |
 |---|---|---|---|---|
-| 0 | 4 | 2/6 pairs | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first fallback, closest-lower fallback, Off only when sole. Same resolver, different rules. |
-| 1 | 3 | 3/3 pairs | keep | Three distinct plugin-registration rejections: undeclared policy category, family/category mismatch, missing context projection. |
-| 7 | 2 | 1/1 pairs | keep | Two different concurrency invariants: single in-flight compaction per session vs joining an in-flight maintenance compaction across a selection change. |
+| 1 | 4 | 2/6 pairs | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first fallback, closest-lower fallback, Off only when sole. Same resolver, different rules. |
+| 2 | 3 | 3/3 pairs | keep | Three distinct plugin-registration rejections: undeclared policy category, family/category mismatch, missing context projection. |
+| 8 | 2 | 1/1 pairs | keep | Two different concurrency invariants: single in-flight compaction per session vs joining an in-flight maintenance compaction across a selection change. |
 | 10 | 2 | 1/1 pairs | keep | Manual-mode copy vs range copy without clearing: different mode flag and different post-state. |
-| 17 | 2 | 1/1 pairs | keep | Plugin summary persistence/validation vs generator must not be invoked: different oracles on the same path. |
-| 23 | 2 | 1/1 pairs | keep | Two model-specific protocol routing rules (avoid Chat Completions vs selectable via Responses). |
-| 24 | 2 | 1/1 pairs | keep | Two separate subprocess CLI behaviors: static load order vs help availability before runtime init. |
-| 25 | 2 | 1/1 pairs | keep | Two distinct clipboard statuses (empty vs unsupported) mapping to the same no-content result. |
-| 27 | 2 | 1/1 pairs | keep | Markdown/syntax token keys vs diff token keys: disjoint key sets. |
-| 28 | 2 | 1/1 pairs | keep | OpenCode markdown override entries vs diff override entries: disjoint override maps. |
-| 30 | 2 | 1/1 pairs | keep | Two distinct compaction guards: history already inside the recent budget vs all complete history inside it. |
-| 33 | 2 | 1/1 pairs | keep | Complete skill metadata vs activation metadata without instructions: the second asserts absence, which the first does not. |
+| 16 | 2 | 1/1 pairs | keep | Plugin summary persistence/validation vs generator must not be invoked: different oracles on the same path. |
+| 22 | 2 | 1/1 pairs | keep | Two model-specific protocol routing rules (avoid Chat Completions vs selectable via Responses). |
+| 23 | 2 | 1/1 pairs | keep | Two separate subprocess CLI behaviors: static load order vs help availability before runtime init. |
+| 24 | 2 | 1/1 pairs | keep | Two distinct clipboard statuses (empty vs unsupported) mapping to the same no-content result. |
+| 26 | 2 | 1/1 pairs | keep | Markdown/syntax token keys vs diff token keys: disjoint key sets. |
+| 27 | 2 | 1/1 pairs | keep | OpenCode markdown override entries vs diff override entries: disjoint override maps. |
+| 29 | 2 | 1/1 pairs | keep | Two distinct compaction guards: history already inside the recent budget vs all complete history inside it. |
+| 32 | 2 | 1/1 pairs | keep | Complete skill metadata vs activation metadata without instructions: the second asserts absence, which the first does not. |
 
 **Result: all 12 identical-coverage clusters are distinct oracles that happen to share a code path; 8 of their pairs are proven distinct by asymmetric kill-sets. No merge candidate remains: the pair the previous audit found (`summary-generator.test.ts` output-limit vs filtered) is now one table-driven test.** The sharpest case is not in a cluster at all — it is a 99%-identical coverage pair in `packages/utils/test/scalar-predicates.test.ts`:
 
@@ -83,53 +83,54 @@ Files with the most singly-owned lines (deleting their sole owner loses the line
 
 Different function, opposite assertion on the empty string, coverage Jaccard 0.99. Deleting either one silently removes the only guard on that distinction. This is the failure mode the coverage-equal prune creates, reproduced on demand.
 
+The grouping itself is not reproducible across runs. The `chat-shell.test.tsx` focus pair measured byte-identical in an earlier run of this harness and 8 lines apart in this one, at the same commit, because isolated per-test coverage jitters wherever a flush lands a particular way. Treat the group count as an upper bound and the per-cluster verdicts as the durable result: they are keyed to the tests, not to the coincidence. That instability is the argument against pruning on coverage equality, not a defect in the test suite.
+
 ## 5. Near-duplicate clusters
 
-Clustering used a threshold of 0.85 with `token stream: literals-><lit>, identifier refs-><id>, property names and keywords kept`. 39 clusters contain 82 tests; the largest has 4 members; 1 cluster spans files. No whole-file copies exist (no two test files have the same sha256).
+Clustering used a threshold of 0.85 with `token stream: literals-><lit>, identifier refs-><id>, property names and keywords kept`. 38 clusters contain 82 tests; the largest has 4 members; 1 cluster spans files. No whole-file copies exist (no two test files have the same sha256).
 
 Every cluster is a **review candidate**, never a deletion:
 
 | Cluster | Tests | Files | Min pair score | Identical coverage pairs | Member files |
 |---|---|---|---|---|---|
-| 0 | 4 | 1 | 0.87 | 2 | prompt-config-provider.test.ts |
-| 1 | 3 | 1 | 0.87 | 3 | plugin-registry.test.ts |
-| 2 | 3 | 1 | 0.92 | 0 | prompt-cache-warming.test.ts |
-| 3 | 2 | 1 | 0.86 | 0 | chat-shell.test.tsx |
-| 4 | 2 | 1 | 0.86 | 0 | file-operations.test.ts |
-| 5 | 2 | 1 | 0.87 | 0 | project-trust-preflight.test.tsx |
-| 6 | 2 | 1 | 0.87 | 0 | session-view.test.tsx |
-| 7 | 2 | 1 | 0.87 | 1 | compaction.test.ts |
-| 8 | 2 | 2 | 0.88 | 0 | sdk-consumer-bun.test.ts, sdk-consumer-node.test.ts |
-| 9 | 2 | 1 | 0.89 | 0 | session-bundle-export.test.ts |
+| 0 | 4 | 1 | 0.87 | 0 | scalar-predicates.test.ts |
+| 1 | 4 | 1 | 0.87 | 2 | prompt-config-provider.test.ts |
+| 2 | 3 | 1 | 0.87 | 3 | plugin-registry.test.ts |
+| 3 | 3 | 1 | 0.92 | 0 | prompt-cache-warming.test.ts |
+| 4 | 2 | 1 | 0.86 | 0 | chat-shell.test.tsx |
+| 5 | 2 | 1 | 0.86 | 0 | file-operations.test.ts |
+| 6 | 2 | 1 | 0.87 | 0 | project-trust-preflight.test.tsx |
+| 7 | 2 | 1 | 0.87 | 0 | session-view.test.tsx |
+| 8 | 2 | 1 | 0.87 | 1 | compaction.test.ts |
+| 9 | 2 | 2 | 0.88 | 0 | sdk-consumer-bun.test.ts, sdk-consumer-node.test.ts |
 | 10 | 2 | 1 | 0.89 | 1 | clipboard-selection-interactions.test.tsx |
-| 11 | 2 | 1 | 0.90 | 0 | logger.test.ts |
-| 12 | 2 | 1 | 0.90 | 0 | clipboard-copy-on-select.test.ts |
-| 13 | 2 | 1 | 0.91 | 0 | clipboard-selection-keys.test.ts |
+| 11 | 2 | 1 | 0.89 | 0 | session-bundle-export.test.ts |
+| 12 | 2 | 1 | 0.90 | 0 | logger.test.ts |
+| 13 | 2 | 1 | 0.90 | 0 | clipboard-copy-on-select.test.ts |
 | 14 | 2 | 1 | 0.91 | 0 | clipboard-selection-keys.test.ts |
-| 15 | 2 | 1 | 0.91 | 0 | scalar-predicates.test.ts |
-| 16 | 2 | 1 | 0.92 | 0 | submit.test.ts |
-| 17 | 2 | 1 | 0.95 | 1 | compaction.test.ts |
-| 18 | 2 | 1 | 0.95 | 0 | new-session-view-focus.test.tsx |
-| 19 | 2 | 1 | 0.98 | 0 | rpc.test.ts |
-| 20 | 2 | 1 | 0.98 | 0 | attachment-store.test.ts |
-| 21 | 2 | 1 | 0.99 | 0 | rpc-output.test.ts |
-| 22 | 2 | 1 | 1.00 | 0 | agent-session.test.ts |
-| 23 | 2 | 1 | 1.00 | 1 | sdk-opencode-go-provider.test.ts |
-| 24 | 2 | 1 | 1.00 | 1 | cli-startup.test.ts |
-| 25 | 2 | 1 | 1.00 | 1 | clipboard.test.ts |
-| 26 | 2 | 1 | 1.00 | 0 | registry.test.ts |
+| 15 | 2 | 1 | 0.91 | 0 | clipboard-selection-keys.test.ts |
+| 16 | 2 | 1 | 0.95 | 1 | compaction.test.ts |
+| 17 | 2 | 1 | 0.95 | 0 | new-session-view-focus.test.tsx |
+| 18 | 2 | 1 | 0.98 | 0 | rpc.test.ts |
+| 19 | 2 | 1 | 0.98 | 0 | attachment-store.test.ts |
+| 20 | 2 | 1 | 0.99 | 0 | rpc-output.test.ts |
+| 21 | 2 | 1 | 1.00 | 0 | agent-session.test.ts |
+| 22 | 2 | 1 | 1.00 | 1 | sdk-opencode-go-provider.test.ts |
+| 23 | 2 | 1 | 1.00 | 1 | cli-startup.test.ts |
+| 24 | 2 | 1 | 1.00 | 1 | clipboard.test.ts |
+| 25 | 2 | 1 | 1.00 | 0 | registry.test.ts |
+| 26 | 2 | 1 | 1.00 | 1 | provider-themes.test.ts |
 | 27 | 2 | 1 | 1.00 | 1 | provider-themes.test.ts |
-| 28 | 2 | 1 | 1.00 | 1 | provider-themes.test.ts |
-| 29 | 2 | 1 | 1.00 | 0 | chat-shell.test.tsx |
-| 30 | 2 | 1 | 1.00 | 1 | compaction.test.ts |
-| 31 | 2 | 1 | 1.00 | 0 | markdown-message-part.test.tsx |
-| 32 | 2 | 1 | 1.00 | 0 | new-session-view-focus.test.tsx |
-| 33 | 2 | 1 | 1.00 | 1 | user-message.test.ts |
-| 34 | 2 | 1 | 1.00 | 0 | settings-dialog.test.tsx |
-| 35 | 2 | 1 | 1.00 | 0 | tools-versioned-editing.test.ts |
-| 36 | 2 | 1 | 1.00 | 0 | use-git-branch.test.tsx |
-| 37 | 2 | 1 | 1.00 | 0 | client.test.ts |
-| 38 | 2 | 1 | 1.00 | 0 | scalar-predicates.test.ts |
+| 28 | 2 | 1 | 1.00 | 0 | chat-shell.test.tsx |
+| 29 | 2 | 1 | 1.00 | 1 | compaction.test.ts |
+| 30 | 2 | 1 | 1.00 | 0 | markdown-message-part.test.tsx |
+| 31 | 2 | 1 | 1.00 | 0 | new-session-view-focus.test.tsx |
+| 32 | 2 | 1 | 1.00 | 1 | user-message.test.ts |
+| 33 | 2 | 1 | 1.00 | 0 | settings-dialog.test.tsx |
+| 34 | 2 | 1 | 1.00 | 0 | tools-versioned-editing.test.ts |
+| 35 | 2 | 1 | 1.00 | 0 | use-git-branch.test.tsx |
+| 36 | 2 | 1 | 1.00 | 0 | client.test.ts |
+| 37 | 2 | 1 | 1.00 | 0 | scalar-predicates.test.ts |
 
 ## 6. Defect evidence (kill sets)
 
@@ -137,38 +138,37 @@ Bun has no mutation-testing runner here, so subsumption was tested two ways. Bot
 
 **A. Operator mutants on covered lines.** 47 mutants across 6 clusters (comparisons and boolean operators swapped on lines the cluster members already execute). 19 were killed, and 7 of those killed by some members while a peer survived the same mutation. Clusters whose subject module yielded no usable operators (barrel `index.ts`, schema-only modules) contributed no evidence and are marked 0.
 
-**B. Historical defect reintroduction.** 30 reverse-applied `fix:` commits across 16 clusters, each scoped to the cluster's subject module. 12 reverts were detected by the tests; in every detected case **every member of the cluster failed** (2/2 or 3/3). 0 asymmetric kills. This arm is weaker than the mutant arm: a reverted fix can touch shared code, and for three clusters the resolved subject module was a barrel `index.ts`, so a revert there breaks more than the behavior under test. A kill here confirms the test can fail; it does not isolate which rule it guards.
+**B. Historical defect reintroduction.** 29 reverse-applied `fix:` commits across 15 clusters, each scoped to the cluster's subject module. 12 reverts were detected by the tests; in every detected case **every member of the cluster failed** (2/2 or 3/3). 0 asymmetric kills. This arm is weaker than the mutant arm: a reverted fix can touch shared code, and for three clusters the resolved subject module was a barrel `index.ts`, so a revert there breaks more than the behavior under test. A kill here confirms the test can fail; it does not isolate which rule it guards.
 
 | Cluster | Test file | Reverts attempted | Reverts detected by every member | Operator mutants | Mutants killed |
 |---|---|---|---|---|---|
-| 0 | `prompt-config-provider.test.ts` | 0 | 0 | 7 | 6 |
-| 1 | `plugin-registry.test.ts` | 0 | 0 | 8 | 5 |
-| 3 | `chat-shell.test.tsx` | 2 | 1 | 0 | 0 |
-| 5 | `project-trust-preflight.test.tsx` | 3 | 1 | 0 | 0 |
-| 6 | `session-view.test.tsx` | 4 | 1 | 0 | 0 |
-| 7 | `compaction.test.ts` | 1 | 0 | 8 | 1 |
-| 15 | `scalar-predicates.test.ts` | 1 | 1 | 0 | 0 |
-| 16 | `submit.test.ts` | 1 | 0 | 0 | 0 |
-| 17 | `compaction.test.ts` | 1 | 0 | 8 | 0 |
-| 18 | `new-session-view-focus.test.tsx` | 4 | 2 | 0 | 0 |
-| 22 | `agent-session.test.ts` | 1 | 1 | 0 | 0 |
-| 23 | `sdk-opencode-go-provider.test.ts` | 0 | 0 | 8 | 4 |
-| 24 | `cli-startup.test.ts` | 0 | 0 | 0 | 0 |
-| 25 | `clipboard.test.ts` | 1 | 0 | 0 | 0 |
-| 29 | `chat-shell.test.tsx` | 2 | 1 | 0 | 0 |
-| 30 | `compaction.test.ts` | 1 | 0 | 8 | 3 |
-| 32 | `new-session-view-focus.test.tsx` | 4 | 2 | 0 | 0 |
-| 34 | `settings-dialog.test.tsx` | 1 | 0 | 0 | 0 |
-| 36 | `use-git-branch.test.tsx` | 2 | 1 | 0 | 0 |
-| 38 | `scalar-predicates.test.ts` | 1 | 1 | 0 | 0 |
+| 0 | `scalar-predicates.test.ts` | 1 | 1 | 0 | 0 |
+| 1 | `prompt-config-provider.test.ts` | 0 | 0 | 7 | 6 |
+| 2 | `plugin-registry.test.ts` | 0 | 0 | 8 | 5 |
+| 4 | `chat-shell.test.tsx` | 2 | 1 | 0 | 0 |
+| 6 | `project-trust-preflight.test.tsx` | 3 | 1 | 0 | 0 |
+| 7 | `session-view.test.tsx` | 4 | 1 | 0 | 0 |
+| 8 | `compaction.test.ts` | 1 | 0 | 8 | 1 |
+| 16 | `compaction.test.ts` | 1 | 0 | 8 | 0 |
+| 17 | `new-session-view-focus.test.tsx` | 4 | 2 | 0 | 0 |
+| 21 | `agent-session.test.ts` | 1 | 1 | 0 | 0 |
+| 22 | `sdk-opencode-go-provider.test.ts` | 0 | 0 | 8 | 4 |
+| 23 | `cli-startup.test.ts` | 0 | 0 | 0 | 0 |
+| 24 | `clipboard.test.ts` | 1 | 0 | 0 | 0 |
+| 28 | `chat-shell.test.tsx` | 2 | 1 | 0 | 0 |
+| 29 | `compaction.test.ts` | 1 | 0 | 8 | 3 |
+| 31 | `new-session-view-focus.test.tsx` | 4 | 2 | 0 | 0 |
+| 33 | `settings-dialog.test.tsx` | 1 | 0 | 0 | 0 |
+| 35 | `use-git-branch.test.tsx` | 2 | 1 | 0 | 0 |
+| 37 | `scalar-predicates.test.ts` | 1 | 1 | 0 | 0 |
 
-Interpretation. The operator mutants produced the decisive evidence: **8 cluster pairs have asymmetric kills** (one member fails, a peer passes), all in clusters 0 and 1, so those tests demonstrably do not subsume each other even though their covered-line sets are identical. Cluster 0's asymmetric mutants sit exactly on the thinking-level fallback rules (L469, L473, L475 of `provider-model-selection.ts`), which is what the code review predicted. Cluster 1's sit on separate plugin-rejection validations.
+Interpretation. The operator mutants produced the decisive evidence: **8 cluster pairs have asymmetric kills** (one member fails, a peer passes), all in clusters 1 and 2, so those tests demonstrably do not subsume each other even though their covered-line sets are identical. Cluster 0's asymmetric mutants sit exactly on the thinking-level fallback rules (L469, L473, L475 of `provider-model-selection.ts`), which is what the code review predicted. Cluster 1's sit on separate plugin-rejection validations.
 
 ## 7. CI history and flakiness
 
 **Archived history.** CI uploads no per-test results: the only artifact is `test-artifacts/e2e` on E2E failure. Job-level history is available (`gh run list`), e.g. 7 failed runs on one PR branch (`feat/session-history-tree`) and a green `master`. Job-level pass/fail is not per-test evidence, so it is not used for any disposition here.
 
-**Same-SHA divergence.** Flakiness is defined as the same commit producing both a pass and a fail. 3 full portfolio runs on one commit: 2542 tests each, **0 divergences, 0 missing**. One divergence was observed outside the portfolio lane:
+**Same-SHA divergence.** Flakiness is defined as the same commit producing both a pass and a fail. 3 full portfolio runs on one commit: 2552 tests each, **0 divergences, 0 missing**. One divergence was observed outside the portfolio lane:
 
 - `packages/coding-agent/test/sessions/session-host.test.ts` — `SDK Host shutdown cleans its in-flight Google cache without affecting another Host` failed once while 6 coverage shards ran concurrently, then passed in 1 isolated run, 3 portfolio runs, 10 sequential file reruns and 12 concurrent reruns (1 failure in 23 observations of that file).
 - The failing assertion showed the second Host's `created` cache list as `["cachedContents/second-host", "cachedContents/second-host"]` where one entry was expected.
@@ -178,9 +178,17 @@ Interpretation. The operator mutants produced the decisive evidence: **8 cluster
 
 ## 8. Obsolete tests
 
-Import resolution over all 262 test files found 4 files with unresolved relative imports. All were read and are false positives: virtual module ids used with `mock.module`, plugin fixture paths written into temporary workspaces, and an `import()` inside a template string executed in a subprocess. No workspace package import (`@wincode/*`) fails to resolve.
+Import resolution over all 263 test files found 4 files with unresolved relative imports. All were read and are false positives: virtual module ids used with `mock.module`, plugin fixture paths written into temporary workspaces, and an `import()` inside a template string executed in a subprocess. No workspace package import (`@wincode/*`) fails to resolve.
 
 **Obsolete disposition: empty.** Nothing in the Default portfolio tests a module that no longer exists. The historical test files for removed packages (`packages/tui`, `packages/runtime-utils`) are already gone.
+
+## 8a. Test isolation (incidental)
+
+Running the portfolio for this audit exposed one hermeticity defect unrelated to redundancy: **every Default-portfolio run from the repository root left a 385 KB `session-projection.sqlite` (plus `-shm` and `-wal`) untracked in the working directory**, and the file was not gitignored.
+
+Mechanism: `resolveSessionDatabasePath` returns a non-file database path (`":memory:"` or `""`) verbatim, and `resolveLocalSessionProjectionPath` then derived `path.dirname(":memory:")`, which is `.`. Any Host opened over an in-memory database therefore created its projection beside whatever directory the process ran in. Minimal reproduction, isolated by bisecting the coding-agent package: `bun test packages/coding-agent/test/providers/models-json-provider.test.ts` alone, from any cwd.
+
+Impact: the suite was not hermetic with respect to its working directory, the file survives between runs as shared cross-test state, and a `git add -A` would have committed a binary. Fixed by returning the sentinel unchanged from `resolveLocalSessionProjectionPath` (an in-memory database gets an in-memory projection), with the contract now defended by `test/sessions/session-database-path.test.ts`. The sibling resolvers (`resolveLocalSessionLogRoot`, `resolveLocalAttachmentRoot`, `resolveLocalSnapshotRoot`) still derive `.`-relative directories for a non-file database; no run has written them, and they are recorded here rather than changed.
 
 ## 9. Dispositions
 
@@ -188,10 +196,10 @@ Categories follow the skill's four states, each with its own action.
 
 | Category | Count | Action |
 |---|---|---|
-| keep — proven distinct by asymmetric kill-set (clusters 0, 1) | 7 | keep; a defect exists that one member catches and a peer misses |
-| keep — distinct oracle despite coverage equality (reviewed) | 20 | keep; protected from any coverage-based prune |
+| keep — proven distinct by asymmetric kill-set (clusters 1, 2) | 7 | keep; a defect exists that one member catches and a peer misses |
+| keep — distinct oracle despite coverage equality (reviewed) | 22 | keep; protected from any coverage-based prune |
 | merge-candidate — identical setup and oracle, parameter-only difference | 0 | optionally fold into one table-driven test (no assertion is lost) |
-| review-candidate — near-duplicate without kill-set confirmation | 55 | stays a quarantine candidate; `mutation_check: partial` |
+| review-candidate — near-duplicate without kill-set confirmation | 53 | stays a quarantine candidate; `mutation_check: partial` |
 | obsolete | 0 | nothing to delete |
 | low-value | 0 | no test was found that both never failed and asserts nothing; the 49 zero-coverage tests spawn real subprocesses |
 | blackbox — no measurable application coverage | 49 | protected: coverage cannot see them, so coverage cannot justify removing them |
@@ -209,36 +217,36 @@ Tiers are assigned from business risk and defect-detection history, with runtime
 
 | Tier | Files | Tests | Wall clock |
 |---|---|---|---|
-| smoke | 32 | 645 | 8 s |
-| core | 135 | 1326 | 97 s |
-| extended | 95 | 571 | 5 s |
+| smoke | 33 | 650 | 8 s |
+| core | 138 | 1395 | 97 s |
+| extended | 92 | 507 | 4 s |
 
 Smoke cohort (highest risk x proven defect history, each <= 5 s):
 
 | Test file | Fixes | Tests added by fixes | Runtime |
 |---|---|---|---|
-| `packages/coding-agent/test/sessions/session-host.test.ts` | 16 | 33 | 1.7 s |
+| `packages/coding-agent/test/sessions/session-host.test.ts` | 16 | 33 | 1.8 s |
 | `packages/coding-agent/test/sessions/agent-session.test.ts` | 9 | 24 | 0.0 s |
 | `packages/coding-agent/test/sessions/compaction.test.ts` | 8 | 25 | 0.0 s |
 | `packages/coding-agent/test/sessions/compaction-routing.test.ts` | 6 | 15 | 0.0 s |
 | `packages/ai/test/sdk-public.test.ts` | 8 | 7 | 0.0 s |
 | `packages/coding-agent/test/sessions/runtime-turn.test.ts` | 7 | 6 | 0.1 s |
 | `packages/coding-agent/test/sessions/summary-generator.test.ts` | 4 | 9 | 0.0 s |
+| `packages/ai/test/model-contracts.test.ts` | 5 | 6 | 0.0 s |
 | `packages/coding-agent/test/application/project-trust.test.ts` | 4 | 7 | 0.1 s |
 | `packages/coding-agent/test/rpc-projection.test.ts` | 3 | 8 | 0.1 s |
-| `packages/ai/test/model-contracts.test.ts` | 4 | 6 | 0.0 s |
-| `packages/coding-agent/test/sessions/session-context-edits.test.ts` | 1 | 9 | 0.9 s |
+| `packages/coding-agent/test/sessions/session-context-edits.test.ts` | 1 | 9 | 0.7 s |
 | `packages/ai/test/sdk-openai-compatible-providers.test.ts` | 3 | 5 | 0.0 s |
 | `packages/coding-agent/test/sessions/session-writer-lock.test.ts` | 4 | 3 | 0.7 s |
-| `packages/coding-agent/test/sessions/session-sdk.test.ts` | 5 | 1 | 1.4 s |
+| `packages/coding-agent/test/sessions/session-sdk.test.ts` | 5 | 1 | 1.2 s |
 | `packages/coding-agent/test/providers/provider-stores.test.ts` | 2 | 5 | 0.0 s |
 | `packages/ai/test/sdk-openai-provider.test.ts` | 3 | 3 | 0.0 s |
-| `packages/coding-agent/test/application/plugins.test.ts` | 3 | 3 | 0.6 s |
+| `packages/coding-agent/test/application/plugins.test.ts` | 3 | 3 | 0.5 s |
 | `packages/coding-agent/test/sessions/reset-session-data.test.ts` | 2 | 4 | 0.1 s |
 | `packages/coding-agent/test/sessions/selections.test.ts` | 2 | 4 | 0.0 s |
 | `packages/coding-agent/test/sessions/session-usage.test.ts` | 2 | 4 | 0.0 s |
 
-Markers were **not** applied (report-only run). The suite is already 109 s, so a smoke tier buys little latency today; its value is the protected cohort, not the clock. If markers are adopted later, encode them as `test` tags and verify with the runner's list mode before removing anything from the default lane.
+The cohorts are committed as `scripts/test-tiers.json` (generated by `bun scripts/test-curation/tiers.ts`) and selected by tier, not by moving files: `bun scripts/test-portfolio.ts default --tier smoke`. The default lane still runs every Default test, and a Default test that has no tier entry fails the tiered run instead of silently dropping out. The suite is already 109 s, so a smoke tier buys little latency today; its value is the protected cohort and that omission check. Confirm a selection with `--tier <name> --list`. Displayed smoke membership is capped at 20 rows.
 
 ## 11. Audit record
 
@@ -246,18 +254,22 @@ One row per flagged test. Since nothing was quarantined or deleted, `approver` a
 
 | Test | Category | Evidence | Superseded by | Coverage delta | Mutation check | Action | Approver | Restore |
 |---|---|---|---|---|---|---|---|---|
-| `prompt-config-provider.test.ts:40` resets to low when the newly selected Provider Model supports it | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first  | none — no survivor subsumes it | 0 lines / 0 branches | yes: 3 asymmetric mutant(s), cluster 0 | keep; no action | pending (no change applied) | n/a |
-| `prompt-config-provider.test.ts:56` uses a higher-first fallback when the new model does not support low | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first  | none — no survivor subsumes it | 0 lines / 0 branches | yes: 3 asymmetric mutant(s), cluster 0 | keep; no action | pending (no change applied) | n/a |
-| `prompt-config-provider.test.ts:72` falls back to the closest lower supported level when no higher level exists | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first  | none — no survivor subsumes it | 0 lines / 0 branches | yes: 3 asymmetric mutant(s), cluster 0 | keep; no action | pending (no change applied) | n/a |
-| `prompt-config-provider.test.ts:88` uses explicit Off only when it is the sole supported fallback | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first  | none — no survivor subsumes it | 0 lines / 0 branches | yes: 3 asymmetric mutant(s), cluster 0 | keep; no action | pending (no change applied) | n/a |
-| `plugin-registry.test.ts:159` an undeclared policy category is rejected during plugin registration | keep | Three distinct plugin-registration rejections: undeclared policy category, famil | none — no survivor subsumes it | 0 lines / 0 branches | yes: 4 asymmetric mutant(s), cluster 1 | keep; no action | pending (no change applied) | n/a |
-| `plugin-registry.test.ts:191` a family adapter must match its declared policy category | keep | Three distinct plugin-registration rejections: undeclared policy category, famil | none — no survivor subsumes it | 0 lines / 0 branches | yes: 4 asymmetric mutant(s), cluster 1 | keep; no action | pending (no change applied) | n/a |
-| `plugin-registry.test.ts:209` providers without a context projection are rejected before resolution | keep | Three distinct plugin-registration rejections: undeclared policy category, famil | none — no survivor subsumes it | 0 lines / 0 branches | yes: 4 asymmetric mutant(s), cluster 1 | keep; no action | pending (no change applied) | n/a |
+| `scalar-predicates.test.ts:54` accepts integers beyond the safe range and rejects fractional values | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `scalar-predicates.test.ts:91` accepts finite non-negative numbers | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `scalar-predicates.test.ts:110` accepts only positive integers | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `scalar-predicates.test.ts:119` accepts only positive safe integers | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `prompt-config-provider.test.ts:40` resets to low when the newly selected Provider Model supports it | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first  | none — no survivor subsumes it | 0 lines / 0 branches | yes: 3 asymmetric mutant(s), cluster 1 | keep; no action | pending (no change applied) | n/a |
+| `prompt-config-provider.test.ts:56` uses a higher-first fallback when the new model does not support low | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first  | none — no survivor subsumes it | 0 lines / 0 branches | yes: 3 asymmetric mutant(s), cluster 1 | keep; no action | pending (no change applied) | n/a |
+| `prompt-config-provider.test.ts:72` falls back to the closest lower supported level when no higher level exists | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first  | none — no survivor subsumes it | 0 lines / 0 branches | yes: 3 asymmetric mutant(s), cluster 1 | keep; no action | pending (no change applied) | n/a |
+| `prompt-config-provider.test.ts:88` uses explicit Off only when it is the sole supported fallback | keep | Four distinct thinking-level fallback policies: lower-level reset, higher-first  | none — no survivor subsumes it | 0 lines / 0 branches | yes: 3 asymmetric mutant(s), cluster 1 | keep; no action | pending (no change applied) | n/a |
+| `plugin-registry.test.ts:159` an undeclared policy category is rejected during plugin registration | keep | Three distinct plugin-registration rejections: undeclared policy category, famil | none — no survivor subsumes it | 0 lines / 0 branches | yes: 4 asymmetric mutant(s), cluster 2 | keep; no action | pending (no change applied) | n/a |
+| `plugin-registry.test.ts:191` a family adapter must match its declared policy category | keep | Three distinct plugin-registration rejections: undeclared policy category, famil | none — no survivor subsumes it | 0 lines / 0 branches | yes: 4 asymmetric mutant(s), cluster 2 | keep; no action | pending (no change applied) | n/a |
+| `plugin-registry.test.ts:209` providers without a context projection are rejected before resolution | keep | Three distinct plugin-registration rejections: undeclared policy category, famil | none — no survivor subsumes it | 0 lines / 0 branches | yes: 4 asymmetric mutant(s), cluster 2 | keep; no action | pending (no change applied) | n/a |
 | `prompt-cache-warming.test.ts:593` SDK warming skips Provider Models missing exact cache tiers or TTL metadata | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `prompt-cache-warming.test.ts:636` SDK warming skips Provider Models with no TTL for an advertised cache tier | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `prompt-cache-warming.test.ts:678` SDK warming skips a Provider Model whose exact price metadata is unknown | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `chat-shell.test.tsx:987` preserves another focused control when the pointer moves inside the view | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `chat-shell.test.tsx:1281` preserves another focused control when terminal focus returns | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `chat-shell.test.tsx:987` preserves another focused control when the pointer moves inside the view | keep | Two subscriptions into one focus predicate: `onMouseMove` vs opentui `useFocus`  | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `chat-shell.test.tsx:1281` preserves another focused control when terminal focus returns | keep | Two subscriptions into one focus predicate: `onMouseMove` vs opentui `useFocus`  | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `file-operations.test.ts:53` a completed Edit reports every file it committed | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `file-operations.test.ts:79` a batch Edit reports each file once even when a path repeats | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `project-trust-preflight.test.tsx:212` trust selector resolves Escape as cancellation instead of rejecting | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
@@ -268,10 +280,10 @@ One row per flagged test. Since nothing was quarantined or deleted, `approver` a
 | `compaction.test.ts:1666` joins an in-flight maintenance compaction across a selection change | keep | Two different concurrency invariants: single in-flight compaction per session vs | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `sdk-consumer-bun.test.ts:94` Bun consumers preserve chat controls and terminal outcomes through the public SDK | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `sdk-consumer-node.test.ts:124` Node consumers import the public SDK | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `clipboard-selection-interactions.test.tsx:136` the copy shortcut copies a selection in manual mode | keep | Manual-mode copy vs range copy without clearing: different mode flag and differe | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `clipboard-selection-interactions.test.tsx:151` the copy shortcut copies a selected range without clearing it | keep | Manual-mode copy vs range copy without clearing: different mode flag and differe | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `session-bundle-export.test.ts:1154` bundle manifest validation rejects a log ID ending in a line terminator | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `session-bundle-export.test.ts:1173` bundle manifest validation rejects path traversal before reading outside the bundle | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `clipboard-selection-interactions.test.tsx:139` the copy shortcut copies a selection in manual mode | keep | Manual-mode copy vs range copy without clearing: different mode flag and differe | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `clipboard-selection-interactions.test.tsx:155` the copy shortcut copies a selected range without clearing it | keep | Manual-mode copy vs range copy without clearing: different mode flag and differe | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `logger.test.ts:274` retries retention after the log directory becomes readable | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `logger.test.ts:291` retries retention when deleting an expired log fails | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 2 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `clipboard-copy-on-select.test.ts:154` reports a rejected write without claiming the selection was copied | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
@@ -280,10 +292,6 @@ One row per flagged test. Since nothing was quarantined or deleted, `approver` a
 | `clipboard-selection-keys.test.ts:96` the copy shortcut absorbs an empty selection without clearing it | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `clipboard-selection-keys.test.ts:78` the copy shortcut copies a double-click word selection | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `clipboard-selection-keys.test.ts:113` the copy shortcut absorbs a plain cell click without copying it | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `scalar-predicates.test.ts:69` accepts only positive integers | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `scalar-predicates.test.ts:78` accepts only positive safe integers | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `submit.test.ts:305` expands pasted-text markers before matching a selected marker | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `submit.test.ts:511` maps a selected marker through pasted-text expansion | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `compaction.test.ts:2883` a Plugin custom summary still passes host validation and persistence | keep | Plugin summary persistence/validation vs generator must not be invoked: differen | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `compaction.test.ts:3050` a Plugin summary avoids invoking a summary generator | keep | Plugin summary persistence/validation vs generator must not be invoked: differen | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `new-session-view-focus.test.tsx:1293` initializes the available low thinking level before creating a new reasoning Session | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
@@ -302,8 +310,8 @@ One row per flagged test. Since nothing was quarantined or deleted, `approver` a
 | `cli-startup.test.ts:110` CLI help remains available before an interactive runtime is initialized | keep | Two separate subprocess CLI behaviors: static load order vs help availability be | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `clipboard.test.ts:67` returns no content when the clipboard has no accepted image type | keep | Two distinct clipboard statuses (empty vs unsupported) mapping to the same no-co | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `clipboard.test.ts:75` returns no content when the platform cannot read images | keep | Two distinct clipboard statuses (empty vs unsupported) mapping to the same no-co | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `registry.test.ts:369` fails when a remote tools filter requests a missing tool | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `registry.test.ts:392` connects when a remote tools filter matches the exposed catalog | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `registry.test.ts:384` fails when a remote tools filter requests a missing tool | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `registry.test.ts:407` connects when a remote tools filter matches the exposed catalog | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `provider-themes.test.ts:274` resolves every bundled theme with complete markdown and syntax tokens | keep | Markdown/syntax token keys vs diff token keys: disjoint key sets. | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `provider-themes.test.ts:311` resolves every bundled theme with complete diff tokens | keep | Markdown/syntax token keys vs diff token keys: disjoint key sets. | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `provider-themes.test.ts:282` every bundled theme has a complete opencode-sourced override entry | keep | OpenCode markdown override entries vs diff override entries: disjoint override m | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
@@ -326,35 +334,35 @@ One row per flagged test. Since nothing was quarantined or deleted, `approver` a
 | `use-git-branch.test.tsx:69` preserves HTTPS origins when resolving the repository browser URL | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `client.test.ts:165` resolves relative cwd against the workspace and normalizes it | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 2 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 | `client.test.ts:182` keeps absolute cwd as-is | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `scalar-predicates.test.ts:21` accepts non-empty strings without trimming | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
-| `scalar-predicates.test.ts:35` accepts strings including empty strings | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `scalar-predicates.test.ts:25` accepts non-empty strings without trimming | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 1 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
+| `scalar-predicates.test.ts:39` accepts strings including empty strings | review-candidate | near-duplicate, kill-set inconclusive | none — no survivor subsumes it | 0 lines / 0 branches | partial: no asymmetric kill observed | keep; no action | pending (no change applied) | n/a |
 
 82 rows. Blackbox tests (zero covered application lines) and the 7 ambiguous-name tests are recorded here as protected, not as candidates:
 
 | Test | Category | Reason |
 |---|---|---|
-| `sdk-consumer.test.ts` core-only external SDK consumer imports and streams under Bun | blackbox | covers no application line: subprocess or generated-data assertion |
 | `sdk-consumer.test.ts` OpenAI-factory external consumer imports and chats under Bun | blackbox | covers no application line: subprocess or generated-data assertion |
+| `sdk-consumer.test.ts` core-only external SDK consumer imports and streams under Bun | blackbox | covers no application line: subprocess or generated-data assertion |
 | `sdk-consumer.test.ts` Anthropic-factory external consumer imports and chats under Bun | blackbox | covers no application line: subprocess or generated-data assertion |
 | `sdk-consumer.test.ts` Anthropic-factory external consumer imports and chats under Node | blackbox | covers no application line: subprocess or generated-data assertion |
-| `sdk-consumer.test.ts` core-only external SDK consumer imports and streams under Node | blackbox | covers no application line: subprocess or generated-data assertion |
 | `sdk-consumer.test.ts` OpenAI-factory external consumer imports and chats under Node | blackbox | covers no application line: subprocess or generated-data assertion |
 | `generator-graph.test.ts` bundles generators without importing generated output (#57) | blackbox | covers no application line: subprocess or generated-data assertion |
+| `sdk-consumer.test.ts` core-only external SDK consumer imports and streams under Node | blackbox | covers no application line: subprocess or generated-data assertion |
 | `sdk-openai-compatible-consumer.test.ts` external DeepSeek and OpenRouter SDK consumer works under Bun | blackbox | covers no application line: subprocess or generated-data assertion |
 | `sdk-openai-compatible-consumer.test.ts` external DeepSeek and OpenRouter SDK consumer works under Node | blackbox | covers no application line: subprocess or generated-data assertion |
 | `sdk-anthropic-import-isolation.test.ts` Anthropic factory bundles without peer providers or aggregate metadata | blackbox | covers no application line: subprocess or generated-data assertion |
-| `provider-model-catalog.test.ts` family metadata stays scoped to its provider route | blackbox | covers no application line: subprocess or generated-data assertion |
 | `provider-model-catalog.test.ts` routed context policy follows explicit model family, not model name | blackbox | covers no application line: subprocess or generated-data assertion |
+| `provider-model-catalog.test.ts` family metadata stays scoped to its provider route | blackbox | covers no application line: subprocess or generated-data assertion |
 | ... | blackbox | 37 more: the remaining `provider-model-catalog`, `sdk-consumer*`, `executable`, `test-entrypoint` and `distribution` cases |
 
 ## 12. Verification of this audit
 
 | Check | Result |
 |---|---|
-| Per-test contexts captured | Partial by design: Bun has no dynamic contexts. 2542 isolated runs; 7 ambiguous-name cases flagged; no branch data exists (0 `BRDA` records). |
+| Per-test contexts captured | Partial by design: Bun has no dynamic contexts. 2552 isolated runs; 7 ambiguous-name cases flagged; no branch data exists (0 `BRDA` records). |
 | No deletion rests on coverage equality | Holds: 0 deletions proposed. The 12 identical-coverage clusters were reviewed individually; 12 are keeps. |
 | Quarantine before removal | Not applicable: nothing was removed or quarantined. The log records zero deletions, so `git log --diff-filter=D -- tests/` is unchanged. |
-| Tiers select correctly | Not applicable: markers were not applied. The proposed table is in section 10. |
+| Tiers select correctly | `bun scripts/test-portfolio.ts default --tier <name> --list` lists only that cohort, and every Default test carries exactly one tier: a missing or stray entry fails the run. |
 | Audit record complete | Every flagged row has category, superseded-by, coverage delta, mutation-check status, action and approver state. |
 | Reproducible | `scripts/test-curation/` runs the whole pipeline; `report.ts` regenerates this file from the artifacts. |
 
@@ -363,4 +371,4 @@ One row per flagged test. Since nothing was quarantined or deleted, `approver` a
 1. This run finds no merge candidate. The one the previous audit found (`summary-generator.test.ts`, output-limit vs filtered) is now a single table-driven test in commit `7d2d57a6`; it kept both inputs and the shared oracle.
 2. `session-host.test.ts`'s Google-cache test is fixed at the root: the volatile environment block left the cacheable system prefix, so live repository churn no longer invalidates the second Host's Cache. The test keeps running against the repository workspace as the regression check, and no quarantine was needed.
 3. If any candidate is ever quarantined under a different review, follow the skill's order: skip/xfail with the log row id, named approver, two-release observation window, escaped-defect watch, then delete in small batches with `mutation_check: yes` recorded per row.
-4. Do not prune on coverage: in this repo, 90% of covered lines are shared and 131 test groups are coverage-identical, so a coverage-driven prune would have flagged real oracles as redundant 12 times out of 12.
+4. Do not prune on coverage: in this repo, 90% of covered lines are shared and 129 test groups are coverage-identical, so a coverage-driven prune would have flagged real oracles as redundant 12 times out of 12.

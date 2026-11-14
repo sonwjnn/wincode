@@ -3,6 +3,9 @@ import * as path from "node:path";
 import type { ReadonlyDeep } from "type-fest";
 
 export type TestClassification = "default" | "e2e" | "external";
+export type TestTier = "smoke" | "core" | "extended";
+export const TEST_TIERS: readonly TestTier[] = ["smoke", "core", "extended"];
+export const TEST_TIERS_PATH = "scripts/test-tiers.json";
 
 export type DiscoveredTestFile = Readonly<{
 	classification: TestClassification;
@@ -226,3 +229,85 @@ export const groupTestsByPackage = (
 	}
 	return grouped;
 };
+
+type TestTierManifest = Readonly<{
+	source: string;
+	tiers: Readonly<Record<string, string>>;
+	version: number;
+}>;
+
+export type TestTierSelection = Readonly<{
+	issues: readonly TestDiscoveryIssue[];
+	tiers: ReadonlyMap<string, TestTier>;
+}>;
+
+const isTestTier = (value: string): value is TestTier =>
+	Object.hasOwn(TEST_TIER_INDEX, value);
+const TEST_TIER_INDEX: Record<string, true> = {
+	core: true,
+	extended: true,
+	smoke: true,
+};
+
+/**
+ * Reads the committed tier manifest and checks it against the files this run
+ * discovered. A tier that silently omits a Default file would hide tests from
+ * every gate, so a missing entry is an issue rather than a default.
+ */
+export const readTestTiers = async (
+	root: string,
+	defaultFiles: readonly DiscoveredTestFile[]
+): Promise<TestTierSelection> => {
+	const issues: TestDiscoveryIssue[] = [];
+	const manifestPath = path.join(path.resolve(root), TEST_TIERS_PATH);
+	const raw = (await Bun.file(manifestPath)
+		.json()
+		.catch(() => undefined)) as TestTierManifest | undefined;
+	if (!raw || typeof raw.tiers !== "object" || raw.tiers === null) {
+		issue(
+			issues,
+			TEST_TIERS_PATH,
+			`tier manifest is missing or unreadable; run bun ${TEST_TIERS_PATH.replace("test-tiers.json", "test-curation/tiers.ts")}`
+		);
+		return { issues, tiers: new Map() };
+	}
+
+	const discovered = new Set(defaultFiles.map((file) => file.path));
+	const tiers = new Map<string, TestTier>();
+	for (const [file, value] of Object.entries(raw.tiers)) {
+		if (!discovered.has(file)) {
+			issue(
+				issues,
+				file,
+				"tier manifest names a file that is not a Default test"
+			);
+			continue;
+		}
+		if (!isTestTier(value)) {
+			issue(
+				issues,
+				file,
+				`tier manifest value ${JSON.stringify(value)} is not one of ${TEST_TIERS.join(", ")}`
+			);
+			continue;
+		}
+		tiers.set(file, value);
+	}
+	for (const file of discovered) {
+		if (!tiers.has(file)) {
+			issue(
+				issues,
+				file,
+				`Default test file has no tier entry in ${TEST_TIERS_PATH}`
+			);
+		}
+	}
+	return { issues, tiers };
+};
+
+export const testsForTier = (
+	files: readonly DiscoveredTestFile[],
+	tiers: ReadonlyMap<string, TestTier>,
+	tier: TestTier
+): readonly DiscoveredTestFile[] =>
+	files.filter((file) => tiers.get(file.path) === tier);

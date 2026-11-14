@@ -350,6 +350,113 @@ test("completes successfully", () => {
 		}
 	});
 
+	test("a tier selection lists its cohort without executing another tier", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-test-tier-"));
+		const marker = path.join(root, "execution.log");
+		try {
+			await writeFixture(
+				root,
+				"packages/alpha/test/gated.test.ts",
+				`import * as fs from "node:fs";
+import { test } from "bun:test";
+test("runs only when selected", () => {
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "gated\\n");
+});
+`
+			);
+			await writeFixture(
+				root,
+				"packages/alpha/test/nightly.test.ts",
+				`import * as fs from "node:fs";
+import { test } from "bun:test";
+test("extra coverage", () => {
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "nightly\\n");
+});
+`
+			);
+			await writeFixture(
+				root,
+				"scripts/test-tiers.json",
+				JSON.stringify({
+					source: "fixture",
+					tiers: {
+						"packages/alpha/test/gated.test.ts": "smoke",
+						"packages/alpha/test/nightly.test.ts": "extended",
+					},
+					version: 1,
+				})
+			);
+
+			const listed = runPortfolio(
+				root,
+				"default",
+				["--tier", "smoke", "--list"],
+				{ WINCODE_PORTFOLIO_MARKER: marker }
+			);
+			expect(listed.exitCode).toBe(0);
+			expect(listed.output).toContain("packages/alpha/test/gated.test.ts");
+			expect(listed.output).not.toContain("nightly.test.ts");
+			expect(await exists(marker)).toBe(false);
+
+			const ran = runPortfolio(root, "default", ["--tier", "smoke"], {
+				WINCODE_PORTFOLIO_MARKER: marker,
+			});
+			expect(ran.exitCode).toBe(0);
+			expect(ran.output).toContain(
+				"Selected Default test files for tier smoke: 1"
+			);
+			expect(await Bun.file(marker).text()).toBe("gated\n");
+		} finally {
+			await fs.rm(root, { force: true, recursive: true });
+		}
+	});
+
+	test("a Default test missing from the tier manifest fails the tiered run", async () => {
+		const root = await fs.mkdtemp(
+			path.join(os.tmpdir(), "wincode-test-tier-omission-")
+		);
+		const marker = path.join(root, "execution.log");
+		try {
+			await writeFixture(
+				root,
+				"packages/alpha/test/covered.test.ts",
+				`import { test } from "bun:test";
+test("covered by the manifest", () => {});
+`
+			);
+			await writeFixture(
+				root,
+				"packages/alpha/test/uncovered.test.ts",
+				`import * as fs from "node:fs";
+import { test } from "bun:test";
+test("silently skipped when the manifest is stale", () => {
+	fs.appendFileSync(process.env.WINCODE_PORTFOLIO_MARKER!, "ran\\n");
+});
+`
+			);
+			await writeFixture(
+				root,
+				"scripts/test-tiers.json",
+				JSON.stringify({
+					source: "fixture",
+					tiers: { "packages/alpha/test/covered.test.ts": "core" },
+					version: 1,
+				})
+			);
+
+			const result = runPortfolio(root, "default", ["--tier", "core"], {
+				WINCODE_PORTFOLIO_MARKER: marker,
+			});
+			expect(result.exitCode).not.toBe(0);
+			expect(result.output).toContain(
+				"packages/alpha/test/uncovered.test.ts: Default test file has no tier entry"
+			);
+			expect(await exists(marker)).toBe(false);
+		} finally {
+			await fs.rm(root, { force: true, recursive: true });
+		}
+	});
+
 	test("root test runs script contracts before the Default portfolio", async () => {
 		const packageDocument: unknown = await Bun.file(
 			path.join(repositoryRoot, "package.json")

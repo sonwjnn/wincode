@@ -16,6 +16,7 @@ import {
 	readJson,
 	repoRoot,
 } from "./lib";
+import { assignTestTiers, scoreTestTiers } from "./tiering";
 
 type ClusterMember = {
 	ambiguous: boolean;
@@ -126,73 +127,14 @@ const perFileTests = new Map<string, number>();
 for (const test of run1) {
 	perFileTests.set(test.file, (perFileTests.get(test.file) ?? 0) + 1);
 }
-const fixCounts = new Map(
-	history.testFileFixCounts.map((entry) => [entry.file, entry.fixes])
-);
-const addedByFix = new Map(
-	Object.entries(history.addedTestsByFile).map(([file, tests]) => [
-		file,
-		tests.length,
-	])
-);
-
-const DOMAIN_BY_DIRECTORY: Record<string, string> = {
-	application: "application",
-	commands: "commands",
-	mcp: "mcp",
-	plugins: "plugins",
-	providers: "providers",
-	sessions: "sessions",
-	shared: "shared",
-	skills: "skills",
-	tools: "tools",
-};
-const CRITICAL_DOMAINS = new Set([
-	"sessions",
-	"providers",
-	"tools",
-	"application",
-]);
-const domainOf = (file: string): string => {
-	const parts = file.split("/");
-	if (parts.length > 4) {
-		return DOMAIN_BY_DIRECTORY[parts[3] ?? ""] ?? parts[3] ?? "";
-	}
-	if (parts[1] === "ai") {
-		return "ai-sdk";
-	}
-	if (parts[1] === "agent-core") {
-		return "agent-core";
-	}
-	if (parts[1] === "mcp") {
-		return "mcp";
-	}
-	if (parts[1] === "utils") {
-		return "utils";
-	}
-	if (parts[1] === "subagents") {
-		return "subagents";
-	}
-	return (parts.at(-1) ?? "").startsWith("rpc") ? "rpc" : "coding-agent-root";
-};
-const riskScore = (file: string): number =>
-	3 * (fixCounts.get(file) ?? 0) + 2 * (addedByFix.get(file) ?? 0);
-const tierOf = (file: string): "core" | "extended" | "smoke" => {
-	const domain = domainOf(file);
-	const critical =
-		CRITICAL_DOMAINS.has(domain) || domain === "ai-sdk" || domain === "rpc";
-	if (
-		critical &&
-		((fixCounts.get(file) ?? 0) >= 3 || (addedByFix.get(file) ?? 0) >= 3) &&
-		(durations.get(file) ?? 0) <= 5000
-	) {
-		return "smoke";
-	}
-	if (critical || (fixCounts.get(file) ?? 0) >= 2) {
-		return "core";
-	}
-	return "extended";
-};
+const tierInputs = {
+	addedTestsByFile: history.addedTestsByFile,
+	durationsMs: durations,
+	files: [...perFileTests.keys()],
+	testFileFixCounts: history.testFileFixCounts,
+} as const;
+const tierScores = scoreTestTiers(tierInputs);
+const tiers = assignTestTiers(tierInputs);
 
 type ClusterVerdict = {
 	category: "keep" | "merge-candidate";
@@ -385,6 +327,20 @@ const CLUSTER_VERDICTS: readonly ClusterVerdict[] = [
 			},
 		],
 		why: "Complete skill metadata vs activation metadata without instructions: the second asserts absence, which the first does not.",
+	},
+	{
+		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/sessions/chat-shell.test.tsx",
+				name: "preserves another focused control when the pointer moves inside the view",
+			},
+			{
+				file: "packages/coding-agent/test/sessions/chat-shell.test.tsx",
+				name: "preserves another focused control when terminal focus returns",
+			},
+		],
+		why: "Two subscriptions into one focus predicate: `onMouseMove` vs opentui `useFocus` on the renderer focus event. Dropping or rebinding either subscription fails exactly one member, and only the shared `focusComponent` guard fails both.",
 	},
 ];
 
@@ -620,6 +576,10 @@ A(
 	"Different function, opposite assertion on the empty string, coverage Jaccard 0.99. Deleting either one silently removes the only guard on that distinction. This is the failure mode the coverage-equal prune creates, reproduced on demand."
 );
 A();
+A(
+	"The grouping itself is not reproducible across runs. The `chat-shell.test.tsx` focus pair measured byte-identical in an earlier run of this harness and 8 lines apart in this one, at the same commit, because isolated per-test coverage jitters wherever a flush lands a particular way. Treat the group count as an upper bound and the per-cluster verdicts as the durable result: they are keyed to the tests, not to the coincidence. That instability is the argument against pruning on coverage equality, not a defect in the test suite."
+);
+A();
 A("## 5. Near-duplicate clusters");
 A();
 A(
@@ -711,20 +671,34 @@ A(
 	"**Obsolete disposition: empty.** Nothing in the Default portfolio tests a module that no longer exists. The historical test files for removed packages (`packages/tui`, `packages/runtime-utils`) are already gone."
 );
 A();
+A("## 8a. Test isolation (incidental)");
+A();
+A(
+	"Running the portfolio for this audit exposed one hermeticity defect unrelated to redundancy: **every Default-portfolio run from the repository root left a 385 KB `session-projection.sqlite` (plus `-shm` and `-wal`) untracked in the working directory**, and the file was not gitignored."
+);
+A();
+A(
+	'Mechanism: `resolveSessionDatabasePath` returns a non-file database path (`":memory:"` or `""`) verbatim, and `resolveLocalSessionProjectionPath` then derived `path.dirname(":memory:")`, which is `.`. Any Host opened over an in-memory database therefore created its projection beside whatever directory the process ran in. Minimal reproduction, isolated by bisecting the coding-agent package: `bun test packages/coding-agent/test/providers/models-json-provider.test.ts` alone, from any cwd.'
+);
+A();
+A(
+	"Impact: the suite was not hermetic with respect to its working directory, the file survives between runs as shared cross-test state, and a `git add -A` would have committed a binary. Fixed by returning the sentinel unchanged from `resolveLocalSessionProjectionPath` (an in-memory database gets an in-memory projection), with the contract now defended by `test/sessions/session-database-path.test.ts`. The sibling resolvers (`resolveLocalSessionLogRoot`, `resolveLocalAttachmentRoot`, `resolveLocalSnapshotRoot`) still derive `.`-relative directories for a non-file database; no run has written them, and they are recorded here rather than changed."
+);
+A();
 A("## 9. Dispositions");
 A();
 A("Categories follow the skill's four states, each with its own action.");
 A();
-const keepClusterSizes = identicalClusters
-	.filter(({ cluster }) => verdictFor(cluster)?.category === "keep")
-	.reduce((sum, { cluster }) => sum + cluster.size, 0);
+const keepClusterSizes = coverage.clusterCoverage
+	.filter((cluster) => verdictFor(cluster)?.category === "keep")
+	.reduce((sum, cluster) => sum + cluster.size, 0);
 const provenKeep = [...asymmetricClusters.keys()].reduce(
 	(sum, index) => sum + (coverage.clusterCoverage[index]?.size ?? 0),
 	0
 );
-const mergeSize = identicalClusters
-	.filter(({ cluster }) => verdictFor(cluster)?.category === "merge-candidate")
-	.reduce((sum, { cluster }) => sum + cluster.size, 0);
+const mergeSize = coverage.clusterCoverage
+	.filter((cluster) => verdictFor(cluster)?.category === "merge-candidate")
+	.reduce((sum, cluster) => sum + cluster.size, 0);
 const reviewSize =
 	coverage.clusterCoverage.reduce((sum, cluster) => sum + cluster.size, 0) -
 	keepClusterSizes -
@@ -772,10 +746,6 @@ A(
 );
 A("- runtime tiebreak: `smoke` requires <= 5 s per file.");
 A();
-const tiers = new Map<string, string>();
-for (const file of perFileTests.keys()) {
-	tiers.set(file, tierOf(file));
-}
 A("| Tier | Files | Tests | Wall clock |");
 A("|---|---|---|---|");
 for (const tier of ["smoke", "core", "extended"] as const) {
@@ -794,16 +764,16 @@ A("|---|---|---|---|");
 const smokeFiles = [...tiers.entries()]
 	.filter(([, tier]) => tier === "smoke")
 	.map(([file]) => file)
-	.sort((left, right) => riskScore(right) - riskScore(left))
+	.sort((left, right) => tierScores.risk(right) - tierScores.risk(left))
 	.slice(0, 20);
 for (const file of smokeFiles) {
 	A(
-		`| \`${file}\` | ${fixCounts.get(file) ?? 0} | ${addedByFix.get(file) ?? 0} | ${((durations.get(file) ?? 0) / 1000).toFixed(1)} s |`
+		`| \`${file}\` | ${tierScores.fixes(file)} | ${tierScores.addedByFix(file)} | ${((durations.get(file) ?? 0) / 1000).toFixed(1)} s |`
 	);
 }
 A();
 A(
-	`Markers were **not** applied (report-only run). The suite is already ${Math.round([...durations.values()].reduce((sum, value) => sum + value, 0) / 1000)} s, so a smoke tier buys little latency today; its value is the protected cohort, not the clock. If markers are adopted later, encode them as \`test\` tags and verify with the runner's list mode before removing anything from the default lane.`
+	`The cohorts are committed as \`scripts/test-tiers.json\` (generated by \`bun scripts/test-curation/tiers.ts\`) and selected by tier, not by moving files: \`bun scripts/test-portfolio.ts default --tier smoke\`. The default lane still runs every Default test, and a Default test that has no tier entry fails the tiered run instead of silently dropping out. The suite is already ${Math.round([...durations.values()].reduce((sum, value) => sum + value, 0) / 1000)} s, so a smoke tier buys little latency today; its value is the protected cohort and that omission check. Confirm a selection with \`--tier <name> --list\`. Displayed smoke membership is capped at 20 rows.`
 );
 A();
 A("## 11. Audit record");
@@ -866,7 +836,7 @@ A(
 	"| Quarantine before removal | Not applicable: nothing was removed or quarantined. The log records zero deletions, so `git log --diff-filter=D -- tests/` is unchanged. |"
 );
 A(
-	"| Tiers select correctly | Not applicable: markers were not applied. The proposed table is in section 10. |"
+	"| Tiers select correctly | `bun scripts/test-portfolio.ts default --tier <name> --list` lists only that cohort, and every Default test carries exactly one tier: a missing or stray entry fails the run. |"
 );
 A(
 	"| Audit record complete | Every flagged row has category, superseded-by, coverage delta, mutation-check status, action and approver state. |"

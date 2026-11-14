@@ -29,8 +29,11 @@ bun scripts/test-curation/flake.ts run1 run2 run3
 bun scripts/test-curation/obsolete.ts                 # seconds, unresolved imports
 bun scripts/test-curation/faults.ts                   # ~5 min, operator mutants
 bun scripts/test-curation/reverts.ts                  # ~2 min, historical fix reverts
+bun scripts/test-curation/tiers.ts                    # seconds, rewrites scripts/test-tiers.json
 bun scripts/test-curation/report.ts                   # rewrites docs/test-curation-log.md
 ```
+
+`tiers.ts` writes a committed manifest, so run it only when you mean to change the smoke/core/extended cohorts. `bun scripts/test-portfolio.ts default --tier <name> --list` shows a selection and fails on any Default test with no tier entry.
 
 `faults.ts` defaults to the clusters named in the log. Select others with `--files a.test.ts,b.test.ts`; pass `--worktree <dir>` to reuse an existing detached worktree instead of creating and removing one.
 
@@ -67,6 +70,7 @@ bun scripts/test-curation/report.ts                   # rewrites docs/test-curat
 - **Zero-coverage tests are protected.** A test that spawns a subprocess or asserts generated data covers no application line; coverage cannot justify removing it.
 - **Never-failing is not low-value.** `flake.ts` reports same-commit divergence, not absence of failures. A test that never failed usually guards stable, low-churn code.
 - **Dispositions are four different actions.** Redundant (quarantine after a kill-set), obsolete (delete only after confirming the target is gone), low-value (quarantine and review), keep. This harness reports; it does not remove.
+- **Tiers are a manifest, not a rename.** `tiering.ts` assigns smoke/core/extended from risk, defect history and a runtime tiebreak; `tiers.ts` writes `scripts/test-tiers.json`; the portfolio runner selects by tier. No test file moves and the default lane is unchanged.
 
 ## Limits
 

@@ -7,9 +7,13 @@ import {
 	type DiscoveredTestFile,
 	discoverTests,
 	groupTestsByPackage,
+	readTestTiers,
+	TEST_TIERS,
 	type TestClassification,
-	type TestDiscovery,
+	type TestDiscoveryIssue,
+	type TestTier,
 	testsForClassification,
+	testsForTier,
 } from "./test-discovery";
 
 const TEST_TIMEOUT_MS = 30_000;
@@ -67,17 +71,63 @@ const buildWorkspaceRuntimeDependencies = async (
 };
 
 type RunnerArguments = {
+	readonly list: boolean;
 	readonly packageFilter?: string;
 	readonly portfolio: TestClassification;
 	readonly root: string;
+	readonly tier?: TestTier;
 };
 
 type OutputWriter = {
 	readonly write: (chunk: string) => boolean;
 };
 
+const TEST_TIER_INDEX: Record<string, true> = {
+	core: true,
+	extended: true,
+	smoke: true,
+};
+
 const usage = (): string =>
-	"Usage: bun scripts/test-portfolio.ts <default|e2e> [--package <name>] [--root <path>]";
+	"Usage: bun scripts/test-portfolio.ts <default|e2e> [--package <name>] [--tier <smoke|core|extended>] [--list] [--root <path>]";
+
+const parseTier = (value: string): TestTier => {
+	if (!Object.hasOwn(TEST_TIER_INDEX, value)) {
+		throw new Error(
+			`Unknown tier: ${value}; use one of ${TEST_TIERS.join(", ")}.\n${usage()}`
+		);
+	}
+	return value as TestTier;
+};
+
+const VALUE_FLAGS: Record<string, true> = {
+	"--package": true,
+	"--root": true,
+	"--tier": true,
+};
+
+type ParseState = {
+	list: boolean;
+	packageFilter?: string;
+	root: string;
+	tier?: TestTier;
+};
+
+const applyValueFlag = (
+	state: ParseState,
+	flag: string,
+	value: string
+): void => {
+	if (flag === "--package") {
+		state.packageFilter = value;
+		return;
+	}
+	if (flag === "--tier") {
+		state.tier = parseTier(value);
+		return;
+	}
+	state.root = path.resolve(process.cwd(), value);
+};
 
 const parseArguments = (argv: readonly string[]): RunnerArguments => {
 	const portfolio = argv[0];
@@ -85,38 +135,51 @@ const parseArguments = (argv: readonly string[]): RunnerArguments => {
 		throw new Error(usage());
 	}
 
-	let packageFilter: string | undefined;
-	let root = path.resolve(import.meta.dir, "..");
+	const state: ParseState = {
+		list: false,
+		root: path.resolve(import.meta.dir, ".."),
+	};
 	for (let index = 1; index < argv.length; index += 1) {
 		const argument = argv[index];
 		if (!argument) {
 			throw new Error(usage());
 		}
-		if (argument === "--package" || argument === "--root") {
-			const value = argv[index + 1];
-			if (!value) {
-				throw new Error(`${argument} requires a value.\n${usage()}`);
-			}
-			if (argument === "--package") {
-				packageFilter = value;
-			} else {
-				root = path.resolve(process.cwd(), value);
-			}
-			index += 1;
+		if (argument === "--list") {
+			state.list = true;
 			continue;
 		}
-		if (argument.startsWith("--package=")) {
-			packageFilter = argument.slice("--package=".length);
+		const separator = argument.indexOf("=");
+		if (separator > 0) {
+			applyValueFlag(
+				state,
+				argument.slice(0, separator),
+				argument.slice(separator + 1)
+			);
 			continue;
 		}
-		if (argument.startsWith("--root=")) {
-			root = path.resolve(process.cwd(), argument.slice("--root=".length));
-			continue;
+		if (!Object.hasOwn(VALUE_FLAGS, argument)) {
+			throw new Error(`Unknown argument: ${argument}\n${usage()}`);
 		}
-		throw new Error(`Unknown argument: ${argument}\n${usage()}`);
+		const value = argv[index + 1];
+		if (!value) {
+			throw new Error(`${argument} requires a value.\n${usage()}`);
+		}
+		applyValueFlag(state, argument, value);
+		index += 1;
+	}
+	if (state.tier !== undefined && portfolio !== "default") {
+		throw new Error(`--tier selects Default tests only.\n${usage()}`);
 	}
 
-	return { packageFilter, portfolio, root };
+	return {
+		list: state.list,
+		...(state.packageFilter === undefined
+			? {}
+			: { packageFilter: state.packageFilter }),
+		portfolio,
+		root: state.root,
+		...(state.tier === undefined ? {} : { tier: state.tier }),
+	};
 };
 
 const createTestEnvironment = (
@@ -306,8 +369,8 @@ const runE2EFile = async (
 	}
 };
 
-const printDiscoveryIssues = (discovery: TestDiscovery): void => {
-	for (const entry of discovery.issues) {
+const printDiscoveryIssues = (issues: readonly TestDiscoveryIssue[]): void => {
+	for (const entry of issues) {
 		console.error(`Test discovery error: ${entry.path}: ${entry.message}`);
 	}
 };
@@ -329,19 +392,52 @@ const discoverPortfolioFiles = (
 	const label = classification === "default" ? "Default" : "E2E";
 	console.log(`Discovered ${label} test files: ${files.length}`);
 	if (discovery.issues.length > 0) {
-		printDiscoveryIssues(discovery);
+		printDiscoveryIssues(discovery.issues);
 		console.log(`Executed ${label} test files: 0`);
 		return null;
 	}
 	return files;
 };
+const selectDefaultFiles = async (
+	root: string,
+	files: readonly DiscoveredTestFile[],
+	tier: TestTier | undefined
+): Promise<readonly DiscoveredTestFile[] | null> => {
+	if (tier === undefined) {
+		return files;
+	}
+	const selection = await readTestTiers(root, files);
+	if (selection.issues.length > 0) {
+		printDiscoveryIssues(selection.issues);
+		console.log("Selected Default test files: 0");
+		return null;
+	}
+	const selected = testsForTier(files, selection.tiers, tier);
+	console.log(
+		`Selected Default test files for tier ${tier}: ${selected.length}`
+	);
+	return selected;
+};
 const runDefaultPortfolio = async (
 	root: string,
-	packageFilter: string | undefined
+	packageFilter: string | undefined,
+	tier: TestTier | undefined,
+	list: boolean
 ): Promise<number> => {
-	const files = discoverPortfolioFiles(root, "default");
+	const discoveredFiles = discoverPortfolioFiles(root, "default");
+	if (discoveredFiles === null) {
+		return 1;
+	}
+	const files = await selectDefaultFiles(root, discoveredFiles, tier);
 	if (files === null) {
 		return 1;
+	}
+	if (list) {
+		for (const file of files) {
+			console.log(file.path);
+		}
+		console.log(`Listed Default test files: ${files.length}`);
+		return 0;
 	}
 
 	const grouped = groupTestsByPackage(files);
@@ -425,7 +521,9 @@ export const runTestPortfolio = async (
 		if (arguments_.portfolio === "default") {
 			return await runDefaultPortfolio(
 				arguments_.root,
-				arguments_.packageFilter
+				arguments_.packageFilter,
+				arguments_.tier,
+				arguments_.list
 			);
 		}
 		return await runE2EPortfolio(arguments_.root, arguments_.packageFilter);
