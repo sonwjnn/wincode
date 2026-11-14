@@ -260,7 +260,7 @@ describe("provider-neutral model contracts", () => {
 				message: "OpenAI-compatible request failed (413).",
 				statusCode: 413,
 			}).code
-		).not.toBe("context-overflow");
+		).toBe("unknown");
 	});
 
 	test("preserves structured authentication failures without exposing provider diagnostics", () => {
