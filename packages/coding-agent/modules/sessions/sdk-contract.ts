@@ -33,7 +33,7 @@ import type {
 import type {
 	SessionForkCheckpoint,
 	SessionForkResult,
-} from "./storage/session-store";
+} from "./storage/session-lifecycle";
 import type {
 	SessionStatistics,
 	SessionStatisticsOptions,
@@ -69,7 +69,7 @@ export type {
 export type {
 	SessionForkCheckpoint,
 	SessionForkResult,
-} from "./storage/session-store";
+} from "./storage/session-lifecycle";
 export type {
 	SessionStatistics,
 	SessionStatisticsOptions,

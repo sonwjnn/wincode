@@ -14,10 +14,8 @@ import {
 } from "@/modules/sessions/attachment-reference";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import { isValidSessionLogIdentifier } from "@/modules/sessions/session-log-identifiers";
-import type {
-	SessionPageOptions,
-	SessionStatisticsOptions,
-} from "@/modules/sessions/storage/session-store";
+import type { SessionPageOptions } from "@/modules/sessions/session-pagination-types";
+import type { SessionStatisticsOptions } from "@/modules/sessions/usage/session-statistics";
 import { isValidSessionId } from "@/shared/identifiers";
 import { findTextOccurrences } from "@/shared/utils/text-ranges";
 import type { RpcParams, RpcRequest } from "./protocol";

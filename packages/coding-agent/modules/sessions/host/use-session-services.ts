@@ -15,7 +15,7 @@ import {
 	getInteractivePluginRuntime,
 	getInteractiveRuntimeContext,
 } from "@/shared/runtime-context";
-import { getSessionStore } from "../storage/get-session-store";
+import { getSessionStorage } from "../storage/get-session-storage";
 import { getInteractiveSessionHostManager } from "./session-host-manager";
 import { openSessionServices, type SessionServices } from "./session-services";
 
@@ -81,7 +81,7 @@ export const useSessionServicesHandle = (): SessionServicesHandle => {
 						configRuntime: () => configRef.current,
 						registry: () => registryRef.current,
 						sessionHostManager: () => sessionHostManager,
-						store: () => getSessionStore(),
+						storage: () => getSessionStorage(),
 						createProviderCollection: (
 							pluginRuntime,
 							sessionId,

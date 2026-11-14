@@ -22,6 +22,16 @@ import {
 	type InteractiveProviderController,
 } from "@/modules/providers/interactive-provider-controller";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
+import type {
+	SessionCatalog,
+	SessionUsageEntry,
+} from "@/modules/sessions/storage/session-catalog";
+import type { SessionHistory } from "@/modules/sessions/storage/session-history";
+import type {
+	SessionForkProvenance,
+	SessionLifecycle,
+} from "@/modules/sessions/storage/session-lifecycle";
+import type { SessionRecords } from "@/modules/sessions/storage/session-records";
 import { toSteeringMessageId } from "@/shared/identifiers";
 import { AgentSessionImpl } from "../agent-session/agent-session";
 import type {
@@ -56,10 +66,6 @@ import {
 	requireSessionWriteReady,
 	SessionWriteOutcomeError,
 } from "../storage/session-jsonl-store";
-import type {
-	SessionForkProvenance,
-	SessionUsageEntry,
-} from "../storage/session-store";
 import { projectSessionRecords } from "../transcript-projection";
 import {
 	createSessionUsageLedger,
@@ -69,11 +75,13 @@ import { createAgentSessionAdapters } from "./agent-session-adapters";
 import { assertPluginProviderRegistrationSnapshot } from "./agent-session-turn-runner";
 import { IMPORTED_SESSION_COMPACTION_ACTIVATION_REQUIRED_MESSAGE } from "./imported-session-agent";
 import { assertPluginProviderSelectionOwner } from "./provider-selection-ownership";
-import type {
-	SessionHost,
-	SessionHostOptions,
-	SessionStoreCapabilities,
-} from "./types";
+import type { SessionHost, SessionHostOptions } from "./types";
+
+/** The facets reading a Session's durable state at open needs, resolved once. */
+type OpenedSessionFacets = SessionCatalog &
+	SessionHistory &
+	SessionLifecycle &
+	SessionRecords;
 
 /**
  * The durable Session projection used to initialize the Agent Session, plus
@@ -292,11 +300,10 @@ const restoreSteeringMessages = (
  * is the surface's, and never reaches what the model is sent.
  */
 const openSession = async (
-	capabilities: SessionStoreCapabilities,
+	store: OpenedSessionFacets,
 	sessionId: SessionHostOptions["sessionId"],
 	providerModel?: ProviderModelSelection
 ): Promise<OpenedSession> => {
-	const store = capabilities.getStore();
 	let historyPath = await store.readSessionHistoryPath(sessionId);
 	const [usageEntries, forkProvenance] = await Promise.all([
 		store.listSessionUsageEntries(sessionId),
@@ -455,10 +462,10 @@ export const createSessionHost = async ({
 	providerModel,
 	providerCollection: prevalidatedProviderCollection,
 	sessionId,
+	storage,
 }: SessionHostOptions): Promise<SessionHost> => {
 	await waitForClosingHost(sessionId);
-	const sessionStore = capabilities.getStore();
-	const sessionWriter = await sessionStore.acquireSessionWriter(
+	const sessionWriter = await storage.acquireSessionWriter(
 		sessionId,
 		executionMode === undefined ? {} : { executionMode }
 	);
@@ -484,14 +491,8 @@ export const createSessionHost = async ({
 		if (importActivationInFlight !== undefined) {
 			return await importActivationInFlight;
 		}
-		const confirmActivation = sessionStore.confirmSessionImportActivation;
-		if (confirmActivation === undefined) {
-			throw new Error(
-				"Imported Session activation cannot be recorded by this Session store."
-			);
-		}
 		const activation = (async () => {
-			await confirmActivation(sessionId);
+			await storage.confirmSessionImportActivation(sessionId);
 			importActivationPending = false;
 		})();
 		importActivationInFlight = activation;
@@ -597,10 +598,8 @@ export const createSessionHost = async ({
 	};
 	try {
 		importActivationPending =
-			(await sessionStore.isSessionImportActivationPending?.(sessionId)) ??
-			false;
-		const selectedHistoryPath =
-			await sessionStore.readSessionHistoryPath(sessionId);
+			await storage.isSessionImportActivationPending(sessionId);
+		const selectedHistoryPath = await storage.readSessionHistoryPath(sessionId);
 		const selectedProviderModel = providerModel ?? selectedHistoryPath.model;
 		const sessionWorkManager = capabilities.getSessionHostManager();
 		const withAsyncSessionWork = async <Result>(
@@ -641,11 +640,7 @@ export const createSessionHost = async ({
 			allowedPluginProviderSources,
 			sessionProviderCollection
 		);
-		let opened = await openSession(
-			capabilities,
-			sessionId,
-			selectedProviderModel
-		);
+		let opened = await openSession(storage, sessionId, selectedProviderModel);
 		const sessionRuntime = createAgentRuntime({
 			providerCollection: sessionProviderCollection,
 		});
@@ -706,7 +701,7 @@ export const createSessionHost = async ({
 		const sessionUsageLedger = createSessionUsageLedger({
 			initialEntries: opened.usageEntries,
 			sessionId,
-			store: capabilities.getStore(),
+			store: storage,
 		});
 		usageLedger = sessionUsageLedger;
 		cacheWarming = createSessionCacheWarming({
@@ -726,8 +721,11 @@ export const createSessionHost = async ({
 		statefulAgent = openedStatefulAgent;
 		const ports: AgentSessionPorts = withEventChannel(
 			createAgentSessionAdapters({
+				attachments: storage,
 				cacheWarming,
 				capabilities,
+				editMode: storage,
+				records: storage,
 				usageLedger: sessionUsageLedger,
 				providerCollection: sessionProviderCollection,
 				isShutDown: () => isShutDown,
@@ -850,9 +848,8 @@ export const createSessionHost = async ({
 				if (isFailedAttemptContextEdit(edit.operationId)) {
 					throw new Error("Context edit operation ID uses a reserved prefix.");
 				}
-				const previousEdits = (
-					await sessionStore.readSessionHistoryPath(sessionId)
-				).contextEdits;
+				const previousEdits = (await storage.readSessionHistoryPath(sessionId))
+					.contextEdits;
 				const previousOperation = previousEdits.find(
 					({ operationId }) => operationId === edit.operationId
 				);
@@ -886,7 +883,7 @@ export const createSessionHost = async ({
 				]);
 				try {
 					requireSessionWriteReady(
-						await sessionStore.appendContextEdit(sessionId, edit)
+						await storage.appendContextEdit(sessionId, edit)
 					);
 				} catch (error) {
 					if (error instanceof Error) {
@@ -899,9 +896,8 @@ export const createSessionHost = async ({
 			},
 			navigateHistory: async (request) => {
 				const { targetEntryId } = request;
-				const previousPath =
-					await sessionStore.readSessionHistoryPath(sessionId);
-				const writeOutcome = await sessionStore.navigateSessionHistory(
+				const previousPath = await storage.readSessionHistoryPath(sessionId);
+				const writeOutcome = await storage.navigateSessionHistory(
 					sessionId,
 					request
 				);
@@ -939,7 +935,7 @@ export const createSessionHost = async ({
 					};
 				}
 				try {
-					const nextOpened = await openSession(capabilities, sessionId);
+					const nextOpened = await openSession(storage, sessionId);
 					await providerController?.restoreModels(nextOpened.model?.providerId);
 					cacheWarming?.cancel();
 					opened = nextOpened;
@@ -959,7 +955,7 @@ export const createSessionHost = async ({
 						transcript: nextOpened.transcript,
 					});
 					openedStatefulAgent.invalidateContext();
-					const nextPath = await sessionStore.readSessionHistoryPath(sessionId);
+					const nextPath = await storage.readSessionHistoryPath(sessionId);
 					return {
 						kind: "navigated",
 						activeLeafId: nextPath.activeLeafId,
@@ -980,11 +976,7 @@ export const createSessionHost = async ({
 				}
 			},
 			forkSession: (checkpoint, operationId) =>
-				sessionStore.forkSessionWithHeldWriter(
-					sessionId,
-					checkpoint,
-					operationId
-				),
+				storage.forkSessionWithHeldWriter(sessionId, checkpoint, operationId),
 			withSessionWork: withAsyncSessionWork,
 			assertCurrentPluginProviderRegistrationSnapshot: () =>
 				assertPluginProviderRegistrationSnapshot(

@@ -493,7 +493,7 @@ test("retrying an edit succeeds after compaction removes its target", async () =
 			},
 		});
 	const initialServices = await openServices();
-	const created = await initialServices.store.createEmptySession({
+	const created = await initialServices.storage.createEmptySession({
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 	});
 	const firstHandle = await initialServices.sessionSdk.openSession(created.id, {
@@ -536,7 +536,7 @@ test("retrying an edit succeeds after compaction removes its target", async () =
 
 	const compactionServices = await openServices();
 	try {
-		const compaction = await compactionServices.store.appendCompaction({
+		const compaction = await compactionServices.storage.appendCompaction({
 			estimatedTokensAfter: 20,
 			firstKeptUiMessageId: firstKeptId,
 			id: compactionId("retry-context-edit-compaction"),
@@ -801,11 +801,11 @@ test("a pending steering message makes context edits busy", async () => {
 				createFakeProviderCollection(createFakeProviderRecorder()),
 		},
 	});
-	const created = await services.store.createEmptySession({
+	const created = await services.storage.createEmptySession({
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 	});
 	const activeMessageId = sessionMessageId("active-before-steering");
-	await services.store.commitSessionRecord({
+	await services.storage.commitSessionRecord({
 		record: buildUserSessionRecord({
 			agentId: agentId("build"),
 			message: {
@@ -835,7 +835,7 @@ test("a pending steering message makes context edits busy", async () => {
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 		turnId: agentTurnId("pending-steering-turn"),
 	});
-	await services.store.commitSessionRecord({
+	await services.storage.commitSessionRecord({
 		record: submissionRecord,
 		sessionId: created.id,
 	});

@@ -14,7 +14,7 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
 import type { SessionBundleImportResult } from "../../session-bundle-contract";
 import { createSessionBundleImportOperation } from "../../session-bundle-import";
-import { getSessionStore } from "../../storage/get-session-store";
+import { getSessionLifecycle } from "../../storage/get-session-storage";
 
 export const formatSessionBundleImportFailure = (error: unknown): string => {
 	if (
@@ -59,7 +59,7 @@ export function ImportSessionDialog({ onImported }: ImportSessionDialogProps) {
 		setImporting(true);
 		try {
 			const result = await createSessionBundleImportOperation(
-				getSessionStore()
+				getSessionLifecycle()
 			)({
 				bundlePath,
 				signal: controller.signal,

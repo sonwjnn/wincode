@@ -92,7 +92,7 @@ import {
 	projectSessionStorageError,
 	requireSessionWriteReady,
 } from "@/modules/sessions/storage/session-jsonl-store";
-import type { SessionStore } from "@/modules/sessions/storage/session-store";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import { projectSessionMessageRecords } from "@/modules/sessions/transcript-projection";
 import type { ConfigRuntime, ConfigStore } from "@/shared/config/config-store";
@@ -807,7 +807,7 @@ const handleFor = (
 		submissionId: SubmissionId,
 		text: string
 	): Promise<SessionSdkSubmissionAdmission | undefined> => {
-		const committed = await assembly.store.findSessionRecordBySubmissionId(
+		const committed = await assembly.storage.findSessionRecordBySubmissionId(
 			sessionId,
 			submissionId
 		);
@@ -969,10 +969,11 @@ const handleFor = (
 				return admission;
 			}
 			try {
-				const committed = await assembly.store.findSessionRecordBySubmissionId(
-					sessionId,
-					submissionId
-				);
+				const committed =
+					await assembly.storage.findSessionRecordBySubmissionId(
+						sessionId,
+						submissionId
+					);
 				if (committed === undefined) {
 					return deliveryFailure(
 						new Error("Committed SDK delivery has no Session Record.")
@@ -1076,7 +1077,7 @@ const handleFor = (
 			}
 			return await forkSessionThroughIdleHostAndThen(
 				capabilities.getSessionHostManager().withIdleForSessionFork,
-				assembly.store,
+				assembly.storage,
 				sessionId,
 				checkpoint,
 				operationId,
@@ -1115,7 +1116,7 @@ const handleFor = (
 type SharedSessionSdkResources = Readonly<{
 	ignoreConfiguredPlugins: boolean;
 	manager: SessionHostManager;
-	store: SessionStore;
+	storage: SessionStorage;
 }>;
 
 const createSessionSdkInternal = async (
@@ -1200,7 +1201,7 @@ const createSessionSdkInternal = async (
 		...(shared === undefined
 			? {}
 			: {
-					store: shared.store,
+					storage: shared.storage,
 					sessionHostManager: shared.manager,
 				}),
 		workspace,
@@ -1209,10 +1210,10 @@ const createSessionSdkInternal = async (
 	const sessionRuntimes = new Set<SessionSdk>();
 	const exportSessionBundleOperation = createSessionBundleExportOperation(
 		assembly.capabilities.getSessionHostManager(),
-		assembly.store
+		assembly.storage
 	);
 	const importSessionBundleOperation = createSessionBundleImportOperation(
-		assembly.store
+		assembly.storage
 	);
 	let disposed = false;
 	let disposePromise: Promise<void> | undefined;
@@ -1269,8 +1270,8 @@ const createSessionSdkInternal = async (
 			}
 			const sessionId = toSessionId(id);
 			const [stored, historyPath] = await Promise.all([
-				assembly.store.getSession(sessionId),
-				assembly.store.readSessionHistoryPath(sessionId),
+				assembly.storage.getSession(sessionId),
+				assembly.storage.readSessionHistoryPath(sessionId),
 			]);
 			const selectedPathRecords = historyPath.records;
 			const priorSelection = nextChatSelection({
@@ -1279,9 +1280,7 @@ const createSessionSdkInternal = async (
 				),
 			});
 			const isImportedSession =
-				(await assembly.store.isSessionImported?.(sessionId)) ??
-				(await assembly.store.isSessionImportActivationPending?.(sessionId)) ??
-				false;
+				await assembly.storage.isSessionImported(sessionId);
 			assertImportedSessionAgentIsAvailable(
 				assembly.capabilities.getRegistry(),
 				priorSelection?.persistedAgent ?? selectedPathRecords.at(-1)?.agentId,
@@ -1316,6 +1315,7 @@ const createSessionSdkInternal = async (
 						? {}
 						: { providerModel: fallbackSelection.model }),
 					sessionId,
+					storage: assembly.storage,
 					view: openOptions.view ?? true,
 				});
 			const defaults = resolveRestoredSessionSdkSelection(
@@ -1379,7 +1379,7 @@ const createSessionSdkInternal = async (
 				[selection.model.providerId]
 			);
 		try {
-			const created = await assembly.store.createEmptySession(
+			const created = await assembly.storage.createEmptySession(
 				omitUndefined({
 					id,
 					model: selection.model,
@@ -1435,7 +1435,7 @@ const createSessionSdkInternal = async (
 			}
 			let createdNew = true;
 			if (createOptions?.initialPrompt === undefined) {
-				const created = await assembly.store.createEmptySession(
+				const created = await assembly.storage.createEmptySession(
 					omitUndefined({
 						id,
 						model: selection.model,
@@ -1446,7 +1446,7 @@ const createSessionSdkInternal = async (
 				requireSessionWriteReady(created.writeOutcome);
 				createdNew = created.created !== false;
 			} else {
-				const created = await assembly.store.createSession({
+				const created = await assembly.storage.createSession({
 					agent: selection.agent,
 					id,
 					message: createSessionUserMessage(
@@ -1495,7 +1495,7 @@ const createSessionSdkInternal = async (
 		);
 		const selectedProviderIds = new Set(runtimeOptions.pluginProviderIds ?? []);
 		if (runtimeOptions.sessionId !== undefined) {
-			const storedSession = await assembly.store.getSession(
+			const storedSession = await assembly.storage.getSession(
 				toSessionId(runtimeOptions.sessionId)
 			);
 			if (storedSession.model !== undefined) {
@@ -1547,13 +1547,13 @@ const createSessionSdkInternal = async (
 				...(runtimeOptions.projectTrust === undefined
 					? {}
 					: { projectTrust: runtimeOptions.projectTrust }),
-				store: assembly.store,
+				storage: assembly.storage,
 				workspace,
 			},
 			{
 				ignoreConfiguredPlugins: true,
 				manager: assembly.capabilities.getSessionHostManager(),
-				store: assembly.store,
+				storage: assembly.storage,
 			}
 		);
 		sessionRuntimes.add(runtimeSdk);
@@ -1593,14 +1593,14 @@ const createSessionSdkInternal = async (
 		createSessionRuntime,
 		createEmptySession,
 		listSessionsPage: (pageOptions) =>
-			assembly.store.listSessionsPage(pageOptions),
+			assembly.storage.listSessionsPage(pageOptions),
 		readSessionHistoryPage: (sessionId, pageOptions) =>
-			assembly.store.readSessionHistoryPage(
+			assembly.storage.readSessionHistoryPage(
 				toSessionId(sessionId),
 				pageOptions
 			),
 		readSessionHistoryTreePage: (sessionId, pageOptions) =>
-			assembly.store.readSessionHistoryTreePage(
+			assembly.storage.readSessionHistoryTreePage(
 				toSessionId(sessionId),
 				pageOptions
 			),
@@ -1619,7 +1619,7 @@ const createSessionSdkInternal = async (
 			}
 		},
 		getSessionStatistics: (sessionId, statisticsOptions) =>
-			assembly.store.getSessionStatistics(
+			assembly.storage.getSessionStatistics(
 				toSessionId(sessionId),
 				statisticsOptions
 			),
@@ -1630,7 +1630,7 @@ const createSessionSdkInternal = async (
 			const sessionId = toSessionId(sourceSessionId);
 			return await forkSessionThroughIdleHostAndThen(
 				assembly.capabilities.getSessionHostManager().withIdleForSessionFork,
-				assembly.store,
+				assembly.storage,
 				sessionId,
 				checkpoint,
 				operationId,
@@ -1711,7 +1711,7 @@ export const createSessionSdkWithRuntime = (
 export const createSessionSdkOperations = (
 	options: SessionSdkRuntimeOptions,
 	manager: SessionHostManager,
-	store: SessionStore
+	storage: SessionStorage
 ): SessionSdkOperations => {
 	const hostRuntimeOptions = options;
 	const capabilityCeiling = snapshotCapabilityCeiling(
@@ -1727,7 +1727,7 @@ export const createSessionSdkOperations = (
 				runtimeOptions.pluginProviderIds ?? []
 			);
 			if (runtimeOptions.sessionId !== undefined) {
-				const storedSession = await store.getSession(
+				const storedSession = await storage.getSession(
 					toSessionId(runtimeOptions.sessionId)
 				);
 				if (storedSession.model !== undefined) {
@@ -1767,17 +1767,17 @@ export const createSessionSdkOperations = (
 					...(runtimeOptions.projectTrust === undefined
 						? {}
 						: { projectTrust: runtimeOptions.projectTrust }),
-					store,
+					storage,
 				},
-				{ ignoreConfiguredPlugins: true, manager, store }
+				{ ignoreConfiguredPlugins: true, manager, storage }
 			);
 		};
 	const exportSessionBundleOperation = createSessionBundleExportOperation(
 		manager,
-		store
+		storage
 	);
 	const importSessionBundleOperation =
-		createSessionBundleImportOperation(store);
+		createSessionBundleImportOperation(storage);
 	const withSessionRuntime = async <Result>(
 		operation: (sdk: SessionSdk) => Promise<Result>,
 		runtimeOptions?: SessionRuntimeOptions
@@ -1862,18 +1862,18 @@ export const createSessionSdkOperations = (
 			}),
 		getAgentCatalog: (catalogOptions) =>
 			withSessionRuntime((sdk) => sdk.getAgentCatalog(catalogOptions)),
-		listSessionsPage: (pageOptions) => store.listSessionsPage(pageOptions),
+		listSessionsPage: (pageOptions) => storage.listSessionsPage(pageOptions),
 		readSessionHistoryPage: (sessionId, pageOptions) =>
-			store.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
+			storage.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
 		readSessionHistoryTreePage: (sessionId, pageOptions) =>
-			store.readSessionHistoryTreePage(toSessionId(sessionId), pageOptions),
+			storage.readSessionHistoryTreePage(toSessionId(sessionId), pageOptions),
 		navigateSessionHistory: (sessionId, request) =>
 			withSessionRuntime(
 				(sdk) => sdk.navigateSessionHistory(sessionId, request),
 				{ sessionId }
 			),
 		getSessionStatistics: (sessionId, statisticsOptions) =>
-			store.getSessionStatistics(toSessionId(sessionId), statisticsOptions),
+			storage.getSessionStatistics(toSessionId(sessionId), statisticsOptions),
 		forkSession: async (sourceSessionId, checkpoint, operationId) => {
 			const sessionId = toSessionId(sourceSessionId);
 			const sdk = await createSessionRuntime({ sessionId });

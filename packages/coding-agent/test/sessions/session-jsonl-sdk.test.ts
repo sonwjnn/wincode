@@ -52,6 +52,7 @@ import {
 	resolveLocalSessionProjectionPath,
 	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
+import type { PromptHistoryEntry } from "@/modules/sessions/storage/prompt-history";
 import {
 	SESSION_BUNDLE_LOG_PATH,
 	validateSessionBundleDirectory,
@@ -76,11 +77,8 @@ import {
 	encodeSessionPageToken,
 } from "@/modules/sessions/storage/session-pagination";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { SESSION_DIRECTORY_STAGING_PREFIX } from "@/modules/sessions/storage/session-storage-durability";
-import type {
-	PromptHistoryEntry,
-	SessionStore,
-} from "@/modules/sessions/storage/session-store";
 import {
 	type SessionWriterLock,
 	withSessionCatalogLifecycleGate,
@@ -185,7 +183,8 @@ const createSessionJsonlTestPersistence = (
 		},
 		operational,
 		projection,
-		store,
+		promptHistory: projectionStore.promptHistory,
+		storage: store,
 	};
 };
 
@@ -293,7 +292,7 @@ const createPluginSessionHistoryFixture = async (
 			{ factory: observerFactory, id: "history_observer" },
 		],
 		pluginPaths: [],
-		store: persistence.store,
+		storage: persistence.storage,
 		workspace,
 	});
 	const sessionId = await sdk.createEmptySession({
@@ -325,7 +324,7 @@ const createPluginSessionHistoryFixture = async (
 		recorder,
 		sdk,
 		sessionId,
-		store: persistence.store,
+		storage: persistence.storage,
 	};
 };
 
@@ -622,7 +621,7 @@ describe("Plugin Session History and Plugin State", () => {
 					error: { code: "session_operation_conflict" },
 				},
 			});
-			const beforeReopen = await fixture.store.readSessionHistoryTreePage(
+			const beforeReopen = await fixture.storage.readSessionHistoryTreePage(
 				fixture.sessionId
 			);
 			expect(beforeReopen.activeLeafId).toBe(incompatibleId);
@@ -631,7 +630,7 @@ describe("Plugin Session History and Plugin State", () => {
 			).toHaveLength(3);
 
 			await fixture.handle.dispose();
-			const rebuild = await fixture.store.rebuildProjection(
+			const rebuild = await fixture.storage.rebuildProjection(
 				{ kind: "all" },
 				(operation) => operation()
 			);
@@ -647,7 +646,7 @@ describe("Plugin Session History and Plugin State", () => {
 				itemAId,
 				incompatibleId,
 			]);
-			const afterReopen = await fixture.store.readSessionHistoryTreePage(
+			const afterReopen = await fixture.storage.readSessionHistoryTreePage(
 				fixture.sessionId
 			);
 			expect(afterReopen.activeLeafId).toBe(incompatibleId);
@@ -703,7 +702,7 @@ describe("Plugin Session History and Plugin State", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("plugin-history-fork-checkpoint"),
 			});
-			await fixture.store.commitSessionRecord({
+			await fixture.storage.commitSessionRecord({
 				record,
 				sessionId: fixture.sessionId,
 			});
@@ -804,7 +803,7 @@ describe("Plugin Session History and Plugin State", () => {
 			await pendingWrite.catch(() => undefined);
 			await expect(navigation).resolves.toMatchObject({ kind: "navigated" });
 
-			const tree = await fixture.store.readSessionHistoryTreePage(
+			const tree = await fixture.storage.readSessionHistoryTreePage(
 				fixture.sessionId
 			);
 			const childEntry = tree.entries.find(
@@ -847,7 +846,7 @@ describe("Plugin Session History and Plugin State", () => {
 		);
 		try {
 			const firstOperationId = "plugin-state-write-navigation-race-parent";
-			const firstMutation = await fixture.store.mutatePluginSessionState(
+			const firstMutation = await fixture.storage.mutatePluginSessionState(
 				fixture.sessionId,
 				"history_entries",
 				{
@@ -867,7 +866,7 @@ describe("Plugin Session History and Plugin State", () => {
 				fixture.sessionId,
 				firstOperationId
 			);
-			const pendingWrite = fixture.store.mutatePluginSessionState(
+			const pendingWrite = fixture.storage.mutatePluginSessionState(
 				fixture.sessionId,
 				"history_entries",
 				{
@@ -892,7 +891,7 @@ describe("Plugin Session History and Plugin State", () => {
 			});
 			await expect(navigation).resolves.toMatchObject({ kind: "navigated" });
 
-			const tree = await fixture.store.readSessionHistoryTreePage(
+			const tree = await fixture.storage.readSessionHistoryTreePage(
 				fixture.sessionId
 			);
 			const childEntry = tree.entries.find(
@@ -931,12 +930,12 @@ describe("Plugin Session History and Plugin State", () => {
 			cwd: workspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		try {
 			const { id: sessionId, writeOutcome: creation } =
-				await persistence.store.createEmptySession({});
+				await persistence.storage.createEmptySession({});
 			expect(creation.kind).toBe("committed");
 			const rootRecord = buildUserSessionRecord({
 				agentId: agentId("history-tree"),
@@ -958,12 +957,12 @@ describe("Plugin Session History and Plugin State", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-tree-child-turn"),
 			});
-			const rootOutcome = await persistence.store.commitSessionRecord({
+			const rootOutcome = await persistence.storage.commitSessionRecord({
 				record: rootRecord,
 				sessionId,
 			});
 			expect(rootOutcome.kind).toBe("committed");
-			const stateMutation = await persistence.store.mutatePluginSessionState(
+			const stateMutation = await persistence.storage.mutatePluginSessionState(
 				sessionId,
 				"history_tree",
 				{
@@ -980,7 +979,7 @@ describe("Plugin Session History and Plugin State", () => {
 				throw new Error("Expected Plugin State to be written.");
 			}
 			expect(stateMutation.writeOutcome.kind).toBe("committed");
-			const childOutcome = await persistence.store.commitSessionRecord({
+			const childOutcome = await persistence.storage.commitSessionRecord({
 				record: childRecord,
 				sessionId,
 			});
@@ -1046,9 +1045,12 @@ describe("Plugin Session History and Plugin State", () => {
 			expect(secondPage.activeLeafId).toBe(thirdPage.activeLeafId);
 			expect(thirdPage.readPoint).toBe(firstPage.readPoint);
 
-			const metadataOutcome = await persistence.store.updateSession(sessionId, {
-				title: "Updated outside history",
-			});
+			const metadataOutcome = await persistence.storage.updateSession(
+				sessionId,
+				{
+					title: "Updated outside history",
+				}
+			);
 			expect(metadataOutcome.kind).toBe("committed");
 			const afterControlEvent = await sdk.readSessionHistoryTreePage(sessionId);
 			expect(afterControlEvent.entries).toHaveLength(3);
@@ -1071,7 +1073,7 @@ describe("Plugin Session History and Plugin State", () => {
 				recordId: childRecord.id,
 			});
 
-			const rebuilt = await persistence.store.rebuildProjection(
+			const rebuilt = await persistence.storage.rebuildProjection(
 				{ kind: "all" },
 				(operation) => operation()
 			);
@@ -1105,11 +1107,13 @@ describe("Session SDK navigation and history tree", () => {
 			cwd: workspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		try {
-			const { id: sessionId } = await persistence.store.createEmptySession({});
+			const { id: sessionId } = await persistence.storage.createEmptySession(
+				{}
+			);
 			const rootRecord = buildUserSessionRecord({
 				agentId: agentId("history-navigation"),
 				message: {
@@ -1130,11 +1134,11 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-navigation-old-turn"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: rootRecord,
 				sessionId,
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: oldBranchRecord,
 				sessionId,
 			});
@@ -1165,7 +1169,7 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-navigation-new-turn"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: newBranchRecord,
 				sessionId,
 			});
@@ -1233,7 +1237,7 @@ describe("Session SDK navigation and history tree", () => {
 			databasePath,
 			getRegistry: () => registry,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		let handle: SessionSdkHandle | undefined;
@@ -1248,7 +1252,7 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-agent-fallback-branch-turn"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: branchRecord,
 				sessionId,
 			});
@@ -1330,7 +1334,7 @@ describe("Session SDK navigation and history tree", () => {
 			sources: [],
 		});
 		const store = {
-			...persistence.store,
+			...persistence.storage,
 			isSessionImported: async () => true,
 		};
 		const recorder = createFakeProviderRecorder();
@@ -1340,11 +1344,11 @@ describe("Session SDK navigation and history tree", () => {
 			databasePath,
 			getRegistry: () => registry,
 			pluginPaths: [],
-			store,
+			storage: store,
 			workspace,
 		});
 		try {
-			const { id: sessionId } = await persistence.store.createEmptySession({
+			const { id: sessionId } = await persistence.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			const selectedRecord = buildUserSessionRecord({
@@ -1353,18 +1357,18 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("inactive-agent-sibling-selected-turn"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: selectedRecord,
 				sessionId,
 			});
 			const selectedTree =
-				await persistence.store.readSessionHistoryTreePage(sessionId);
+				await persistence.storage.readSessionHistoryTreePage(sessionId);
 			const selectedEntryId = selectedTree.activeLeafId;
 			if (selectedEntryId === null) {
 				throw new Error("Expected the selected Agent's history entry.");
 			}
 
-			const rootNavigation = await persistence.store.navigateSessionHistory(
+			const rootNavigation = await persistence.storage.navigateSessionHistory(
 				sessionId,
 				{
 					operationId: "inactive-agent-sibling-root",
@@ -1378,11 +1382,11 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("inactive-agent-sibling-turn"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: inactiveRecord,
 				sessionId,
 			});
-			const returnNavigation = await persistence.store.navigateSessionHistory(
+			const returnNavigation = await persistence.storage.navigateSessionHistory(
 				sessionId,
 				{
 					operationId: "inactive-agent-sibling-return",
@@ -1395,7 +1399,7 @@ describe("Session SDK navigation and history tree", () => {
 			try {
 				expect(opened.sessionId).toBe(sessionId);
 				const selectedPath =
-					await persistence.store.readSessionHistoryPath(sessionId);
+					await persistence.storage.readSessionHistoryPath(sessionId);
 				expect(selectedPath.records.map(({ agentId }) => agentId)).toEqual([
 					selectedAgent,
 				]);
@@ -1425,7 +1429,7 @@ describe("Session SDK navigation and history tree", () => {
 			cwd: workspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		try {
@@ -1487,7 +1491,7 @@ describe("Session SDK navigation and history tree", () => {
 			cwd: workspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		let handle: SessionSdkHandle | undefined;
@@ -1502,7 +1506,7 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-navigation-active-root-turn"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: rootRecord,
 				sessionId,
 			});
@@ -1584,7 +1588,7 @@ describe("Session SDK navigation and history tree", () => {
 			cwd: workspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		const recordWithUsage = (
@@ -1615,7 +1619,9 @@ describe("Session SDK navigation and history tree", () => {
 			version: SESSION_RECORD_VERSION,
 		});
 		try {
-			const { id: sessionId } = await persistence.store.createEmptySession({});
+			const { id: sessionId } = await persistence.storage.createEmptySession(
+				{}
+			);
 			const rootRecord = recordWithUsage(
 				"history-selected-path-root",
 				agentTurnId("history-selected-path-root-turn"),
@@ -1626,11 +1632,11 @@ describe("Session SDK navigation and history tree", () => {
 				agentTurnId("history-selected-path-preserved-turn"),
 				20
 			);
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: rootRecord,
 				sessionId,
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: preservedBranchRecord,
 				sessionId,
 			});
@@ -1657,7 +1663,7 @@ describe("Session SDK navigation and history tree", () => {
 				agentTurnId("history-selected-path-new-turn"),
 				30
 			);
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: newBranchRecord,
 				sessionId,
 			});
@@ -1704,11 +1710,13 @@ describe("Session SDK navigation and history tree", () => {
 			cwd: workspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		try {
-			const { id: sessionId } = await persistence.store.createEmptySession({});
+			const { id: sessionId } = await persistence.storage.createEmptySession(
+				{}
+			);
 			const rootRecord = buildUserSessionRecord({
 				agentId: agentId("history-navigation-return"),
 				message: createSessionUserMessage("shared root"),
@@ -1721,11 +1729,11 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-navigation-return-preserved-turn"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: rootRecord,
 				sessionId,
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: preservedBranchRecord,
 				sessionId,
 			});
@@ -1750,7 +1758,7 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-navigation-return-new-turn"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: newBranchRecord,
 				sessionId,
 			});
@@ -1806,11 +1814,13 @@ describe("Session SDK navigation and history tree", () => {
 			databasePath,
 			pluginFactories: [{ factory, id: "history_navigation_veto" }],
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		try {
-			const { id: sessionId } = await persistence.store.createEmptySession({});
+			const { id: sessionId } = await persistence.storage.createEmptySession(
+				{}
+			);
 			const rootRecord = buildUserSessionRecord({
 				agentId: agentId("history-navigation-sibling-veto"),
 				message: createSessionUserMessage("shared root"),
@@ -1823,11 +1833,11 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-navigation-sibling-veto-preserved"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: rootRecord,
 				sessionId,
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: preservedRecord,
 				sessionId,
 			});
@@ -1853,7 +1863,7 @@ describe("Session SDK navigation and history tree", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-navigation-sibling-veto-new-branch"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: newBranchRecord,
 				sessionId,
 			});
@@ -1895,10 +1905,10 @@ const createMultiBranchSessionFixture = async (
 		cwd: workspace,
 		databasePath,
 		pluginPaths: [],
-		store: persistence.store,
+		storage: persistence.storage,
 		workspace,
 	});
-	const { id: sessionId } = await persistence.store.createEmptySession({
+	const { id: sessionId } = await persistence.storage.createEmptySession({
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 	});
 	const rootRecord = buildUserSessionRecord({
@@ -1938,11 +1948,11 @@ const createMultiBranchSessionFixture = async (
 		"first branch answer",
 		{ inputTokens: 13, outputTokens: 2 }
 	);
-	const rootWrite = await persistence.store.commitSessionRecord({
+	const rootWrite = await persistence.storage.commitSessionRecord({
 		record: rootRecord,
 		sessionId,
 	});
-	const firstBranchWrite = await persistence.store.commitSessionRecord({
+	const firstBranchWrite = await persistence.storage.commitSessionRecord({
 		record: firstBranchRecord,
 		sessionId,
 	});
@@ -1958,7 +1968,7 @@ const createMultiBranchSessionFixture = async (
 		if (rootMessage === undefined || firstBranchMessage === undefined) {
 			throw new Error("The sibling compaction fixture omitted its Records.");
 		}
-		const siblingUsage = await persistence.store.createSessionUsageEntry({
+		const siblingUsage = await persistence.storage.createSessionUsageEntry({
 			compactionId: siblingCompactionId,
 			costUsd: 0.25,
 			createdAt: new Date("2026-10-31T00:00:00.000Z"),
@@ -1972,7 +1982,7 @@ const createMultiBranchSessionFixture = async (
 			kind: "committed",
 			projection: "ready",
 		});
-		const siblingCompaction = await persistence.store.appendCompaction({
+		const siblingCompaction = await persistence.storage.appendCompaction({
 			estimatedTokensAfter: 64,
 			firstKeptUiMessageId: firstBranchMessage.id,
 			id: siblingCompactionId,
@@ -2010,7 +2020,7 @@ const createMultiBranchSessionFixture = async (
 		"second branch answer",
 		{ inputTokens: 17, outputTokens: 4 }
 	);
-	const secondBranchWrite = await persistence.store.commitSessionRecord({
+	const secondBranchWrite = await persistence.storage.commitSessionRecord({
 		record: secondBranchRecord,
 		sessionId,
 	});
@@ -2027,7 +2037,7 @@ const createMultiBranchSessionFixture = async (
 		siblingCompactionId,
 		sdk,
 		sessionId,
-		store: persistence.store,
+		storage: persistence.storage,
 	};
 };
 
@@ -2401,22 +2411,22 @@ describe("Branch import, export, and fork", () => {
 			await forked.handle.dispose();
 			forked = undefined;
 
-			const sourceDeletion = await fixture.store.deleteSession(
+			const sourceDeletion = await fixture.storage.deleteSession(
 				fixture.sessionId
 			);
 			expect(sourceDeletion).toMatchObject({
 				kind: "committed",
 				projection: "ready",
 			});
-			await fixture.store.collectAttachments(0);
+			await fixture.storage.collectAttachments(0);
 			expect(
-				await fixture.store.getSessionForkProvenance(childId)
+				await fixture.storage.getSessionForkProvenance(childId)
 			).toMatchObject({
 				sourceAvailability: "unavailable",
 				sourceSessionId: fixture.sessionId,
 			});
 
-			const rebuild = await fixture.store.rebuildProjection(
+			const rebuild = await fixture.storage.rebuildProjection(
 				{ kind: "session", sessionId: childId },
 				(operation) => operation()
 			);
@@ -2512,7 +2522,7 @@ describe("Branch import, export, and fork", () => {
 				operationId: "multi-branch-fork-plugin-to-sibling",
 			});
 			history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
-			await fixture.store.appendPluginSessionHistoryEntry(
+			await fixture.storage.appendPluginSessionHistoryEntry(
 				fixture.sessionId,
 				pluginId,
 				{
@@ -2523,7 +2533,7 @@ describe("Branch import, export, and fork", () => {
 				}
 			);
 			history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
-			await fixture.store.mutatePluginSessionState(
+			await fixture.storage.mutatePluginSessionState(
 				fixture.sessionId,
 				pluginId,
 				{
@@ -2541,7 +2551,7 @@ describe("Branch import, export, and fork", () => {
 				operationId: "multi-branch-fork-plugin-to-root",
 			});
 			history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
-			await fixture.store.mutatePluginSessionState(
+			await fixture.storage.mutatePluginSessionState(
 				fixture.sessionId,
 				pluginId,
 				{
@@ -2554,7 +2564,7 @@ describe("Branch import, export, and fork", () => {
 				}
 			);
 			history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
-			await fixture.store.appendPluginSessionHistoryEntry(
+			await fixture.storage.appendPluginSessionHistoryEntry(
 				fixture.sessionId,
 				pluginId,
 				{
@@ -2582,12 +2592,12 @@ describe("Branch import, export, and fork", () => {
 				turnId: fixture.rootRecord.turnId,
 				version: SESSION_RECORD_VERSION,
 			};
-			await fixture.store.commitSessionRecord({
+			await fixture.storage.commitSessionRecord({
 				record: checkpoint,
 				sessionId: fixture.sessionId,
 			});
 			history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
-			await fixture.store.mutatePluginSessionState(
+			await fixture.storage.mutatePluginSessionState(
 				fixture.sessionId,
 				pluginId,
 				{
@@ -2599,7 +2609,7 @@ describe("Branch import, export, and fork", () => {
 				}
 			);
 			history = await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId);
-			await fixture.store.appendPluginSessionHistoryEntry(
+			await fixture.storage.appendPluginSessionHistoryEntry(
 				fixture.sessionId,
 				pluginId,
 				{
@@ -2644,14 +2654,14 @@ describe("Branch import, export, and fork", () => {
 				{ key: "snapshot", operation: "set", schemaVersion: 2 },
 			]);
 			expect(
-				await fixture.store.getPluginSessionState(
+				await fixture.storage.getPluginSessionState(
 					forked.id,
 					pluginId,
 					"snapshot"
 				)
 			).toEqual({ schemaVersion: 2, value: "selected-state" });
 			expect(
-				await fixture.store.getPluginSessionState(
+				await fixture.storage.getPluginSessionState(
 					fixture.sessionId,
 					pluginId,
 					"snapshot"
@@ -2695,7 +2705,7 @@ describe("Branch import, export, and fork", () => {
 				cwd: workspace,
 				databasePath: continuationDatabasePath,
 				pluginPaths: [],
-				store: continuationPersistence.store,
+				storage: continuationPersistence.storage,
 				workspace,
 			});
 			continuationSdk = sdk;
@@ -2804,7 +2814,7 @@ describe("Branch import, export, and fork", () => {
 				await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId)
 			).historyGeneration;
 			await expect(
-				fixture.store.mutatePluginSessionState(
+				fixture.storage.mutatePluginSessionState(
 					fixture.sessionId,
 					"history_entries",
 					{
@@ -2824,7 +2834,7 @@ describe("Branch import, export, and fork", () => {
 				await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId)
 			).historyGeneration;
 			await expect(
-				fixture.store.mutatePluginSessionState(
+				fixture.storage.mutatePluginSessionState(
 					fixture.sessionId,
 					"history_entries",
 					{
@@ -2844,7 +2854,7 @@ describe("Branch import, export, and fork", () => {
 				await fixture.sdk.readSessionHistoryTreePage(fixture.sessionId)
 			).historyGeneration;
 			await expect(
-				fixture.store.mutatePluginSessionState(
+				fixture.storage.mutatePluginSessionState(
 					fixture.sessionId,
 					"history_entries",
 					{
@@ -2877,7 +2887,7 @@ describe("Branch import, export, and fork", () => {
 					cwd: workspace,
 					databasePath: importDatabasePath,
 					pluginPaths: [],
-					store: importPersistence.store,
+					storage: importPersistence.storage,
 					workspace,
 				});
 				const imported = await importedSdk.importSessionBundle(destination);
@@ -2955,14 +2965,14 @@ describe("Branch import, export, and fork", () => {
 						"plugin.state-deleted"
 					);
 					expect(
-						await importPersistence.store.getPluginSessionState(
+						await importPersistence.storage.getPluginSessionState(
 							imported.sessionId,
 							"history_entries",
 							"retained"
 						)
 					).toMatchObject({ schemaVersion: 1, value: "selected-path-state" });
 					expect(
-						await importPersistence.store.getPluginSessionState(
+						await importPersistence.storage.getPluginSessionState(
 							imported.sessionId,
 							"history_entries",
 							"removed"
@@ -3015,7 +3025,7 @@ describe("Branch import, export, and fork", () => {
 			cwd: workspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		const importDatabasePath = path.join(
@@ -3031,7 +3041,7 @@ describe("Branch import, export, and fork", () => {
 		const importRecorder = createFakeProviderRecorder();
 		let importedSdk: SessionSdk | undefined;
 		try {
-			const created = await persistence.store.createSession({
+			const created = await persistence.storage.createSession({
 				agent: agentId("branch-null-active-leaf"),
 				message: createSessionUserMessage("initial creation Record"),
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
@@ -3044,7 +3054,7 @@ describe("Branch import, export, and fork", () => {
 			});
 			const sourceTree = await sourceSdk.readSessionHistoryTreePage(sessionId);
 			expect(
-				(await persistence.store.listSessions()).find(
+				(await persistence.storage.listSessions()).find(
 					(session) => session.id === sessionId
 				)?.lastMessageAt
 			).not.toBeNull();
@@ -3067,7 +3077,7 @@ describe("Branch import, export, and fork", () => {
 				cwd: workspace,
 				databasePath: importDatabasePath,
 				pluginPaths: [],
-				store: importPersistence.store,
+				storage: importPersistence.storage,
 				workspace,
 			});
 			const imported = await importedSdk.importSessionBundle(destination);
@@ -3077,7 +3087,7 @@ describe("Branch import, export, and fork", () => {
 			expect(importedTree).toMatchObject({ activeLeafId: null, entries: [] });
 			expect(imported.sessionId).toBe(exported.sessionId);
 			expect(
-				(await importPersistence.store.listSessions()).find(
+				(await importPersistence.storage.listSessions()).find(
 					(session) => session.id === imported.sessionId
 				)?.lastMessageAt
 			).toBeNull();
@@ -3142,12 +3152,14 @@ describe("History tree pages and projection reads", () => {
 			cwd: testWorkspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace: testWorkspace,
 		});
 		let pendingAppend: Promise<unknown> | undefined;
 		try {
-			const { id: sessionId } = await persistence.store.createEmptySession({});
+			const { id: sessionId } = await persistence.storage.createEmptySession(
+				{}
+			);
 			const firstRecord = buildUserSessionRecord({
 				agentId: agentId("history-tree-race"),
 				message: {
@@ -3168,11 +3180,11 @@ describe("History tree pages and projection reads", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-tree-race-second"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: firstRecord,
 				sessionId,
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: secondRecord,
 				sessionId,
 			});
@@ -3194,13 +3206,13 @@ describe("History tree pages and projection reads", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-tree-race-pending"),
 			});
-			pendingAppend = persistence.store.commitSessionRecord({
+			pendingAppend = persistence.storage.commitSessionRecord({
 				record: pendingRecord,
 				sessionId,
 			});
 			await pendingAppendWritten.promise;
 
-			const continuation = readerPersistence.store.readSessionHistoryTreePage(
+			const continuation = readerPersistence.storage.readSessionHistoryTreePage(
 				sessionId,
 				{ cursor, limit: 1 }
 			);
@@ -3247,11 +3259,13 @@ describe("History tree pages and projection reads", () => {
 			cwd: testWorkspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace: testWorkspace,
 		});
 		try {
-			const { id: sessionId } = await persistence.store.createEmptySession({});
+			const { id: sessionId } = await persistence.storage.createEmptySession(
+				{}
+			);
 			const records = ["first", "second", "third"].map((label) =>
 				buildUserSessionRecord({
 					agentId: agentId(`cached-history-${label}`),
@@ -3265,7 +3279,7 @@ describe("History tree pages and projection reads", () => {
 				})
 			);
 			for (const record of records) {
-				await persistence.store.commitSessionRecord({ record, sessionId });
+				await persistence.storage.commitSessionRecord({ record, sessionId });
 			}
 			const firstPage = await sdk.readSessionHistoryTreePage(sessionId, {
 				limit: 1,
@@ -3337,11 +3351,13 @@ describe("History tree pages and projection reads", () => {
 			cwd: testWorkspace,
 			databasePath,
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace: testWorkspace,
 		});
 		try {
-			const { id: sessionId } = await persistence.store.createEmptySession({});
+			const { id: sessionId } = await persistence.storage.createEmptySession(
+				{}
+			);
 			const rootRecord = buildUserSessionRecord({
 				agentId: agentId("projection-history-validation"),
 				message: {
@@ -3352,7 +3368,7 @@ describe("History tree pages and projection reads", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("projection-history-root"),
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: rootRecord,
 				sessionId,
 			});
@@ -3457,7 +3473,7 @@ describe("Plugin State durability across branches", () => {
 			databasePath,
 			pluginFactories: [{ factory, id: "history_state" }],
 			pluginPaths: [],
-			store: persistence.store,
+			storage: persistence.storage,
 			workspace,
 		});
 		let handle: SessionSdkHandle | undefined;
@@ -3593,7 +3609,7 @@ describe("Plugin State durability across branches", () => {
 			);
 			try {
 				persistence.projection.sqlite.exec("DELETE FROM session");
-				const rebuilt = await persistence.store.rebuildProjection(
+				const rebuilt = await persistence.storage.rebuildProjection(
 					{ kind: "all" },
 					(operation) => operation()
 				);
@@ -3665,7 +3681,7 @@ describe("Plugin State durability across branches", () => {
 			createProviderCollection: () => createFakeProviderCollection(recorder),
 			cwd: workspace,
 			databasePath,
-			store: persistence.store,
+			storage: persistence.storage,
 			pluginFactories: [{ factory, id: "uncertain_state" }],
 			pluginPaths: [],
 			workspace,
@@ -3688,7 +3704,7 @@ describe("Plugin State durability across branches", () => {
 			sdk = await createSessionSdkWithRuntime(options);
 			handle = await sdk.openSession(id, { autoContinue: false });
 			expect(
-				await persistence.store.getPluginSessionState(
+				await persistence.storage.getPluginSessionState(
 					toSessionId(id),
 					"uncertain_state",
 					"plan"
@@ -3747,7 +3763,7 @@ describe("Plugin State durability across branches", () => {
 			createProviderCollection: () => createFakeProviderCollection(recorder),
 			cwd: workspace,
 			databasePath,
-			store: persistence.store,
+			storage: persistence.storage,
 			pluginFactories: [{ factory, id: "independent_state" }],
 			pluginPaths: [],
 			workspace,
@@ -3797,7 +3813,7 @@ describe("Plugin State durability across branches", () => {
 			});
 			await source.dispose();
 			source = undefined;
-			await persistence.store.deleteSession(toSessionId(sourceId));
+			await persistence.storage.deleteSession(toSessionId(sourceId));
 			await child.dispose();
 			child = undefined;
 			child = await sdk.openSession(fork.id, { autoContinue: false });
@@ -3901,7 +3917,7 @@ describe("Session creation, export, and fork handles", () => {
 			}
 		);
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 
 			expect(stagedLogPaths).toEqual([expectedStagingPath]);
 			expect(await Bun.file(expectedStagingPath).exists()).toBe(false);
@@ -4087,7 +4103,7 @@ describe("Session creation, export, and fork handles", () => {
 			policy: { cwd: workspace, databasePath, workspace },
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => persistence.store,
+				storage: () => persistence.storage,
 			},
 		});
 		let sourceHandle: SessionSdkHandle | undefined;
@@ -4204,7 +4220,7 @@ describe("SDK delivery and steering recovery", () => {
 			workspace
 		);
 		try {
-			const rebuilt = await rebuildPersistence.store.rebuildProjection(
+			const rebuilt = await rebuildPersistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (operation) => await operation()
 			);
@@ -4446,7 +4462,7 @@ describe("SDK delivery and steering recovery", () => {
 			policy: { cwd: workspace, databasePath, workspace },
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => persistence.store,
+				storage: () => persistence.storage,
 			},
 		});
 		let sessionId: SessionId;
@@ -4454,7 +4470,7 @@ describe("SDK delivery and steering recovery", () => {
 		let recordId: SessionRecordId;
 		let submissionId: SubmissionId;
 		try {
-			const created = await persistence.store.createEmptySession({
+			const created = await persistence.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			if (created.writeOutcome.kind !== "committed") {
@@ -4481,7 +4497,7 @@ describe("SDK delivery and steering recovery", () => {
 			});
 			recordId = record.id;
 			expect(
-				await persistence.store.commitSessionRecord({
+				await persistence.storage.commitSessionRecord({
 					record,
 					sessionId: created.id,
 				})
@@ -4493,7 +4509,7 @@ describe("SDK delivery and steering recovery", () => {
 				SELECT RAISE(ABORT, 'injected steering status projection failure');
 			END;
 		`);
-			const status = await persistence.store.updateSessionSubmission({
+			const status = await persistence.storage.updateSessionSubmission({
 				messageId,
 				recordId,
 				sessionId: created.id,
@@ -4516,7 +4532,7 @@ describe("SDK delivery and steering recovery", () => {
 			databasePath,
 			workspace
 		);
-		const rebuilt = await reopenedPersistence.store.rebuildProjection(
+		const rebuilt = await reopenedPersistence.storage.rebuildProjection(
 			{ kind: "all" },
 			async (operation) => await operation()
 		);
@@ -4525,7 +4541,7 @@ describe("SDK delivery and steering recovery", () => {
 			policy: { cwd: workspace, databasePath, workspace },
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => reopenedPersistence.store,
+				storage: () => reopenedPersistence.storage,
 			},
 		});
 		let host: SessionHost | undefined;
@@ -4535,6 +4551,7 @@ describe("SDK delivery and steering recovery", () => {
 				.openHost({
 					autoContinue: false,
 					capabilities: reopenedServices.capabilities,
+					storage: reopenedServices.storage,
 					sessionId,
 					view: true,
 				});
@@ -4613,7 +4630,7 @@ describe("SDK delivery and steering recovery", () => {
 		let sessionId: SessionId;
 		let messageId: SessionMessageId;
 		try {
-			const created = await persistence.store.createEmptySession({
+			const created = await persistence.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			if (created.writeOutcome.kind !== "committed") {
@@ -4639,7 +4656,7 @@ describe("SDK delivery and steering recovery", () => {
 				turnId: agentTurnId("sdk-steering-retry-turn"),
 			});
 			expect(
-				await persistence.store.commitSessionRecord({
+				await persistence.storage.commitSessionRecord({
 					record,
 					sessionId: created.id,
 				})
@@ -4652,7 +4669,7 @@ describe("SDK delivery and steering recovery", () => {
 			END;
 		`);
 			expect(
-				await persistence.store.updateSessionSubmission({
+				await persistence.storage.updateSessionSubmission({
 					messageId,
 					recordId: record.id,
 					sessionId: created.id,
@@ -4672,7 +4689,7 @@ describe("SDK delivery and steering recovery", () => {
 			workspace
 		);
 		try {
-			const rebuilt = await rebuiltPersistence.store.rebuildProjection(
+			const rebuilt = await rebuiltPersistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (operation) => await operation()
 			);
@@ -4682,7 +4699,7 @@ describe("SDK delivery and steering recovery", () => {
 				sources: {
 					createProviderCollection: () =>
 						createFakeProviderCollection(recorder),
-					store: () => rebuiltPersistence.store,
+					storage: () => rebuiltPersistence.storage,
 				},
 			});
 			let host: SessionHost | undefined;
@@ -4690,6 +4707,7 @@ describe("SDK delivery and steering recovery", () => {
 				host = await services.capabilities.getSessionHostManager().openHost({
 					autoContinue: false,
 					capabilities: services.capabilities,
+					storage: services.storage,
 					sessionId,
 					view: true,
 				});
@@ -4727,7 +4745,7 @@ describe("SDK delivery and steering recovery", () => {
 				);
 				expect(durableEntries).toHaveLength(1);
 				expect(
-					await rebuiltPersistence.store.listSessionUsageEntries(sessionId)
+					await rebuiltPersistence.storage.listSessionUsageEntries(sessionId)
 				).toEqual([]);
 			} finally {
 				await host?.shutdown();
@@ -4764,7 +4782,7 @@ describe("Attachments, creation identity, and collection", () => {
 			},
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => persistence.store,
+				storage: () => persistence.storage,
 			},
 		});
 		const childSource = `
@@ -4819,11 +4837,12 @@ try {
 		let host: SessionHost | undefined;
 		let activeTurn: Promise<unknown> | undefined;
 		try {
-			const created = await services.store.createEmptySession({
+			const created = await services.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			host = await services.capabilities.getSessionHostManager().openHost({
 				capabilities: services.capabilities,
+				storage: services.storage,
 				autoContinue: false,
 				sessionId: created.id,
 			});
@@ -4948,7 +4967,7 @@ try {
 				parts: [attachmentReferenceToFilePart(reference)],
 				role: "user" as const,
 			};
-			const creating = persistence.store.createSession({
+			const creating = persistence.storage.createSession({
 				agent: agentId("build"),
 				id: sessionId,
 				message,
@@ -5049,7 +5068,7 @@ try {
 				safetyWindowMs: 0,
 			});
 			await collectorCheckedReservation.promise;
-			creationOperation = persistence.store.createSession({
+			creationOperation = persistence.storage.createSession({
 				agent: agentId("build"),
 				id: sessionId,
 				message,
@@ -5132,7 +5151,7 @@ try {
 			parts: [attachmentReferenceToFilePart(reference)],
 			role: "user" as const,
 		};
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			id: sessionId,
 			message,
@@ -5157,7 +5176,7 @@ try {
 			});
 			collectionOperation = collecting;
 			await Bun.sleep(20);
-			const deleting = persistence.store.deleteSession(sessionId);
+			const deleting = persistence.storage.deleteSession(sessionId);
 			deletionOperation = deleting;
 			const deletionStayedBehindGate = await Promise.race([
 				deletedRecordWritten.promise.then(() => false),
@@ -5251,11 +5270,11 @@ try {
 			policy: { cwd: testWorkspace, databasePath, workspace: testWorkspace },
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => firstPersistence.store,
+				storage: () => firstPersistence.storage,
 			},
 		});
 		try {
-			const created = await firstServices.store.createEmptySession({
+			const created = await firstServices.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			sessionId = created.id;
@@ -5263,6 +5282,7 @@ try {
 				.getSessionHostManager()
 				.openHost({
 					capabilities: firstServices.capabilities,
+					storage: firstServices.storage,
 					autoContinue: false,
 					sessionId: created.id,
 				});
@@ -5319,7 +5339,7 @@ try {
 			policy: { cwd: testWorkspace, databasePath, workspace: testWorkspace },
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => reopenedPersistence.store,
+				storage: () => reopenedPersistence.storage,
 			},
 		});
 		try {
@@ -5327,13 +5347,14 @@ try {
 				.getSessionHostManager()
 				.openHost({
 					capabilities: reopenedServices.capabilities,
+					storage: reopenedServices.storage,
 					autoContinue: false,
 					sessionId,
 				});
 			try {
 				const records =
-					await reopenedServices.store.listSessionRecords(sessionId);
-				const hydrated = await reopenedServices.store.hydrateAttachments(
+					await reopenedServices.storage.listSessionRecords(sessionId);
+				const hydrated = await reopenedServices.storage.hydrateAttachments(
 					projectSessionRecords(records),
 					{ purpose: "model" }
 				);
@@ -5372,17 +5393,18 @@ try {
 			},
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => persistence.store,
+				storage: () => persistence.storage,
 			},
 		});
 		try {
-			const created = await services.store.createEmptySession({
+			const created = await services.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			const host = await services.capabilities
 				.getSessionHostManager()
 				.openHost({
 					capabilities: services.capabilities,
+					storage: services.storage,
 					autoContinue: false,
 					sessionId: created.id,
 				});
@@ -5408,7 +5430,9 @@ try {
 				});
 				expect(syncAttempts).toBe(1);
 				expect(recorder.requests).toEqual([]);
-				expect(await services.store.listSessionRecords(created.id)).toEqual([]);
+				expect(await services.storage.listSessionRecords(created.id)).toEqual(
+					[]
+				);
 				const log = await Bun.file(
 					resolveSessionLogFilePath(
 						resolveLocalSessionLogRoot(databasePath),
@@ -5489,11 +5513,11 @@ try {
 			},
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => persistence.store,
+				storage: () => persistence.storage,
 			},
 		});
 		try {
-			const created = await services.store.createEmptySession({
+			const created = await services.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			persistence.projection.sqlite.exec(`
@@ -5508,6 +5532,7 @@ try {
 				.getSessionHostManager()
 				.openHost({
 					capabilities: services.capabilities,
+					storage: services.storage,
 					autoContinue: false,
 					sessionId: created.id,
 				});
@@ -5633,11 +5658,11 @@ try {
 			policy: { cwd: testWorkspace, databasePath, workspace: testWorkspace },
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => firstPersistence.store,
+				storage: () => firstPersistence.storage,
 			},
 		});
 		try {
-			const created = await firstServices.store.createEmptySession({
+			const created = await firstServices.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			sessionId = created.id;
@@ -5645,6 +5670,7 @@ try {
 				.getSessionHostManager()
 				.openHost({
 					capabilities: firstServices.capabilities,
+					storage: firstServices.storage,
 					autoContinue: false,
 					sessionId,
 				});
@@ -5688,7 +5714,7 @@ try {
 			policy: { cwd: testWorkspace, databasePath, workspace: testWorkspace },
 			sources: {
 				createProviderCollection: () => createFakeProviderCollection(recorder),
-				store: () => reopenedPersistence.store,
+				storage: () => reopenedPersistence.storage,
 			},
 		});
 		try {
@@ -5696,6 +5722,7 @@ try {
 				.getSessionHostManager()
 				.openHost({
 					capabilities: reopenedServices.capabilities,
+					storage: reopenedServices.storage,
 					autoContinue: false,
 					sessionId,
 				});
@@ -5774,10 +5801,11 @@ try {
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("writer-ordered-attachment-session"),
 		};
-		const writer = await otherPersistence.store.acquireSessionWriter(sessionId);
+		const writer =
+			await otherPersistence.storage.acquireSessionWriter(sessionId);
 		try {
 			const rejected =
-				await persistence.store.createSessionWithExternalizedMessage(input);
+				await persistence.storage.createSessionWithExternalizedMessage(input);
 			expect(rejected.writeOutcome).toMatchObject({
 				kind: "not-committed",
 				error: { code: "session_in_use" },
@@ -5789,7 +5817,7 @@ try {
 
 		try {
 			const created =
-				await persistence.store.createSessionWithExternalizedMessage(input);
+				await persistence.storage.createSessionWithExternalizedMessage(input);
 			expect(created.writeOutcome.kind).toBe("committed");
 			expect(persistence.attachmentRepository.list()).toHaveLength(1);
 		} finally {
@@ -5819,7 +5847,7 @@ try {
 		const sessionId = toSessionId("not-committed-attachment-session");
 		try {
 			const creation =
-				await persistence.store.createSessionWithExternalizedMessage({
+				await persistence.storage.createSessionWithExternalizedMessage({
 					agent: agentId("build"),
 					id: sessionId,
 					message: createSessionUserMessage(
@@ -5843,7 +5871,7 @@ try {
 				kind: "not-committed",
 				error: { code: "session_log_write_not_committed" },
 			});
-			expect(await persistence.store.collectAttachments(0)).toMatchObject({
+			expect(await persistence.storage.collectAttachments(0)).toMatchObject({
 				reclaimedCount: 1,
 			});
 			expect(persistence.attachmentRepository.list()).toEqual([]);
@@ -5873,7 +5901,7 @@ try {
 		const sessionId = toSessionId("foreign-shared-attachment-session");
 		let releaseFirstOwner: (() => Promise<void>) | undefined;
 		try {
-			await foreignPersistence.store.createEmptySession({ id: sessionId });
+			await foreignPersistence.storage.createEmptySession({ id: sessionId });
 			const message = createSessionUserMessage(
 				"Keep this shared image.",
 				undefined,
@@ -5902,7 +5930,7 @@ try {
 			}
 
 			const creation =
-				await persistence.store.createSessionWithExternalizedMessage({
+				await persistence.storage.createSessionWithExternalizedMessage({
 					agent: agentId("build"),
 					id: sessionId,
 					message,
@@ -5910,13 +5938,13 @@ try {
 					turnId: agentTurnId("create-shared-attachment-not-committed"),
 				});
 			expect(creation.writeOutcome.kind).toBe("not-committed");
-			expect(await persistence.store.collectAttachments(0)).toMatchObject({
+			expect(await persistence.storage.collectAttachments(0)).toMatchObject({
 				reclaimedCount: 0,
 			});
 
 			await firstOwner.release();
 			releaseFirstOwner = undefined;
-			expect(await persistence.store.collectAttachments(0)).toMatchObject({
+			expect(await persistence.storage.collectAttachments(0)).toMatchObject({
 				reclaimedCount: 1,
 			});
 		} finally {
@@ -5972,11 +6000,11 @@ try {
 		const firstCreatedAt = new Date("2026-10-31T10:00:00.000Z");
 
 		try {
-			const created = await persistence.store.createEmptySession({
+			const created = await persistence.storage.createEmptySession({
 				createdAt: firstCreatedAt,
 				id: sessionId,
 			});
-			const conflict = await persistence.store.createEmptySession({
+			const conflict = await persistence.storage.createEmptySession({
 				createdAt: new Date("2026-10-31T11:00:00.000Z"),
 				id: sessionId,
 			});
@@ -5989,7 +6017,7 @@ try {
 				kind: "not-committed",
 				error: { code: "session_operation_conflict" },
 			});
-			expect(await persistence.store.getSession(sessionId)).toMatchObject({
+			expect(await persistence.storage.getSession(sessionId)).toMatchObject({
 				createdAt: firstCreatedAt,
 			});
 		} finally {
@@ -6083,7 +6111,7 @@ try {
 			collection = pendingCollection;
 			await collectionStarted.promise;
 
-			await store.recordPrompt({
+			await projectionStore.promptHistory.recordPrompt({
 				files: [
 					{
 						filename: "prompt.png",
@@ -6094,7 +6122,8 @@ try {
 				],
 				text: "Keep this prompt attachment.",
 			});
-			const [historyEntry] = await store.getPromptHistory();
+			const [historyEntry] =
+				await projectionStore.promptHistory.getPromptHistory();
 			const reference = getAttachmentReference(historyEntry?.files[0]);
 			if (reference === null || reference === undefined) {
 				throw new Error(
@@ -6196,7 +6225,7 @@ try {
 		let collection: Promise<AttachmentMaintenanceReport> | undefined;
 
 		try {
-			migration = store.getPromptHistory();
+			migration = projectionStore.promptHistory.getPromptHistory();
 			await externalizationReady.promise;
 			const pinDirectory = path.join(
 				testDirectory,
@@ -6359,14 +6388,14 @@ try {
 			turnId: agentTurnId("stale-attachment-turn"),
 		});
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			expect(
-				await persistence.store.commitSessionRecord({ record, sessionId })
+				await persistence.storage.commitSessionRecord({ record, sessionId })
 			).toMatchObject({ kind: "committed", projection: "ready" });
 			await referenceLease.release();
 			await persistence.attachmentStore.retain([reference.attachmentId]);
 			await expect(
-				persistence.store.deleteSession(sessionId)
+				persistence.storage.deleteSession(sessionId)
 			).resolves.toMatchObject({
 				kind: "committed",
 			});
@@ -6608,7 +6637,7 @@ describe("Catalog discovery, writer lock, and replay readers", () => {
 			}
 		);
 		let replayedConcurrentEntry = false;
-		let secondStore: SessionStore;
+		let secondStore: SessionStorage;
 		const fileIo: SessionLogFileIo = {
 			sync: async (filePath, handle) => {
 				await handle.sync();
@@ -7152,7 +7181,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 				},
 			}
 		);
-		const sessionCreated = await persistence.store.createEmptySession({
+		const sessionCreated = await persistence.storage.createEmptySession({
 			id: sessionId,
 		});
 		expect(sessionCreated.writeOutcome.kind).toBe("committed");
@@ -7185,7 +7214,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 		);
 		try {
 			failAfterAppendSync = true;
-			const outcome = await persistence.store.commitSessionRecord({
+			const outcome = await persistence.storage.commitSessionRecord({
 				externalizationLease: externalization,
 				record,
 				sessionId,
@@ -7195,7 +7224,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 			expect(pinsAfterWrite.length).toBeGreaterThan(0);
 
 			failAfterAppendSync = false;
-			await persistence.store.getSession(sessionId);
+			await persistence.storage.getSession(sessionId);
 			const pinsAfterReconciliation = await fs.readdir(pinDirectory);
 			expect(pinsAfterReconciliation).toHaveLength(0);
 		} finally {
@@ -7237,7 +7266,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 				},
 			}
 		);
-		await persistence.store.createEmptySession({ id: sessionId });
+		await persistence.storage.createEmptySession({ id: sessionId });
 		logPath = resolveSessionLogFilePath(await fs.realpath(logRoot), sessionId);
 		const sourceLease = await persistence.attachmentStore.ingest({
 			bytes: PNG_BYTES,
@@ -7260,7 +7289,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("indeterminate-compaction-record"),
 			});
-			const recordWrite = await persistence.store.commitSessionRecord({
+			const recordWrite = await persistence.storage.commitSessionRecord({
 				externalizationLease: recordExternalization,
 				record,
 				sessionId,
@@ -7296,13 +7325,13 @@ describe("Creation sync and indeterminate write recovery", () => {
 		try {
 			failOnLogSyncCount = logSyncCount + 3;
 			failAfterAppendSync = true;
-			const result = await persistence.store.appendCompaction(input);
+			const result = await persistence.storage.appendCompaction(input);
 			expect(result.writeOutcome.kind).toBe("indeterminate");
 			expect(await fs.readdir(pinDirectory)).not.toHaveLength(0);
 
 			failAfterAppendSync = false;
 			failOnLogSyncCount = undefined;
-			await persistence.store.getLatestCompaction(sessionId);
+			await persistence.storage.getLatestCompaction(sessionId);
 			expect(await fs.readdir(pinDirectory)).toHaveLength(0);
 		} finally {
 			failAfterAppendSync = false;
@@ -7547,7 +7576,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			logPath = resolveSessionLogFilePath(
 				await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
 				sessionId
@@ -7564,7 +7593,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 					model: DEFAULT_PROVIDER_MODEL_SELECTION,
 					turnId: agentTurnId(turn),
 				});
-				const recordWrite = await persistence.store.commitSessionRecord({
+				const recordWrite = await persistence.storage.commitSessionRecord({
 					record,
 					sessionId,
 				});
@@ -7589,7 +7618,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 				trigger: "threshold",
 			};
 			failCompactionAppend = true;
-			const uncertain = await persistence.store.appendCompaction(input);
+			const uncertain = await persistence.storage.appendCompaction(input);
 			expect(uncertain.writeOutcome).toMatchObject({
 				kind: "indeterminate",
 				error: { code: "session_log_write_indeterminate" },
@@ -7606,7 +7635,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 				sessionId,
 				`${pendingIntent.sequence}-${operationIdFileStem(operationId)}.partial`
 			);
-			const conflict = await persistence.store.appendCompaction({
+			const conflict = await persistence.storage.appendCompaction({
 				...input,
 				summary: { ...input.summary, text: "Changed retry payload." },
 			});
@@ -7618,7 +7647,7 @@ describe("Creation sync and indeterminate write recovery", () => {
 			expect(await Bun.file(quarantinePath).exists()).toBe(false);
 			expect(await Bun.file(`${quarantinePath}.json`).exists()).toBe(false);
 
-			const recovered = await persistence.store.appendCompaction(input);
+			const recovered = await persistence.storage.appendCompaction(input);
 			expect(recovered.writeOutcome).toMatchObject({
 				kind: "committed",
 				projection: "ready",
@@ -7626,7 +7655,9 @@ describe("Creation sync and indeterminate write recovery", () => {
 			expect(recovered.compaction?.createdAt.toISOString()).toBe(
 				pendingIntent.timestamp
 			);
-			expect(await persistence.store.getCompactions(sessionId)).toHaveLength(1);
+			expect(await persistence.storage.getCompactions(sessionId)).toHaveLength(
+				1
+			);
 		} finally {
 			persistence.close();
 		}
@@ -7699,7 +7730,7 @@ describe("Projection rebuild and migration", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				createdAt: new Date("2026-10-31T00:00:00.000Z"),
 				id: sessionId,
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
@@ -7742,7 +7773,7 @@ describe("Projection rebuild and migration", () => {
 					model: DEFAULT_PROVIDER_MODEL_SELECTION,
 					turnId: agentTurnId(turn),
 				});
-				const write = await persistence.store.commitSessionRecord({
+				const write = await persistence.storage.commitSessionRecord({
 					record,
 					sessionId,
 				});
@@ -7750,7 +7781,7 @@ describe("Projection rebuild and migration", () => {
 					throw new Error("A rebuild fixture record failed to commit.");
 				}
 				if (isCoveredMessage) {
-					const status = await persistence.store.updateSessionSubmission({
+					const status = await persistence.storage.updateSessionSubmission({
 						messageId,
 						recordId: record.id,
 						sessionId,
@@ -7780,7 +7811,7 @@ describe("Projection rebuild and migration", () => {
 				trigger: "threshold",
 			};
 			const compaction =
-				await persistence.store.appendCompaction(compactionInput);
+				await persistence.storage.appendCompaction(compactionInput);
 			expect(compaction.writeOutcome).toMatchObject({
 				kind: "committed",
 				projection: "ready",
@@ -7795,12 +7826,12 @@ describe("Projection rebuild and migration", () => {
 				sessionId,
 				usage: { inputTokens: 40, outputTokens: 5 },
 			};
-			await persistence.store.createSessionUsageEntry(usageInput);
+			await persistence.storage.createSessionUsageEntry(usageInput);
 			const promptHistory: PromptHistoryEntry = {
 				files: [],
 				text: "Keep this operational prompt history.",
 			};
-			await persistence.store.recordPrompt(promptHistory);
+			await persistence.promptHistory.recordPrompt(promptHistory);
 			const { workspace_id: workspaceId } = persistence.operational.sqlite
 				.query(
 					"SELECT workspace_id FROM local_session_binding WHERE session_id = ?"
@@ -7921,11 +7952,11 @@ describe("Projection rebuild and migration", () => {
 				)
 				.all(sessionId);
 			const before = {
-				compactions: await persistence.store.getCompactions(sessionId),
-				promptHistory: await persistence.store.getPromptHistory(),
-				records: await persistence.store.listSessionRecords(sessionId),
-				session: await persistence.store.getSession(sessionId),
-				usage: await persistence.store.listSessionUsageEntries(sessionId),
+				compactions: await persistence.storage.getCompactions(sessionId),
+				promptHistory: await persistence.promptHistory.getPromptHistory(),
+				records: await persistence.storage.listSessionRecords(sessionId),
+				session: await persistence.storage.getSession(sessionId),
+				usage: await persistence.storage.listSessionUsageEntries(sessionId),
 			};
 
 			const stagingSessionDirectory = path.join(
@@ -7941,7 +7972,7 @@ describe("Projection rebuild and migration", () => {
 			persistence.projection.sqlite.exec(
 				"DELETE FROM session_compaction; DELETE FROM session_record; DELETE FROM session_usage_entry; DELETE FROM session_operation_lookup; DELETE FROM session; DELETE FROM session_projection_cursor;"
 			);
-			const rebuilt = await persistence.store.rebuildProjection(
+			const rebuilt = await persistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (action) => await action()
 			);
@@ -7949,11 +7980,11 @@ describe("Projection rebuild and migration", () => {
 			expect(rebuilt.issues).toEqual([]);
 			expect(rebuilt.rebuiltSessionIds).toEqual([sessionId]);
 			expect({
-				compactions: await persistence.store.getCompactions(sessionId),
-				promptHistory: await persistence.store.getPromptHistory(),
-				records: await persistence.store.listSessionRecords(sessionId),
-				session: await persistence.store.getSession(sessionId),
-				usage: await persistence.store.listSessionUsageEntries(sessionId),
+				compactions: await persistence.storage.getCompactions(sessionId),
+				promptHistory: await persistence.promptHistory.getPromptHistory(),
+				records: await persistence.storage.listSessionRecords(sessionId),
+				session: await persistence.storage.getSession(sessionId),
+				usage: await persistence.storage.listSessionUsageEntries(sessionId),
 			}).toEqual(before);
 			expect(readOperationalState()).toEqual(beforeOperationalState);
 			expect(
@@ -7968,7 +7999,7 @@ describe("Projection rebuild and migration", () => {
 				persistence.attachmentRepository.get(attachmentReference.attachmentId)
 			).toEqual(beforeAttachmentMetadata);
 			expect(await Bun.file(recoveryBytesPath).bytes()).toEqual(PNG_BYTES);
-			const rebuiltAgain = await persistence.store.rebuildProjection(
+			const rebuiltAgain = await persistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (action) => await action()
 			);
@@ -7981,7 +8012,7 @@ describe("Projection rebuild and migration", () => {
 					.all(sessionId)
 			).toEqual(beforeOperations);
 			expect(
-				await persistence.store.listSessionUsageEntries(sessionId)
+				await persistence.storage.listSessionUsageEntries(sessionId)
 			).toEqual(before.usage);
 		} finally {
 			persistence.close();
@@ -8007,13 +8038,15 @@ describe("Projection rebuild and migration", () => {
 		);
 
 		try {
-			await firstPersistence.store.createEmptySession({ id: firstSessionId });
-			await secondPersistence.store.createEmptySession({ id: secondSessionId });
+			await firstPersistence.storage.createEmptySession({ id: firstSessionId });
+			await secondPersistence.storage.createEmptySession({
+				id: secondSessionId,
+			});
 			firstPersistence.projection.sqlite.exec(
 				"DELETE FROM session_projection_cursor; DELETE FROM session;"
 			);
 
-			const rebuilt = await firstPersistence.store.rebuildProjection(
+			const rebuilt = await firstPersistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (action) => await action()
 			);
@@ -8023,14 +8056,14 @@ describe("Projection rebuild and migration", () => {
 				firstSessionId,
 				secondSessionId,
 			]);
-			expect((await firstPersistence.store.getSession(firstSessionId)).id).toBe(
-				firstSessionId
-			);
 			expect(
-				(await secondPersistence.store.getSession(secondSessionId)).id
+				(await firstPersistence.storage.getSession(firstSessionId)).id
+			).toBe(firstSessionId);
+			expect(
+				(await secondPersistence.storage.getSession(secondSessionId)).id
 			).toBe(secondSessionId);
 			await expect(
-				firstPersistence.store.getSession(secondSessionId)
+				firstPersistence.storage.getSession(secondSessionId)
 			).rejects.toThrow("Session not found");
 		} finally {
 			firstPersistence.close();
@@ -8053,9 +8086,9 @@ describe("Projection rebuild and migration", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: firstSessionId });
-			await persistence.store.createEmptySession({ id: secondSessionId });
-			await persistence.store.updateSession(secondSessionId, {
+			await persistence.storage.createEmptySession({ id: firstSessionId });
+			await persistence.storage.createEmptySession({ id: secondSessionId });
+			await persistence.storage.updateSession(secondSessionId, {
 				operationId: "targeted-rebuild-title",
 				title: "Authoritative title",
 			});
@@ -8063,11 +8096,11 @@ describe("Projection rebuild and migration", () => {
 				.query("UPDATE session SET title = ? WHERE id = ?")
 				.run("Stale projection title", secondSessionId);
 
-			const rebuilt = await persistence.store.rebuildProjection(
+			const rebuilt = await persistence.storage.rebuildProjection(
 				{ kind: "session", sessionId: firstSessionId },
 				async (action) => await action()
 			);
-			const session = await persistence.store.getSession(secondSessionId);
+			const session = await persistence.storage.getSession(secondSessionId);
 			const cursor = persistence.projection.sqlite
 				.query(
 					"SELECT generation FROM session_projection_cursor WHERE session_id = ?"
@@ -8145,24 +8178,24 @@ describe("Paged history and catalog reads", () => {
 			return { messageId, record };
 		};
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			const firstRecord = makeRecord(1, true);
 			const secondRecord = makeRecord(2);
 			const thirdRecord = makeRecord(3);
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: firstRecord.record,
 				sessionId,
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: secondRecord.record,
 				sessionId,
 			});
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: thirdRecord.record,
 				sessionId,
 			});
 
-			const firstPage = await persistence.store.readSessionHistoryPage(
+			const firstPage = await persistence.storage.readSessionHistoryPage(
 				sessionId,
 				{
 					limit: 2,
@@ -8180,7 +8213,7 @@ describe("Paged history and catalog reads", () => {
 				);
 			}
 
-			await persistence.store.updateSessionSubmission({
+			await persistence.storage.updateSessionSubmission({
 				messageId: firstRecord.messageId,
 				recordId: firstRecord.record.id,
 				sessionId,
@@ -8188,11 +8221,11 @@ describe("Paged history and catalog reads", () => {
 				submissionId,
 			});
 			const appendedRecord = makeRecord(4);
-			await persistence.store.commitSessionRecord({
+			await persistence.storage.commitSessionRecord({
 				record: appendedRecord.record,
 				sessionId,
 			});
-			const secondPage = await persistence.store.readSessionHistoryPage(
+			const secondPage = await persistence.storage.readSessionHistoryPage(
 				sessionId,
 				{
 					cursor,
@@ -8210,7 +8243,7 @@ describe("Paged history and catalog reads", () => {
 				appendedRecord.record.id
 			);
 
-			const deletion = await persistence.store.deleteSession(sessionId);
+			const deletion = await persistence.storage.deleteSession(sessionId);
 			expect(deletion).toMatchObject({
 				kind: "committed",
 				projection: "blocked",
@@ -8224,11 +8257,11 @@ describe("Paged history and catalog reads", () => {
 				workspace
 			);
 			try {
-				const catalog = await reopened.store.listSessionCatalog();
+				const catalog = await reopened.storage.listSessionCatalog();
 				expect(catalog.sessions.map(({ id }) => id)).not.toContain(sessionId);
 				expect(catalog.issues).toEqual([]);
 				await expect(
-					reopened.store.readSessionHistoryPage(sessionId, { cursor })
+					reopened.storage.readSessionHistoryPage(sessionId, { cursor })
 				).rejects.toMatchObject({ code: "cursor_expired" });
 			} finally {
 				reopened.close();
@@ -8260,24 +8293,24 @@ describe("Paged history and catalog reads", () => {
 			pinned: toSessionId("catalog-page-pinned"),
 		};
 		try {
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				createdAt: new Date(1000),
 				id: ids.oldest,
 			});
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				createdAt: new Date(2000),
 				id: ids.middle,
 			});
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				createdAt: new Date(3000),
 				id: ids.newest,
 			});
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				createdAt: new Date(500),
 				id: ids.pinned,
 			});
-			await persistence.store.updateSession(ids.pinned, { pinned: true });
-			await persistence.store.updateSession(ids.oldest, {
+			await persistence.storage.updateSession(ids.pinned, { pinned: true });
+			await persistence.storage.updateSession(ids.oldest, {
 				title: "Before refresh",
 			});
 			const foreignWorkspace = path.join(
@@ -8291,7 +8324,7 @@ describe("Paged history and catalog reads", () => {
 			);
 			const foreignId = toSessionId("catalog-page-foreign");
 			try {
-				await foreignPersistence.store.createEmptySession({
+				await foreignPersistence.storage.createEmptySession({
 					createdAt: new Date(10_000),
 					id: foreignId,
 				});
@@ -8299,7 +8332,9 @@ describe("Paged history and catalog reads", () => {
 				foreignPersistence.close();
 			}
 
-			const firstPage = await persistence.store.listSessionsPage({ limit: 2 });
+			const firstPage = await persistence.storage.listSessionsPage({
+				limit: 2,
+			});
 			expect(firstPage.sessions.map(({ id }) => id)).toEqual([
 				ids.pinned,
 				ids.newest,
@@ -8313,15 +8348,15 @@ describe("Paged history and catalog reads", () => {
 				);
 			}
 
-			await persistence.store.updateSession(ids.oldest, {
+			await persistence.storage.updateSession(ids.oldest, {
 				pinned: true,
 				title: "Changed after the snapshot",
 			});
-			await persistence.store.updateSession(ids.middle, {
+			await persistence.storage.updateSession(ids.middle, {
 				pinned: true,
 				title: "Also changed after the snapshot",
 			});
-			const secondPage = await persistence.store.listSessionsPage({
+			const secondPage = await persistence.storage.listSessionsPage({
 				cursor,
 				limit: 2,
 			});
@@ -8337,15 +8372,15 @@ describe("Paged history and catalog reads", () => {
 
 			const tieA = toSessionId("catalog-page-tie-a");
 			const tieB = toSessionId("catalog-page-tie-b");
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				createdAt: new Date(4000),
 				id: tieB,
 			});
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				createdAt: new Date(4000),
 				id: tieA,
 			});
-			const refreshedPage = await persistence.store.listSessionsPage({
+			const refreshedPage = await persistence.storage.listSessionsPage({
 				limit: 10,
 			});
 			expect(refreshedPage.sessions.map(({ id }) => id)).toEqual([
@@ -8456,7 +8491,7 @@ describe("Paged history and catalog reads", () => {
 		);
 
 		try {
-			await expect(persistence.store.listSessions()).resolves.toEqual([]);
+			await expect(persistence.storage.listSessions()).resolves.toEqual([]);
 			await expect(
 				persistence.attachmentStore.collect({ liveAttachmentIds: [] })
 			).resolves.toMatchObject({ orphanCount: 0, reclaimedCount: 0 });
@@ -8508,13 +8543,15 @@ describe("Paged history and catalog reads", () => {
 			workspaceB,
 			fileIo
 		);
-		const creationPromise = writer.store.createEmptySession({ id: sessionId });
+		const creationPromise = writer.storage.createEmptySession({
+			id: sessionId,
+		});
 		try {
 			await published.promise;
-			const catalogPagePromise = reader.store.listSessionsPage();
-			await expect(reader.store.listSessions()).resolves.toEqual([]);
+			const catalogPagePromise = reader.storage.listSessionsPage();
+			await expect(reader.storage.listSessions()).resolves.toEqual([]);
 			await expect(
-				reader.store.readSessionHistoryPage(sessionId)
+				reader.storage.readSessionHistoryPage(sessionId)
 			).rejects.toThrow("Session not found");
 
 			resumeCreation.resolve();
@@ -8524,10 +8561,10 @@ describe("Paged history and catalog reads", () => {
 				projection: "ready",
 			});
 			await expect(catalogPagePromise).resolves.toMatchObject({ sessions: [] });
-			await expect(writer.store.listSessionsPage()).resolves.toMatchObject({
+			await expect(writer.storage.listSessionsPage()).resolves.toMatchObject({
 				sessions: [{ id: sessionId }],
 			});
-			await expect(reader.store.listSessionsPage()).resolves.toMatchObject({
+			await expect(reader.storage.listSessionsPage()).resolves.toMatchObject({
 				sessions: [],
 			});
 		} finally {
@@ -8579,7 +8616,7 @@ describe("Paged history and catalog reads", () => {
 		);
 		let creatorClosed = false;
 		try {
-			const interrupted = await creator.store.createEmptySession({
+			const interrupted = await creator.storage.createEmptySession({
 				id: sessionId,
 			});
 			expect(interrupted.writeOutcome).toMatchObject({
@@ -8595,7 +8632,7 @@ describe("Paged history and catalog reads", () => {
 				workspaceB
 			);
 			try {
-				const claim = await claimant.store.createEmptySession({
+				const claim = await claimant.storage.createEmptySession({
 					id: sessionId,
 				});
 				expect(claim.writeOutcome).toMatchObject({
@@ -8609,7 +8646,7 @@ describe("Paged history and catalog reads", () => {
 						)
 						.all(sessionId)
 				).toEqual([]);
-				expect(await claimant.store.listSessionsPage()).toMatchObject({
+				expect(await claimant.storage.listSessionsPage()).toMatchObject({
 					sessions: [],
 				});
 			} finally {
@@ -8621,19 +8658,19 @@ describe("Paged history and catalog reads", () => {
 				workspaceA
 			);
 			try {
-				await expect(ownerRetry.store.listSessionsPage()).rejects.toMatchObject(
-					{
-						code: "session_log_write_indeterminate",
-					}
-				);
-				const recovered = await ownerRetry.store.createEmptySession({
+				await expect(
+					ownerRetry.storage.listSessionsPage()
+				).rejects.toMatchObject({
+					code: "session_log_write_indeterminate",
+				});
+				const recovered = await ownerRetry.storage.createEmptySession({
 					id: sessionId,
 				});
 				expect(recovered.writeOutcome).toMatchObject({
 					kind: "committed",
 					projection: "ready",
 				});
-				expect(await ownerRetry.store.listSessionsPage()).toMatchObject({
+				expect(await ownerRetry.storage.listSessionsPage()).toMatchObject({
 					sessions: [{ id: sessionId }],
 				});
 			} finally {
@@ -8666,9 +8703,9 @@ describe("Paged history and catalog reads", () => {
 		);
 		const sessionId = toSessionId("session-history-page-clean-head");
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			syncCount = 0;
-			const page = await persistence.store.readSessionHistoryPage(sessionId);
+			const page = await persistence.storage.readSessionHistoryPage(sessionId);
 			expect(page.records).toEqual([]);
 			expect(syncCount).toBe(0);
 		} finally {
@@ -8694,7 +8731,7 @@ describe("Paged history and catalog reads", () => {
 			sessionId
 		);
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			const firstRecord = buildUserSessionRecord({
 				agentId: agentId("history-page-catchup-agent"),
 				message: createSessionUserMessage(
@@ -8707,7 +8744,7 @@ describe("Paged history and catalog reads", () => {
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				turnId: agentTurnId("history-page-first-turn"),
 			});
-			const firstOutcome = await persistence.store.commitSessionRecord({
+			const firstOutcome = await persistence.storage.commitSessionRecord({
 				record: firstRecord,
 				sessionId,
 			});
@@ -8769,7 +8806,7 @@ describe("Paged history and catalog reads", () => {
 			);
 
 			await expect(
-				persistence.store.readSessionHistoryPage(sessionId)
+				persistence.storage.readSessionHistoryPage(sessionId)
 			).rejects.toMatchObject({
 				code: "session_log_corrupt",
 				offset: originalBytes.byteLength,
@@ -8814,9 +8851,9 @@ describe("Paged history and catalog reads", () => {
 		);
 		const sessionId = toSessionId("session-catalog-page-clean-head");
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			syncCount = 0;
-			const page = await persistence.store.listSessionsPage();
+			const page = await persistence.storage.listSessionsPage();
 			expect(page.sessions.map(({ id }) => id)).toContain(sessionId);
 			expect(syncCount).toBe(0);
 		} finally {
@@ -8837,7 +8874,7 @@ describe("Paged history and catalog reads", () => {
 		);
 		const sessionId = toSessionId("session-catalog-page-projection-lag");
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			persistence.projection.sqlite.exec(`
 			CREATE TRIGGER reject_catalog_page_projection
 			BEFORE UPDATE ON session
@@ -8845,7 +8882,7 @@ describe("Paged history and catalog reads", () => {
 				SELECT RAISE(ABORT, 'injected catalog page projection failure');
 			END;
 		`);
-			const outcome = await persistence.store.updateSession(sessionId, {
+			const outcome = await persistence.storage.updateSession(sessionId, {
 				operationId: "catalog-page-projection-lag-update",
 				title: "Committed title",
 			});
@@ -8854,13 +8891,13 @@ describe("Paged history and catalog reads", () => {
 				projection: "blocked",
 			});
 			await expect(
-				persistence.store.listSessionsPage({ limit: 10 })
+				persistence.storage.listSessionsPage({ limit: 10 })
 			).rejects.toMatchObject({ code: "session_projection_blocked" });
 
 			persistence.projection.sqlite.exec(
 				"DROP TRIGGER reject_catalog_page_projection"
 			);
-			const page = await persistence.store.listSessionsPage({ limit: 200 });
+			const page = await persistence.storage.listSessionsPage({ limit: 200 });
 			expect(page.sessions.find(({ id }) => id === sessionId)).toMatchObject({
 				id: sessionId,
 				title: "Committed title",
@@ -8895,20 +8932,20 @@ describe("Paged history and catalog reads", () => {
 				SELECT RAISE(ABORT, 'injected catalog create projection failure');
 			END;
 		`);
-			const outcome = await persistence.store.createEmptySession({
+			const outcome = await persistence.storage.createEmptySession({
 				id: sessionId,
 			});
 			expect(outcome).toMatchObject({
 				writeOutcome: { kind: "committed", projection: "blocked" },
 			});
 			await expect(
-				persistence.store.listSessionsPage({ limit: 10 })
+				persistence.storage.listSessionsPage({ limit: 10 })
 			).rejects.toMatchObject({ code: "session_projection_blocked" });
 
 			persistence.projection.sqlite.exec(
 				"DROP TRIGGER reject_catalog_page_create"
 			);
-			const page = await persistence.store.listSessionsPage({ limit: 10 });
+			const page = await persistence.storage.listSessionsPage({ limit: 10 });
 			expect(page.sessions.find(({ id }) => id === sessionId)).toMatchObject({
 				id: sessionId,
 			});
@@ -8936,7 +8973,7 @@ describe("Paged history and catalog reads", () => {
 			second: toSessionId("session-page-error-second"),
 		};
 		const commitRecord = async (targetSessionId: SessionId, suffix: string) =>
-			persistence.store.commitSessionRecord({
+			persistence.storage.commitSessionRecord({
 				record: buildUserSessionRecord({
 					agentId: agentId("session-page-error-agent"),
 					message: {
@@ -8950,29 +8987,29 @@ describe("Paged history and catalog reads", () => {
 				sessionId: targetSessionId,
 			});
 		try {
-			await persistence.store.createEmptySession({ id: sessionIds.first });
-			await persistence.store.createEmptySession({ id: sessionIds.second });
+			await persistence.storage.createEmptySession({ id: sessionIds.first });
+			await persistence.storage.createEmptySession({ id: sessionIds.second });
 			await commitRecord(sessionIds.first, "one");
 			await commitRecord(sessionIds.first, "two");
 
 			await expect(
-				persistence.store.listSessionsPage({ cursor: "invalid cursor" })
+				persistence.storage.listSessionsPage({ cursor: "invalid cursor" })
 			).rejects.toMatchObject({ code: "cursor_invalid" });
 			await expect(
-				persistence.store.readSessionHistoryPage(sessionIds.first, {
+				persistence.storage.readSessionHistoryPage(sessionIds.first, {
 					cursor: "invalid cursor",
 				})
 			).rejects.toMatchObject({ code: "cursor_invalid" });
 			await expect(
-				persistence.store.listSessionsPage({ limit: 0 })
+				persistence.storage.listSessionsPage({ limit: 0 })
 			).rejects.toMatchObject({ code: "page_limit_invalid" });
 			await expect(
-				persistence.store.readSessionHistoryPage(sessionIds.first, {
+				persistence.storage.readSessionHistoryPage(sessionIds.first, {
 					limit: 201,
 				})
 			).rejects.toMatchObject({ code: "page_limit_invalid" });
 
-			const historyFirstPage = await persistence.store.readSessionHistoryPage(
+			const historyFirstPage = await persistence.storage.readSessionHistoryPage(
 				sessionIds.first,
 				{ limit: 1 }
 			);
@@ -8981,12 +9018,12 @@ describe("Paged history and catalog reads", () => {
 				throw new Error("The history page omitted its continuation cursor.");
 			}
 			await expect(
-				persistence.store.readSessionHistoryPage(sessionIds.second, {
+				persistence.storage.readSessionHistoryPage(sessionIds.second, {
 					cursor: historyCursor,
 				})
 			).rejects.toMatchObject({ code: "cursor_invalid" });
 
-			const catalogFirstPage = await persistence.store.listSessionsPage({
+			const catalogFirstPage = await persistence.storage.listSessionsPage({
 				limit: 1,
 			});
 			const catalogCursor = catalogFirstPage.nextCursor;
@@ -9002,7 +9039,7 @@ describe("Paged history and catalog reads", () => {
 				workspaceId: "another-workspace",
 			});
 			await expect(
-				persistence.store.listSessionsPage({ cursor: wrongWorkspaceCursor })
+				persistence.storage.listSessionsPage({ cursor: wrongWorkspaceCursor })
 			).rejects.toMatchObject({ code: "cursor_invalid" });
 		} finally {
 			persistence.close();
@@ -9021,13 +9058,15 @@ describe("Paged history and catalog reads", () => {
 			workspace
 		);
 		try {
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				id: toSessionId("session-catalog-cursor-delete-a"),
 			});
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({
 				id: toSessionId("session-catalog-cursor-delete-b"),
 			});
-			const firstPage = await persistence.store.listSessionsPage({ limit: 1 });
+			const firstPage = await persistence.storage.listSessionsPage({
+				limit: 1,
+			});
 			const cursor = firstPage.nextCursor;
 			if (cursor === undefined) {
 				throw new Error("The catalog page omitted its continuation cursor.");
@@ -9036,9 +9075,9 @@ describe("Paged history and catalog reads", () => {
 			if (firstSession === undefined) {
 				throw new Error("The catalog page omitted its Session.");
 			}
-			await persistence.store.deleteSession(firstSession.id);
+			await persistence.storage.deleteSession(firstSession.id);
 			await expect(
-				persistence.store.listSessionsPage({ cursor })
+				persistence.storage.listSessionsPage({ cursor })
 			).rejects.toMatchObject({ code: "cursor_expired" });
 		} finally {
 			persistence.close();
@@ -9059,10 +9098,10 @@ describe("Paged history and catalog reads", () => {
 				toSessionId("catalog-deletion-migration-first"),
 				toSessionId("catalog-deletion-migration-second"),
 			]) {
-				const result = await initial.store.createEmptySession({ id });
+				const result = await initial.storage.createEmptySession({ id });
 				expect(result.writeOutcome.kind).toBe("committed");
 			}
-			const firstPage = await initial.store.listSessionsPage({ limit: 1 });
+			const firstPage = await initial.storage.listSessionsPage({ limit: 1 });
 			const cursor = firstPage.nextCursor;
 			if (cursor === undefined) {
 				throw new Error("The catalog page omitted its continuation cursor.");
@@ -9095,9 +9134,9 @@ describe("Paged history and catalog reads", () => {
 				expect(migratedState.pagination_version).toBe(2);
 				expect(migratedState.projection_id).not.toBe(oldProjectionId);
 				await expect(
-					reopened.store.listSessionsPage({ cursor })
+					reopened.storage.listSessionsPage({ cursor })
 				).rejects.toMatchObject({ code: "cursor_expired" });
-				const refreshed = await reopened.store.listSessionsPage();
+				const refreshed = await reopened.storage.listSessionsPage();
 				expect(refreshed.sessions.map(({ id }) => id).sort()).toEqual([
 					toSessionId("catalog-deletion-migration-first"),
 					toSessionId("catalog-deletion-migration-second"),
@@ -9129,10 +9168,12 @@ describe("Paged history and catalog reads", () => {
 		];
 		try {
 			for (const id of sessionIds) {
-				const created = await persistence.store.createEmptySession({ id });
+				const created = await persistence.storage.createEmptySession({ id });
 				expect(created.writeOutcome.kind).toBe("committed");
 			}
-			const firstPage = await persistence.store.listSessionsPage({ limit: 1 });
+			const firstPage = await persistence.storage.listSessionsPage({
+				limit: 1,
+			});
 			const cursor = firstPage.nextCursor;
 			const deletedSession = firstPage.sessions[0];
 			if (cursor === undefined || deletedSession === undefined) {
@@ -9146,15 +9187,17 @@ describe("Paged history and catalog reads", () => {
 			END;
 		`);
 
-			const deletion = await persistence.store.deleteSession(deletedSession.id);
+			const deletion = await persistence.storage.deleteSession(
+				deletedSession.id
+			);
 			expect(deletion).toMatchObject({
 				kind: "committed",
 				projection: "ready",
 			});
 			await expect(
-				persistence.store.listSessionsPage({ cursor })
+				persistence.storage.listSessionsPage({ cursor })
 			).rejects.toMatchObject({ code: "cursor_expired" });
-			const refreshed = await persistence.store.listSessionsPage();
+			const refreshed = await persistence.storage.listSessionsPage();
 			expect(refreshed.sessions.map(({ id }) => id)).toEqual(
 				sessionIds.filter((id) => id !== deletedSession.id)
 			);
@@ -9185,25 +9228,28 @@ describe("Paged history and catalog reads", () => {
 		const foreign = createSessionJsonlTestPersistence(databasePath, workspaceB);
 		try {
 			for (const id of [firstSessionId, secondSessionId]) {
-				const created = await owner.store.createEmptySession({ createdAt, id });
+				const created = await owner.storage.createEmptySession({
+					createdAt,
+					id,
+				});
 				expect(created.writeOutcome.kind).toBe("committed");
 			}
-			const foreignCreated = await foreign.store.createEmptySession({
+			const foreignCreated = await foreign.storage.createEmptySession({
 				createdAt,
 				id: foreignSessionId,
 			});
 			expect(foreignCreated.writeOutcome.kind).toBe("committed");
-			const firstPage = await owner.store.listSessionsPage({ limit: 1 });
+			const firstPage = await owner.storage.listSessionsPage({ limit: 1 });
 			const cursor = firstPage.nextCursor;
 			expect(firstPage.sessions.map(({ id }) => id)).toEqual([firstSessionId]);
 			if (cursor === undefined) {
 				throw new Error("The catalog page omitted its continuation cursor.");
 			}
 
-			const deletion = await foreign.store.deleteSession(foreignSessionId);
+			const deletion = await foreign.storage.deleteSession(foreignSessionId);
 			expect(deletion.kind).toBe("committed");
 			await expect(
-				owner.store.listSessionsPage({ cursor })
+				owner.storage.listSessionsPage({ cursor })
 			).resolves.toMatchObject({
 				sessions: [{ id: secondSessionId }],
 			});
@@ -9226,12 +9272,12 @@ describe("Paged history and catalog reads", () => {
 		);
 		const sessionId = toSessionId("session-history-cursor-rebuild");
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
-			await persistence.store.createEmptySession({
+			await persistence.storage.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({
 				id: toSessionId("session-catalog-cursor-rebuild-other"),
 			});
 			for (const suffix of ["one", "two"]) {
-				await persistence.store.commitSessionRecord({
+				await persistence.storage.commitSessionRecord({
 					record: buildUserSessionRecord({
 						agentId: agentId("session-history-cursor-agent"),
 						message: {
@@ -9245,7 +9291,7 @@ describe("Paged history and catalog reads", () => {
 					sessionId,
 				});
 			}
-			const firstPage = await persistence.store.readSessionHistoryPage(
+			const firstPage = await persistence.storage.readSessionHistoryPage(
 				sessionId,
 				{
 					limit: 1,
@@ -9255,22 +9301,22 @@ describe("Paged history and catalog reads", () => {
 			if (cursor === undefined) {
 				throw new Error("The history page omitted its continuation cursor.");
 			}
-			const catalogFirstPage = await persistence.store.listSessionsPage({
+			const catalogFirstPage = await persistence.storage.listSessionsPage({
 				limit: 1,
 			});
 			const catalogCursor = catalogFirstPage.nextCursor;
 			if (catalogCursor === undefined) {
 				throw new Error("The catalog page omitted its continuation cursor.");
 			}
-			await persistence.store.rebuildProjection(
+			await persistence.storage.rebuildProjection(
 				{ kind: "session", sessionId },
 				(operation) => operation()
 			);
 			await expect(
-				persistence.store.readSessionHistoryPage(sessionId, { cursor })
+				persistence.storage.readSessionHistoryPage(sessionId, { cursor })
 			).rejects.toMatchObject({ code: "cursor_expired" });
 			await expect(
-				persistence.store.listSessionsPage({ cursor: catalogCursor })
+				persistence.storage.listSessionsPage({ cursor: catalogCursor })
 			).rejects.toMatchObject({ code: "cursor_expired" });
 		} finally {
 			persistence.close();
@@ -9290,9 +9336,9 @@ describe("Paged history and catalog reads", () => {
 		);
 		const sessionId = toSessionId("session-history-cursor-delete");
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			for (const suffix of ["one", "two"]) {
-				await persistence.store.commitSessionRecord({
+				await persistence.storage.commitSessionRecord({
 					record: buildUserSessionRecord({
 						agentId: agentId("session-history-cursor-delete-agent"),
 						message: {
@@ -9306,7 +9352,7 @@ describe("Paged history and catalog reads", () => {
 					sessionId,
 				});
 			}
-			const firstPage = await persistence.store.readSessionHistoryPage(
+			const firstPage = await persistence.storage.readSessionHistoryPage(
 				sessionId,
 				{
 					limit: 1,
@@ -9316,9 +9362,9 @@ describe("Paged history and catalog reads", () => {
 			if (cursor === undefined) {
 				throw new Error("The history page omitted its continuation cursor.");
 			}
-			await persistence.store.deleteSession(sessionId);
+			await persistence.storage.deleteSession(sessionId);
 			await expect(
-				persistence.store.readSessionHistoryPage(sessionId, { cursor })
+				persistence.storage.readSessionHistoryPage(sessionId, { cursor })
 			).rejects.toMatchObject({ code: "cursor_expired" });
 		} finally {
 			persistence.close();
@@ -9341,7 +9387,7 @@ describe("Projection barriers and writer authority", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			persistence.operational.sqlite
 				.query("DELETE FROM local_session_binding WHERE session_id = ?")
 				.run(sessionId);
@@ -9350,7 +9396,7 @@ describe("Projection barriers and writer authority", () => {
 			);
 
 			await expect(
-				persistence.store.listRecentModelSelections(10)
+				persistence.storage.listRecentModelSelections(10)
 			).rejects.toMatchObject({ code: "session_projection_blocked" });
 		} finally {
 			persistence.close();
@@ -9371,7 +9417,7 @@ describe("Projection barriers and writer authority", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			const record = buildUserSessionRecord({
 				agentId: agentId("build"),
 				message: {
@@ -9389,7 +9435,7 @@ describe("Projection barriers and writer authority", () => {
 				SELECT RAISE(ABORT, 'injected recent selection projection failure');
 			END;
 		`);
-			const committed = await persistence.store.commitSessionRecord({
+			const committed = await persistence.storage.commitSessionRecord({
 				record,
 				sessionId,
 			});
@@ -9401,7 +9447,7 @@ describe("Projection barriers and writer authority", () => {
 				"DROP TRIGGER reject_recent_selection_projection"
 			);
 
-			expect(await persistence.store.listRecentModelSelections(10)).toEqual([
+			expect(await persistence.storage.listRecentModelSelections(10)).toEqual([
 				DEFAULT_PROVIDER_MODEL_SELECTION,
 			]);
 		} finally {
@@ -9427,8 +9473,8 @@ describe("Projection barriers and writer authority", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: rebuiltSessionId });
-			await persistence.store.createEmptySession({ id: staleSessionId });
+			await persistence.storage.createEmptySession({ id: rebuiltSessionId });
+			await persistence.storage.createEmptySession({ id: staleSessionId });
 			const record = buildUserSessionRecord({
 				agentId: agentId("build"),
 				message: {
@@ -9440,19 +9486,19 @@ describe("Projection barriers and writer authority", () => {
 				turnId: agentTurnId("recent-model-selection-turn"),
 			});
 			expect(
-				await persistence.store.commitSessionRecord({
+				await persistence.storage.commitSessionRecord({
 					record,
 					sessionId: staleSessionId,
 				})
 			).toMatchObject({ kind: "committed", projection: "ready" });
 
-			const rebuilt = await persistence.store.rebuildProjection(
+			const rebuilt = await persistence.storage.rebuildProjection(
 				{ kind: "session", sessionId: rebuiltSessionId },
 				async (action) => await action()
 			);
 			expect(rebuilt.issues).toEqual([]);
 			await expect(
-				persistence.store.listRecentModelSelections(10)
+				persistence.storage.listRecentModelSelections(10)
 			).resolves.toEqual([DEFAULT_PROVIDER_MODEL_SELECTION]);
 		} finally {
 			persistence.close();
@@ -9474,8 +9520,8 @@ describe("Projection barriers and writer authority", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
-			await persistence.store.createEmptySession({ id: healthySessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: healthySessionId });
 			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
 				sessionId
@@ -9492,7 +9538,7 @@ describe("Projection barriers and writer authority", () => {
 				created.entryHash === "f".repeat(64) ? "e".repeat(64) : "f".repeat(64);
 			await Bun.write(logPath, `${lines[0]}\n${JSON.stringify(created)}\n`);
 
-			const failedRebuild = await persistence.store.rebuildProjection(
+			const failedRebuild = await persistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (action) => await action()
 			);
@@ -9502,7 +9548,7 @@ describe("Projection barriers and writer authority", () => {
 				)
 				.get() as { generation: number; status: string };
 			await expect(
-				persistence.store.getSession(sessionId)
+				persistence.storage.getSession(sessionId)
 			).rejects.toMatchObject({
 				code: "session_projection_blocked",
 			});
@@ -9514,7 +9560,7 @@ describe("Projection barriers and writer authority", () => {
 				status: "rebuilding",
 			});
 
-			const partialRetry = await persistence.store.rebuildProjection(
+			const partialRetry = await persistence.storage.rebuildProjection(
 				{ kind: "session", sessionId: healthySessionId },
 				async (action) => await action()
 			);
@@ -9528,7 +9574,7 @@ describe("Projection barriers and writer authority", () => {
 			).toEqual({ status: "rebuilding" });
 
 			await Bun.write(logPath, validBytes);
-			const recovered = await persistence.store.rebuildProjection(
+			const recovered = await persistence.storage.rebuildProjection(
 				{ kind: "session", sessionId: healthySessionId },
 				async (action) => await action()
 			);
@@ -9537,10 +9583,10 @@ describe("Projection barriers and writer authority", () => {
 			expect(recovered.issues).toEqual([]);
 			expect(recovered.rebuiltSessionIds).toContain(sessionId);
 			expect(recovered.rebuiltSessionIds).toContain(healthySessionId);
-			expect((await persistence.store.getSession(sessionId)).id).toBe(
+			expect((await persistence.storage.getSession(sessionId)).id).toBe(
 				sessionId
 			);
-			expect((await persistence.store.getSession(healthySessionId)).id).toBe(
+			expect((await persistence.storage.getSession(healthySessionId)).id).toBe(
 				healthySessionId
 			);
 		} finally {
@@ -9586,9 +9632,9 @@ describe("Projection barriers and writer authority", () => {
 		const pendingOperations: Promise<unknown>[] = [];
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			interceptSync = true;
-			const pendingRead = persistence.store.getSession(sessionId);
+			const pendingRead = persistence.storage.getSession(sessionId);
 			pendingOperations.push(pendingRead);
 			await syncStarted.promise;
 
@@ -9836,19 +9882,19 @@ describe("Projection barriers and writer authority", () => {
 		let writer: SessionWriterLock | undefined;
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			logSyncEvents.length = 0;
 			writeIntentDuringMaintenance = false;
-			writer = await persistence.store.acquireSessionWriter(sessionId);
+			writer = await persistence.storage.acquireSessionWriter(sessionId);
 			interceptSync = true;
-			const rebuilding = persistence.store.rebuildProjection(
+			const rebuilding = persistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (action) => await action()
 			);
 			pendingOperations.push(rebuilding);
 			await syncStarted.promise;
 
-			const update = persistence.store.updateSession(sessionId, {
+			const update = persistence.storage.updateSession(sessionId, {
 				operationId: "in-process-write-during-projection-rebuild",
 				title: "Applied after the projection rebuild.",
 			});
@@ -9872,7 +9918,7 @@ describe("Projection barriers and writer authority", () => {
 			expect(logSyncEvents.indexOf("other-log-sync-started")).toBeGreaterThan(
 				rebuildSyncCompleted
 			);
-			expect((await persistence.store.getSession(sessionId)).title).toBe(
+			expect((await persistence.storage.getSession(sessionId)).title).toBe(
 				"Applied after the projection rebuild."
 			);
 		} finally {
@@ -9921,9 +9967,9 @@ describe("Projection barriers and writer authority", () => {
 		const pendingOperations: Promise<unknown>[] = [];
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			interceptSync = true;
-			const rebuilding = persistence.store.rebuildProjection(
+			const rebuilding = persistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (action) => await action()
 			);
@@ -9942,7 +9988,7 @@ describe("Projection barriers and writer authority", () => {
 			releaseSync.resolve();
 			const rebuilt = await rebuilding;
 			expect(rebuilt.issues).toEqual([]);
-			expect((await persistence.store.getSession(sessionId)).title).toBe(
+			expect((await persistence.storage.getSession(sessionId)).title).toBe(
 				"Untitled Session"
 			);
 		} finally {
@@ -9966,20 +10012,20 @@ describe("Projection barriers and writer authority", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			const logRoot = await fs.realpath(
 				resolveLocalSessionLogRoot(databasePath)
 			);
 			const logBytes = await Bun.file(
 				resolveSessionLogFilePath(logRoot, sessionId)
 			).bytes();
-			const deleted = await persistence.store.deleteSession(sessionId);
+			const deleted = await persistence.storage.deleteSession(sessionId);
 			expect(deleted).toMatchObject({ kind: "committed", projection: "ready" });
 
 			const orphanedDirectory = path.join(logRoot, sessionId);
 			await fs.mkdir(orphanedDirectory, { recursive: true });
 			await Bun.write(path.join(orphanedDirectory, "session.jsonl"), logBytes);
-			const rebuilt = await persistence.store.rebuildProjection(
+			const rebuilt = await persistence.storage.rebuildProjection(
 				{ kind: "session", sessionId },
 				async (action) => await action()
 			);
@@ -9990,7 +10036,7 @@ describe("Projection barriers and writer authority", () => {
 				skippedSessionIds: [sessionId],
 			});
 			await expect(fs.access(orphanedDirectory)).resolves.toBeNull();
-			await expect(persistence.store.getSession(sessionId)).rejects.toThrow(
+			await expect(persistence.storage.getSession(sessionId)).rejects.toThrow(
 				"Session not found"
 			);
 		} finally {
@@ -10012,7 +10058,7 @@ describe("Projection barriers and writer authority", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			const coveredMessageId = sessionMessageId("rollback-covered-message");
 			const keptMessageId = sessionMessageId("rollback-kept-message");
 			for (const [messageId, text, turn] of [
@@ -10025,9 +10071,9 @@ describe("Projection barriers and writer authority", () => {
 					model: DEFAULT_PROVIDER_MODEL_SELECTION,
 					turnId: agentTurnId(turn),
 				});
-				await persistence.store.commitSessionRecord({ record, sessionId });
+				await persistence.storage.commitSessionRecord({ record, sessionId });
 			}
-			const validCompaction = await persistence.store.appendCompaction({
+			const validCompaction = await persistence.storage.appendCompaction({
 				estimatedTokensAfter: 20,
 				firstKeptUiMessageId: keptMessageId,
 				id: compactionId("rollback-existing-compaction"),
@@ -10108,7 +10154,7 @@ describe("Projection barriers and writer authority", () => {
 					.get() as { count: number },
 			});
 			const before = readProjectionState();
-			const result = await persistence.store.rebuildProjection(
+			const result = await persistence.storage.rebuildProjection(
 				{ kind: "all" },
 				async (action) => await action()
 			);
@@ -10173,7 +10219,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			logPath = resolveSessionLogFilePath(
 				await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
 				sessionId
@@ -10190,7 +10236,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 					model: DEFAULT_PROVIDER_MODEL_SELECTION,
 					turnId: agentTurnId(turn),
 				});
-				await persistence.store.commitSessionRecord({ record, sessionId });
+				await persistence.storage.commitSessionRecord({ record, sessionId });
 			}
 			const input: AppendSessionCompactionInput = {
 				createdAt: payloadCreatedAt,
@@ -10209,7 +10255,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 				trigger: "threshold",
 			};
 			failCompactionAppend = true;
-			const uncertain = await persistence.store.appendCompaction(input);
+			const uncertain = await persistence.storage.appendCompaction(input);
 			expect(uncertain.writeOutcome).toMatchObject({
 				kind: "indeterminate",
 				error: { code: "session_log_write_indeterminate" },
@@ -10245,7 +10291,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 				fileIo
 			);
 
-			const recovered = await persistence.store.appendCompaction(input);
+			const recovered = await persistence.storage.appendCompaction(input);
 			expect(recovered.writeOutcome).toMatchObject({
 				kind: "committed",
 				projection: "ready",
@@ -10259,7 +10305,9 @@ describe("Legacy timestamps and durable write recovery", () => {
 			) as { payload: { createdAt: string }; timestamp: string };
 			expect(committedEvent.timestamp).toBe(recoveredEnvelopeTimestamp);
 			expect(committedEvent.payload.createdAt).toBe(originalTimestamp);
-			expect(await persistence.store.getCompactions(sessionId)).toHaveLength(1);
+			expect(await persistence.storage.getCompactions(sessionId)).toHaveLength(
+				1
+			);
 		} finally {
 			persistence.close();
 		}
@@ -10281,7 +10329,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 		const changedTimestamp = new Date("2026-10-31T11:00:00.000Z");
 
 		try {
-			const template = await persistence.store.createEmptySession({
+			const template = await persistence.storage.createEmptySession({
 				createdAt: originalTimestamp,
 				id: templateSessionId,
 			});
@@ -10322,7 +10370,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 				})}\n`
 			);
 
-			const conflict = await persistence.store.createEmptySession({
+			const conflict = await persistence.storage.createEmptySession({
 				createdAt: changedTimestamp,
 				id: sessionId,
 			});
@@ -10369,12 +10417,13 @@ describe("Legacy timestamps and durable write recovery", () => {
 		};
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			logPath = resolveSessionLogFilePath(
 				await fs.realpath(resolveLocalSessionLogRoot(databasePath)),
 				sessionId
 			);
-			const uncertain = await persistence.store.createSessionUsageEntry(input);
+			const uncertain =
+				await persistence.storage.createSessionUsageEntry(input);
 			expect(uncertain.writeOutcome).toMatchObject({
 				kind: "indeterminate",
 				error: { code: "session_log_write_indeterminate" },
@@ -10395,7 +10444,8 @@ describe("Legacy timestamps and durable write recovery", () => {
 				workspace,
 				fileIo
 			);
-			const recovered = await persistence.store.createSessionUsageEntry(input);
+			const recovered =
+				await persistence.storage.createSessionUsageEntry(input);
 			expect(recovered.writeOutcome).toMatchObject({
 				kind: "committed",
 				projection: "ready",
@@ -10424,13 +10474,13 @@ describe("Legacy timestamps and durable write recovery", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
-			const outcome = await persistence.store.updateSession(sessionId, {
+			await persistence.storage.createEmptySession({ id: sessionId });
+			const outcome = await persistence.storage.updateSession(sessionId, {
 				operationId: "short-write-update",
 				title: "All bytes were written",
 			});
 			expect(outcome).toMatchObject({ kind: "committed" });
-			expect((await persistence.store.getSession(sessionId)).title).toBe(
+			expect((await persistence.storage.getSession(sessionId)).title).toBe(
 				"All bytes were written"
 			);
 			const logPath = resolveSessionLogFilePath(
@@ -10687,7 +10737,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 			);
 			let sessionId: SessionId;
 			try {
-				const created = await persistence.store.createEmptySession({
+				const created = await persistence.storage.createEmptySession({
 					model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				});
 				if (created.writeOutcome.kind !== "committed") {
@@ -10725,7 +10775,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 						turnId: agentTurnId("readonly-projection-turn"),
 					});
 					expect(
-						await readOnly.store.commitSessionRecord({ record, sessionId })
+						await readOnly.storage.commitSessionRecord({ record, sessionId })
 					).toMatchObject({ kind: "committed", projection: "blocked" });
 					const durable = await readSessionLogLines<{
 						record?: { messages?: Array<{ id?: string }> };
@@ -10880,8 +10930,8 @@ describe("Legacy timestamps and durable write recovery", () => {
 		);
 
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
-			const outcome = await persistence.store.updateSession(sessionId, {
+			await persistence.storage.createEmptySession({ id: sessionId });
+			const outcome = await persistence.storage.updateSession(sessionId, {
 				operationId: "prefix-cursor-update",
 				title: "Projected beyond the surviving log",
 			});
@@ -10906,7 +10956,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 			await Bun.write(logPath, validPrefix);
 
 			await expect(
-				persistence.store.getSession(sessionId)
+				persistence.storage.getSession(sessionId)
 			).rejects.toMatchObject({
 				code: "session_log_corrupt",
 				offset: committedBytes.byteLength,
@@ -10947,12 +10997,12 @@ describe("Legacy timestamps and durable write recovery", () => {
 				{ pinned: true, title: "Logged title" },
 			]) {
 				expect(
-					await services.store.updateSession(sessionId, input)
+					await services.storage.updateSession(sessionId, input)
 				).toMatchObject({ kind: "committed", projection: "ready" });
 			}
 			for (const mode of ["sloppy", "hashline", "sloppy"] as const) {
 				expect(
-					await services.store.setEditMode?.(sessionId, mode)
+					await services.storage.setEditMode(sessionId, mode)
 				).toMatchObject({ kind: "committed", projection: "ready" });
 			}
 		} finally {
@@ -10969,7 +11019,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 			policy: { cwd: workspace, databasePath, workspace },
 		});
 		try {
-			const restored = await reopenedServices.store.getSession(sessionId);
+			const restored = await reopenedServices.storage.getSession(sessionId);
 			expect(restored).toMatchObject({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 				pinned: true,
@@ -10977,7 +11027,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 				title: "Logged title",
 			});
 			await expect(
-				reopenedServices.store.getEditMode?.(sessionId)
+				reopenedServices.storage.getEditMode(sessionId)
 			).resolves.toBe("sloppy");
 		} finally {
 			await reopenedServices.shutdown();
@@ -10992,7 +11042,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 		});
 		let sessionId: SessionId | undefined;
 		try {
-			const created = await services.store.createEmptySession({
+			const created = await services.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			expect(created.writeOutcome).toMatchObject({
@@ -11012,7 +11062,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 					model: DEFAULT_PROVIDER_MODEL_SELECTION,
 					turnId: agentTurnId(turn),
 				});
-				const recordWrite = await services.store.commitSessionRecord({
+				const recordWrite = await services.storage.commitSessionRecord({
 					record,
 					sessionId,
 				});
@@ -11050,7 +11100,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 				sessionId,
 				usage: { inputTokens: 50, outputTokens: 1 },
 			};
-			const warm = await services.store.createSessionUsageEntry(warmInput);
+			const warm = await services.storage.createSessionUsageEntry(warmInput);
 			expect(warm).toMatchObject({
 				entry: { id: warmInput.id, kind: "cache-warm", costUsd: 0.05 },
 				writeOutcome: { kind: "committed", projection: "ready" },
@@ -11065,10 +11115,10 @@ describe("Legacy timestamps and durable write recovery", () => {
 				sessionId,
 				usage: input.summarizationUsage,
 			};
-			const usage = await services.store.createSessionUsageEntry(usageInput);
+			const usage = await services.storage.createSessionUsageEntry(usageInput);
 			const usageRetry =
-				await services.store.createSessionUsageEntry(usageInput);
-			const usageConflict = await services.store.createSessionUsageEntry({
+				await services.storage.createSessionUsageEntry(usageInput);
+			const usageConflict = await services.storage.createSessionUsageEntry({
 				...usageInput,
 				usage: { inputTokens: 13, outputTokens: 3 },
 			});
@@ -11081,8 +11131,8 @@ describe("Legacy timestamps and durable write recovery", () => {
 				kind: "not-committed",
 				error: { code: "session_operation_conflict" },
 			});
-			const first = await services.store.appendCompaction(input);
-			const retried = await services.store.appendCompaction(input);
+			const first = await services.storage.appendCompaction(input);
+			const retried = await services.storage.appendCompaction(input);
 			expect(first.writeOutcome).toMatchObject({
 				kind: "committed",
 				projection: "ready",
@@ -11106,7 +11156,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 		});
 		try {
 			expect(
-				await reopenedServices.store.getLatestCompaction(sessionId)
+				await reopenedServices.storage.getLatestCompaction(sessionId)
 			).toMatchObject({
 				id: compactionId("jsonl-compaction-retry"),
 				sequence: 1,
@@ -11117,7 +11167,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 				summarizationUsage: { inputTokens: 12, outputTokens: 3 },
 			});
 			expect(
-				await reopenedServices.store.listSessionUsageEntries(sessionId)
+				await reopenedServices.storage.listSessionUsageEntries(sessionId)
 			).toMatchObject([
 				{
 					costUsd: 0.05,
@@ -11134,14 +11184,14 @@ describe("Legacy timestamps and durable write recovery", () => {
 				},
 			]);
 			const records =
-				await reopenedServices.store.listSessionRecords(sessionId);
+				await reopenedServices.storage.listSessionRecords(sessionId);
 			expect(records.map(({ messages }) => messages[0]?.id)).toEqual([
 				sessionMessageId("jsonl-compaction-covered"),
 				sessionMessageId("jsonl-compaction-kept"),
 			]);
 			const activeMessages = rebuildActiveMessages(
 				projectSessionRecords(records),
-				await reopenedServices.store.getLatestCompaction(sessionId)
+				await reopenedServices.storage.getLatestCompaction(sessionId)
 			);
 			expect(activeMessages).toHaveLength(2);
 			expect(
@@ -11184,10 +11234,10 @@ describe("Legacy timestamps and durable write recovery", () => {
 			policy: { cwd: workspace, databasePath, workspace },
 		});
 		try {
-			const created = await services.store.createEmptySession({
+			const created = await services.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
-			const result = await services.store.appendCompaction({
+			const result = await services.storage.appendCompaction({
 				estimatedTokensAfter: 64,
 				firstKeptUiMessageId: sessionMessageId("missing-kept-message"),
 				id: compactionId("invalid-compaction-boundary"),
@@ -11208,7 +11258,7 @@ describe("Legacy timestamps and durable write recovery", () => {
 				kind: "not-committed",
 				retryDisposition: "do-not-retry",
 			});
-			expect(await services.store.getLatestCompaction(created.id)).toBeNull();
+			expect(await services.storage.getLatestCompaction(created.id)).toBeNull();
 			const log = await fs.readFile(
 				resolveSessionLogFilePath(path.join(root, "sessions"), created.id),
 				"utf8"
@@ -11265,15 +11315,15 @@ describe("Deletion, statistics, and rebuild", () => {
 			}
 		);
 		try {
-			await workspaceAStore.store.createEmptySession({ id: sessionA });
-			await workspaceBStore.store.createEmptySession({ id: sessionB });
+			await workspaceAStore.storage.createEmptySession({ id: sessionA });
+			await workspaceBStore.storage.createEmptySession({ id: sessionB });
 
-			expect(await workspaceBStore.store.deleteSession(sessionB)).toMatchObject(
-				{
-					kind: "committed",
-					projection: "blocked",
-				}
-			);
+			expect(
+				await workspaceBStore.storage.deleteSession(sessionB)
+			).toMatchObject({
+				kind: "committed",
+				projection: "blocked",
+			});
 			await fs.rm(markerPath, { force: true });
 			expect(await Bun.file(markerPath).exists()).toBe(false);
 			expect(
@@ -11283,15 +11333,15 @@ describe("Deletion, statistics, and rebuild", () => {
 			).toContain('"type":"session.deleted"');
 
 			await expect(
-				workspaceAStore.store.listSessionsPage()
+				workspaceAStore.storage.listSessionsPage()
 			).resolves.toMatchObject({
 				sessions: [{ id: sessionA }],
 			});
 			await expect(
-				workspaceAStore.store.readSessionHistoryPage(sessionA)
+				workspaceAStore.storage.readSessionHistoryPage(sessionA)
 			).resolves.toMatchObject({ session: { id: sessionA } });
 			await expect(
-				workspaceAStore.store.listSessionCatalog()
+				workspaceAStore.storage.listSessionCatalog()
 			).resolves.toMatchObject({
 				issues: [],
 				sessions: [{ id: sessionA }],
@@ -11333,13 +11383,13 @@ describe("Deletion, statistics, and rebuild", () => {
 			workspaceB
 		);
 		try {
-			await workspaceBStore.store.createEmptySession({ id: sessionB });
-			expect(await workspaceBStore.store.deleteSession(sessionB)).toMatchObject(
-				{
-					kind: "committed",
-					projection: "ready",
-				}
-			);
+			await workspaceBStore.storage.createEmptySession({ id: sessionB });
+			expect(
+				await workspaceBStore.storage.deleteSession(sessionB)
+			).toMatchObject({
+				kind: "committed",
+				projection: "ready",
+			});
 		} finally {
 			workspaceBStore.close();
 		}
@@ -11413,8 +11463,8 @@ describe("Deletion, statistics, and rebuild", () => {
 			}
 		);
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
-			const deletion = await persistence.store.deleteSession(sessionId);
+			await persistence.storage.createEmptySession({ id: sessionId });
+			const deletion = await persistence.storage.deleteSession(sessionId);
 			expect(deletion).toMatchObject({
 				kind: "committed",
 				projection: "blocked",
@@ -11434,11 +11484,11 @@ describe("Deletion, statistics, and rebuild", () => {
 			);
 			try {
 				await expect(
-					reopenedPersistence.store.getSession(sessionId)
+					reopenedPersistence.storage.getSession(sessionId)
 				).rejects.toThrow("Session not found");
 				expect(await Bun.file(markerPath).exists()).toBe(true);
 				expect(await Bun.file(pendingIntentPath).exists()).toBe(false);
-				const catalog = await reopenedPersistence.store.listSessionCatalog();
+				const catalog = await reopenedPersistence.storage.listSessionCatalog();
 				expect(catalog.sessions.map(({ id }) => id)).not.toContain(sessionId);
 				expect(catalog.issues).toEqual([]);
 				expect(await Bun.file(markerPath).exists()).toBe(true);
@@ -11469,7 +11519,7 @@ describe("Deletion, statistics, and rebuild", () => {
 			`${sessionId}.json`
 		);
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			persistence.projection.sqlite.exec(`
 			CREATE TRIGGER fail_session_delete_cleanup
 			BEFORE DELETE ON session
@@ -11478,7 +11528,7 @@ describe("Deletion, statistics, and rebuild", () => {
 			END;
 		`);
 
-			const cleanupPending = await persistence.store.deleteSession(sessionId);
+			const cleanupPending = await persistence.storage.deleteSession(sessionId);
 			expect(cleanupPending).toMatchObject({
 				code: "session_cleanup_pending",
 				kind: "cleanup-pending",
@@ -11494,13 +11544,13 @@ describe("Deletion, statistics, and rebuild", () => {
 			persistence.projection.sqlite.exec(
 				"DROP TRIGGER fail_session_delete_cleanup"
 			);
-			const retried = await persistence.store.deleteSession(sessionId);
+			const retried = await persistence.storage.deleteSession(sessionId);
 			expect(retried).toMatchObject({
 				kind: "committed",
 				operationId: `delete-${sessionId}`,
 				projection: "ready",
 			});
-			expect(await persistence.store.listSessions()).toEqual([]);
+			expect(await persistence.storage.listSessions()).toEqual([]);
 		} finally {
 			persistence.close();
 		}
@@ -11537,8 +11587,8 @@ describe("Deletion, statistics, and rebuild", () => {
 			sessionId
 		);
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
-			const pending = await persistence.store.deleteSession(sessionId);
+			await persistence.storage.createEmptySession({ id: sessionId });
+			const pending = await persistence.storage.deleteSession(sessionId);
 			expect(pending).toMatchObject({
 				code: "session_cleanup_pending",
 				kind: "cleanup-pending",
@@ -11552,7 +11602,7 @@ describe("Deletion, statistics, and rebuild", () => {
 				)
 			).toBe(true);
 
-			const retried = await persistence.store.deleteSession(sessionId);
+			const retried = await persistence.storage.deleteSession(sessionId);
 			expect(retried).toMatchObject({
 				kind: "committed",
 				operationId: `delete-${sessionId}`,
@@ -11576,7 +11626,7 @@ describe("Deletion, statistics, and rebuild", () => {
 		});
 		let sessionId: SessionId | undefined;
 		try {
-			const created = await services.store.createEmptySession({
+			const created = await services.storage.createEmptySession({
 				model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			});
 			expect(created.writeOutcome).toMatchObject({
@@ -11584,7 +11634,7 @@ describe("Deletion, statistics, and rebuild", () => {
 				projection: "ready",
 			});
 			sessionId = created.id;
-			const deleted = await services.store.deleteSession(sessionId);
+			const deleted = await services.storage.deleteSession(sessionId);
 			expect(deleted).toMatchObject({
 				kind: "committed",
 				projection: "ready",
@@ -11594,7 +11644,9 @@ describe("Deletion, statistics, and rebuild", () => {
 				throw new Error("Session deletion was not durably committed.");
 			}
 			expect(
-				(await services.store.listSessions()).some(({ id }) => id === sessionId)
+				(await services.storage.listSessions()).some(
+					({ id }) => id === sessionId
+				)
 			).toBe(false);
 			const marker = JSON.parse(
 				await fs.readFile(
@@ -11608,7 +11660,7 @@ describe("Deletion, statistics, and rebuild", () => {
 				sequence: deleted.sequence,
 				sessionId,
 			});
-			expect(await services.store.deleteSession(sessionId)).toEqual(deleted);
+			expect(await services.storage.deleteSession(sessionId)).toEqual(deleted);
 			await expect(
 				fs.access(
 					resolveSessionLogFilePath(path.join(root, "sessions"), sessionId)
@@ -11682,7 +11734,7 @@ describe("Deletion, statistics, and rebuild", () => {
 			version: SESSION_RECORD_VERSION,
 		};
 		try {
-			await persistence.store.createEmptySession({ id: sessionId });
+			await persistence.storage.createEmptySession({ id: sessionId });
 			const userRecord = buildUserSessionRecord({
 				agentId: agentId("statistics-agent"),
 				message: {
@@ -11714,11 +11766,12 @@ describe("Deletion, statistics, and rebuild", () => {
 				completedRecord,
 			]) {
 				expect(
-					await persistence.store.commitSessionRecord({ record, sessionId })
+					await persistence.storage.commitSessionRecord({ record, sessionId })
 				).toMatchObject({ kind: "committed", projection: "ready" });
 			}
 
-			const history = await persistence.store.readSessionHistoryPage(sessionId);
+			const history =
+				await persistence.storage.readSessionHistoryPage(sessionId);
 			expect(history.readPoint).toBeString();
 			const lateToolRecord: SessionRecord = {
 				agentId: agentId("statistics-agent"),
@@ -11746,24 +11799,24 @@ describe("Deletion, statistics, and rebuild", () => {
 				version: SESSION_RECORD_VERSION,
 			};
 			expect(
-				await persistence.store.commitSessionRecord({
+				await persistence.storage.commitSessionRecord({
 					record: lateToolRecord,
 					sessionId,
 				})
 			).toMatchObject({ kind: "committed", projection: "ready" });
 			const otherSessionId = toSessionId("session-statistics-other-session");
-			await persistence.store.createEmptySession({ id: otherSessionId });
+			await persistence.storage.createEmptySession({ id: otherSessionId });
 			await expect(
-				persistence.store.getSessionStatistics(otherSessionId, {
+				persistence.storage.getSessionStatistics(otherSessionId, {
 					readPoint: history.readPoint,
 				})
 			).rejects.toMatchObject({ code: "cursor_invalid" });
 			await expect(
-				persistence.store.getSessionStatistics(sessionId, {
+				persistence.storage.getSessionStatistics(sessionId, {
 					readPoint: "not-a-history-read-point",
 				})
 			).rejects.toMatchObject({ code: "cursor_invalid" });
-			const delayedUsage = await persistence.store.createSessionUsageEntry({
+			const delayedUsage = await persistence.storage.createSessionUsageEntry({
 				costUsd: 0.25,
 				createdAt: new Date("2026-01-01T00:00:00.000Z"),
 				id: sessionUsageEntryId("statistics-cache-warm-late"),
@@ -11777,7 +11830,7 @@ describe("Deletion, statistics, and rebuild", () => {
 				projection: "ready",
 			});
 
-			const historical = await persistence.store.getSessionStatistics(
+			const historical = await persistence.storage.getSessionStatistics(
 				sessionId,
 				{
 					readPoint: history.readPoint,
@@ -11800,7 +11853,7 @@ describe("Deletion, statistics, and rebuild", () => {
 					inherited: { contributionCount: 0, inputTokens: null },
 				},
 			});
-			const turn = await persistence.store.getSessionStatistics(sessionId, {
+			const turn = await persistence.storage.getSessionStatistics(sessionId, {
 				turnId: partialTurnId,
 			});
 			expect(turn).toMatchObject({
@@ -11811,7 +11864,7 @@ describe("Deletion, statistics, and rebuild", () => {
 				},
 				usage: { actual: { contributionCount: 0, inputTokens: null } },
 			});
-			const completedTurn = await persistence.store.getSessionStatistics(
+			const completedTurn = await persistence.storage.getSessionStatistics(
 				sessionId,
 				{ turnId: completeTurnId }
 			);
@@ -11834,7 +11887,7 @@ describe("Deletion, statistics, and rebuild", () => {
 				},
 			});
 
-			const current = await persistence.store.getSessionStatistics(sessionId);
+			const current = await persistence.storage.getSessionStatistics(sessionId);
 			expect(current).toMatchObject({
 				completedToolCallCount: 2,
 				recordCount: 5,
@@ -11855,7 +11908,7 @@ describe("Deletion, statistics, and rebuild", () => {
 				SELECT RAISE(ABORT, 'injected statistics usage projection failure');
 			END;
 		`);
-			const blockedUsage = await persistence.store.createSessionUsageEntry({
+			const blockedUsage = await persistence.storage.createSessionUsageEntry({
 				costUsd: 0.5,
 				createdAt: new Date("2026-01-02T00:00:00.000Z"),
 				id: sessionUsageEntryId("statistics-cache-warm-catchup"),
@@ -11872,7 +11925,7 @@ describe("Deletion, statistics, and rebuild", () => {
 				"DROP TRIGGER reject_statistics_usage_projection"
 			);
 			await expect(
-				persistence.store.getSessionStatistics(sessionId)
+				persistence.storage.getSessionStatistics(sessionId)
 			).resolves.toMatchObject({
 				usage: {
 					auxiliary: {
@@ -11883,18 +11936,18 @@ describe("Deletion, statistics, and rebuild", () => {
 				},
 			});
 
-			const rebuilt = await persistence.store.rebuildProjection(
+			const rebuilt = await persistence.storage.rebuildProjection(
 				{ kind: "session", sessionId },
 				(operation) => operation()
 			);
 			expect(rebuilt.issues).toEqual([]);
 			await expect(
-				persistence.store.getSessionStatistics(sessionId, {
+				persistence.storage.getSessionStatistics(sessionId, {
 					readPoint: history.readPoint,
 				})
 			).rejects.toMatchObject({ code: "cursor_expired" });
 			await expect(
-				persistence.store.getSessionStatistics(sessionId)
+				persistence.storage.getSessionStatistics(sessionId)
 			).resolves.toMatchObject({
 				completedToolCallCount: 2,
 				recordCount: 5,
@@ -11922,36 +11975,36 @@ describe("Deletion, statistics, and rebuild", () => {
 		const firstSessionId = toSessionId("statistics-rebuild-first-session");
 		const secondSessionId = toSessionId("statistics-rebuild-second-session");
 		try {
-			await persistence.store.createEmptySession({ id: firstSessionId });
-			await persistence.store.createEmptySession({ id: secondSessionId });
+			await persistence.storage.createEmptySession({ id: firstSessionId });
+			await persistence.storage.createEmptySession({ id: secondSessionId });
 			persistence.projection.sqlite.exec(
 				"UPDATE session_projection_state SET statistics_version = 0 WHERE id = 1"
 			);
 			await expect(
-				persistence.store.getSessionStatistics(firstSessionId)
+				persistence.storage.getSessionStatistics(firstSessionId)
 			).rejects.toMatchObject({ code: "session_projection_blocked" });
 
-			const sessionRebuild = await persistence.store.rebuildProjection(
+			const sessionRebuild = await persistence.storage.rebuildProjection(
 				{ kind: "session", sessionId: firstSessionId },
 				(operation) => operation()
 			);
 			expect(sessionRebuild.issues).toEqual([]);
 			for (const sessionId of [firstSessionId, secondSessionId]) {
 				await expect(
-					persistence.store.getSessionStatistics(sessionId)
+					persistence.storage.getSessionStatistics(sessionId)
 				).rejects.toMatchObject({ code: "session_projection_blocked" });
 			}
 
-			const fullRebuild = await persistence.store.rebuildProjection(
+			const fullRebuild = await persistence.storage.rebuildProjection(
 				{ kind: "all" },
 				(operation) => operation()
 			);
 			expect(fullRebuild.issues).toEqual([]);
 			await expect(
-				persistence.store.getSessionStatistics(firstSessionId)
+				persistence.storage.getSessionStatistics(firstSessionId)
 			).resolves.toMatchObject({ recordCount: 0 });
 			await expect(
-				persistence.store.getSessionStatistics(secondSessionId)
+				persistence.storage.getSessionStatistics(secondSessionId)
 			).resolves.toMatchObject({ recordCount: 0 });
 		} finally {
 			persistence.close();

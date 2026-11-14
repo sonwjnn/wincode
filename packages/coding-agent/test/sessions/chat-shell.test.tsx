@@ -44,7 +44,7 @@ import type {
 	SessionMessage,
 } from "@/modules/sessions/message";
 import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
-import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-catalog";
 import { ChatMessage } from "@/modules/sessions/ui/components/chat-message";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";

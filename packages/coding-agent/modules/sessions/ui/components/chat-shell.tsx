@@ -22,7 +22,7 @@ import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
-import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-catalog";
 import {
 	AUTO_COMPACT_SETTING,
 	useSettingRegistryValue,

@@ -97,6 +97,7 @@ for (const includeReasoning of [false, true]) {
 			const manager = services.capabilities.getSessionHostManager();
 			const host = await manager.openHost({
 				capabilities: services.capabilities,
+				storage: services.storage,
 				sessionId,
 				autoContinue: false,
 				view: false,
@@ -130,7 +131,9 @@ for (const includeReasoning of [false, true]) {
 			});
 			handles.push(reopened);
 			await prompt(reopened, "Continue after reopening compacted history.");
-			const records = await services.store.listSessionRecords(source.sessionId);
+			const records = await services.storage.listSessionRecords(
+				source.sessionId
+			);
 			const checkpoint = records.findLast(
 				(record) => record.outcome.kind === "assistant"
 			);
@@ -144,7 +147,7 @@ for (const includeReasoning of [false, true]) {
 			);
 			handles.push(fork.handle);
 			expect(requests).toBe(beforeFork);
-			const inherited = await services.store.getCompactions(fork.id);
+			const inherited = await services.storage.getCompactions(fork.id);
 			expect(inherited).toHaveLength(1);
 			expect(inherited[0]?.summary.text).toContain("Retained boundary marker.");
 			await fork.handle.dispose();

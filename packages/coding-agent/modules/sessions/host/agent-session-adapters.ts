@@ -41,6 +41,9 @@ import { SessionCompactionError } from "../compaction/error";
 import { createProviderSummaryGenerator } from "../compaction/summary-generator";
 import type { SessionMessage } from "../message";
 import { strictThinkingSelection } from "../selection";
+import type { SessionAttachments } from "../storage/session-attachments";
+import type { SessionLifecycle } from "../storage/session-lifecycle";
+import type { SessionRecords } from "../storage/session-records";
 import {
 	type AgentSessionTurnRunnerOptions,
 	createAgentSessionTurnRunner,
@@ -51,9 +54,12 @@ import type { SessionAdapterCapabilities } from "./types";
 
 /** The Host inputs consumed by the adapters and the turn runner they compose. */
 export type AgentSessionAdaptersOptions = Readonly<{
+	attachments: SessionAttachments;
 	cacheWarming: SessionCacheWarming;
 	capabilities: SessionAdapterCapabilities;
+	editMode: Pick<SessionLifecycle, "getEditMode">;
 	providerCollection: ProviderCollection;
+	records: SessionRecords;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
 	isShutDown: () => boolean;
@@ -127,9 +133,12 @@ export const createAgentSessionAdapters = (
 	options: AgentSessionAdaptersOptions
 ): AgentSessionPorts => {
 	const {
+		attachments,
 		cacheWarming,
 		capabilities,
+		editMode,
 		providerCollection,
+		records,
 		usageLedger,
 		isShutDown,
 		withSessionWork,
@@ -143,7 +152,9 @@ export const createAgentSessionAdapters = (
 	const turnRunnerInputs: AgentSessionTurnRunnerOptions = {
 		cacheWarming,
 		capabilities,
+		editMode,
 		providerCollection,
+		records,
 		sessionId,
 		statefulAgent,
 	};
@@ -287,7 +298,7 @@ export const createAgentSessionAdapters = (
 		emitCompactionEvent: () => undefined,
 		attachments: {
 			externalize: (messages, signal) =>
-				capabilities.getStore().externalizeAttachments(messages, signal, {
+				attachments.externalizeAttachments(messages, signal, {
 					rejectInvalid: true,
 				}),
 			hydrate: ({
@@ -297,27 +308,22 @@ export const createAgentSessionAdapters = (
 				priorityMessageId,
 				signal,
 			}) =>
-				capabilities.getStore().hydrateAttachments(messages, {
+				attachments.hydrateAttachments(messages, {
 					...budget,
 					...(failOnMissingAttachments ? { failOnMissing: true } : {}),
 					priorityMessageId,
 					purpose: "model",
 					signal,
 				}),
-			release: (attachmentIds) =>
-				capabilities.getStore().attachmentStore?.release(attachmentIds),
-			retain: (attachmentIds) =>
-				capabilities.getStore().attachmentStore?.retain(attachmentIds),
+			release: (attachmentIds) => attachments.releaseAttachments(attachmentIds),
+			retain: (attachmentIds) => attachments.retainAttachments(attachmentIds),
 		},
 		commitRecord: async (input) => {
-			requireSessionWriteReady(
-				await capabilities.getStore().commitSessionRecord(input)
-			);
+			requireSessionWriteReady(await records.commitSessionRecord(input));
 		},
 		omitFailedTurnContext: async (turnId) => {
-			const store = capabilities.getStore();
-			const records = await store.listSessionRecords(sessionId);
-			const messageIds = records
+			const sessionRecords = await records.listSessionRecords(sessionId);
+			const messageIds = sessionRecords
 				.filter((record) => record.turnId === turnId)
 				.flatMap((record) =>
 					record.messages
@@ -327,7 +333,7 @@ export const createAgentSessionAdapters = (
 			const committed: SessionMessageId[] = [];
 			for (const messageId of messageIds) {
 				requireSessionWriteReady(
-					await store.appendContextEdit(
+					await records.appendContextEdit(
 						sessionId,
 						failedAttemptContextEdit(turnId, messageId)
 					)
@@ -338,7 +344,7 @@ export const createAgentSessionAdapters = (
 		},
 		updateSubmissionStatus: async (input) => {
 			requireSessionWriteReady(
-				await capabilities.getStore().updateSessionSubmission({
+				await records.updateSessionSubmission({
 					...input,
 					sessionId,
 				})

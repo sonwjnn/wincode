@@ -57,7 +57,16 @@ import type {
 } from "../session-bundle-contract";
 import { assessSessionForkCheckpoint } from "../session-fork-checkpoint-validation";
 import { isValidSessionLogIdentifier } from "../session-log-identifiers";
-import type { SessionHistoryNavigationRequest } from "../session-pagination-types";
+import type {
+	Session,
+	SessionCatalogPage,
+	SessionHistoryNavigationRequest,
+	SessionHistoryPage,
+	SessionHistoryPath,
+	SessionHistoryTreeEntry,
+	SessionHistoryTreePage,
+	SessionPageOptions,
+} from "../session-pagination-types";
 import {
 	copyPluginSessionHistoryPayload,
 	type PluginSessionHistoryAppendInput,
@@ -76,6 +85,14 @@ import {
 	validatePluginSessionStatePluginId,
 	validatePluginSessionStateSchemaVersion,
 } from "../session-plugin-state";
+import type {
+	SessionWriteOutcome,
+	SessionWriteReceipt,
+} from "../session-write-outcome";
+import type {
+	SessionStatistics,
+	SessionStatisticsOptions,
+} from "../usage/session-statistics";
 import {
 	buildSessionStatistics,
 	type SessionStatisticsHistoryPath,
@@ -98,6 +115,13 @@ import {
 	SessionBundleValidationError,
 	validateSessionBundleLog,
 } from "./session-bundle";
+import type {
+	CreateSessionUsageEntryInput,
+	SessionCatalog,
+	SessionCatalogIssue,
+	SessionCatalogResult,
+	SessionUsageEntry,
+} from "./session-catalog";
 import {
 	createSessionLogEvent,
 	createSessionLogHeader,
@@ -130,6 +154,17 @@ import {
 	sessionProjectionCursorsEqual,
 } from "./session-jsonl-codec";
 import { rebuildSessionJsonlProjection } from "./session-jsonl-rebuild";
+import type {
+	CreateEmptySessionInput,
+	CreateSessionInput,
+	SessionDeletionOutcome,
+	SessionForkCheckpoint,
+	SessionForkProvenance,
+	SessionForkResult,
+	SessionForkSubmissionProvenance,
+	SessionLifecycle,
+	UpdateSessionInput,
+} from "./session-lifecycle";
 import {
 	decodeSessionHistoryReadPointToken,
 	decodeSessionPageToken,
@@ -142,6 +177,12 @@ import {
 	SessionPaginationError,
 } from "./session-pagination";
 import { buildUserSessionRecord } from "./session-record";
+import type {
+	CommitSessionRecordInput,
+	SessionSubmissionRecordReceipt,
+	UpdateSessionSubmissionInput,
+} from "./session-records";
+import type { SessionStorage } from "./session-storage";
 import {
 	ensureSessionDirectoryTreeDurably,
 	publishSessionFileNoReplaceDurably,
@@ -149,35 +190,6 @@ import {
 	replaceSessionFileDurably,
 	syncDirectoryAfterDurablePathChange,
 } from "./session-storage-durability";
-import type {
-	CommitSessionRecordInput,
-	CreateEmptySessionInput,
-	CreateSessionInput,
-	CreateSessionUsageEntryInput,
-	Session,
-	SessionCatalogIssue,
-	SessionCatalogPage,
-	SessionCatalogResult,
-	SessionDeletionOutcome,
-	SessionForkCheckpoint,
-	SessionForkProvenance,
-	SessionForkResult,
-	SessionForkSubmissionProvenance,
-	SessionHistoryPage,
-	SessionHistoryPath,
-	SessionHistoryTreeEntry,
-	SessionHistoryTreePage,
-	SessionPageOptions,
-	SessionStatistics,
-	SessionStatisticsOptions,
-	SessionStore,
-	SessionSubmissionRecordReceipt,
-	SessionUsageEntry,
-	SessionWriteOutcome,
-	SessionWriteReceipt,
-	UpdateSessionInput,
-	UpdateSessionSubmissionInput,
-} from "./session-store";
 import {
 	acquireSessionWriterLock,
 	SessionInUseError,
@@ -4639,7 +4651,7 @@ export const createSessionJsonlStore = (
 	logRoot: string,
 	fileIo: SessionLogFileIo = {},
 	testObserver?: SessionJsonlStoreTestObserver
-): SessionStore => {
+): SessionStorage => {
 	const projection = projectionStore.jsonlProjection;
 	const pendingCreationAttachmentLeases = new Map<
 		SessionId,
@@ -10464,18 +10476,16 @@ export const createSessionJsonlStore = (
 			}
 		);
 	};
-	const forkSession: SessionStore["forkSession"] = (
+	const forkSession: SessionLifecycle["forkSession"] = (
 		sourceSessionId,
 		checkpoint,
 		operationId
 	) => runForkSession(sourceSessionId, checkpoint, operationId, false);
-	const forkSessionWithHeldWriter: SessionStore["forkSessionWithHeldWriter"] = (
-		sourceSessionId,
-		checkpoint,
-		operationId
-	) => runForkSession(sourceSessionId, checkpoint, operationId, true);
+	const forkSessionWithHeldWriter: SessionLifecycle["forkSessionWithHeldWriter"] =
+		(sourceSessionId, checkpoint, operationId) =>
+			runForkSession(sourceSessionId, checkpoint, operationId, true);
 
-	const getSessionForkProvenance: SessionStore["getSessionForkProvenance"] =
+	const getSessionForkProvenance: SessionLifecycle["getSessionForkProvenance"] =
 		async (sessionId) => {
 			await ensureBoundSessionProjectedIfStale(sessionId);
 			return withSessionCatalogLifecycleGate(logRoot, async () => {
@@ -10515,7 +10525,7 @@ export const createSessionJsonlStore = (
 				}
 			});
 		};
-	const getOrCreateSessionForkActionId: SessionStore["getOrCreateSessionForkActionId"] =
+	const getOrCreateSessionForkActionId: SessionLifecycle["getOrCreateSessionForkActionId"] =
 		async (sourceSessionId, checkpoint) =>
 			withSessionCatalogLifecycleGate(logRoot, async () => {
 				const existing = await readSessionForkAction(
@@ -10551,22 +10561,19 @@ export const createSessionJsonlStore = (
 				}
 				return created.operationId;
 			});
-	const completeSessionForkAction: SessionStore["completeSessionForkAction"] = (
-		sourceSessionId,
-		checkpoint,
-		operationId
-	) =>
-		withSessionCatalogLifecycleGate(logRoot, () =>
-			clearSessionForkAction(
-				logRoot,
-				sourceSessionId,
-				checkpoint,
-				operationId,
-				fileIo
-			)
-		);
+	const completeSessionForkAction: SessionLifecycle["completeSessionForkAction"] =
+		(sourceSessionId, checkpoint, operationId) =>
+			withSessionCatalogLifecycleGate(logRoot, () =>
+				clearSessionForkAction(
+					logRoot,
+					sourceSessionId,
+					checkpoint,
+					operationId,
+					fileIo
+				)
+			);
 
-	const getSessionStatistics: SessionStore["getSessionStatistics"] = async (
+	const getSessionStatistics: SessionCatalog["getSessionStatistics"] = async (
 		sessionId,
 		options: SessionStatisticsOptions = {}
 	): Promise<SessionStatistics> => {
@@ -10827,7 +10834,10 @@ export const createSessionJsonlStore = (
 		}
 	};
 
-	const rebuildProjection: SessionStore["rebuildProjection"] = (scope, gate) =>
+	const rebuildProjection: SessionLifecycle["rebuildProjection"] = (
+		scope,
+		gate
+	) =>
 		rebuildSessionJsonlProjection(
 			{
 				acquireWriters: acquireRebuildWriters,
@@ -10956,54 +10966,69 @@ export const createSessionJsonlStore = (
 	});
 
 	return {
-		...projectionStore,
 		acquireSessionWriter: acquireWriter,
-		appendContextEdit,
+		annotateMessagesForDisplay:
+			projectionStore.attachmentStore.annotateMessagesForDisplay,
 		appendCompaction,
+		appendContextEdit,
+		appendPluginSessionHistoryEntry,
+		collectAttachments: projectionStore.collectAttachments,
 		commitSessionRecord,
-		getPluginSessionState,
-		mutatePluginSessionState,
+		completeSessionForkAction,
+		confirmSessionImportActivation,
 		createEmptySession,
 		createSession,
-		createSessionWithExternalizedMessage,
 		createSessionUsageEntry,
+		createSessionWithExternalizedMessage,
 		deleteSession,
+		externalizeAttachments: projectionStore.externalizeAttachments,
+		...(projectionStore.fileObservationStore === undefined
+			? {}
+			: { fileObservationStore: projectionStore.fileObservationStore }),
 		findSessionRecordBySubmissionId,
 		forkSession,
 		forkSessionWithHeldWriter,
-		getOrCreateSessionForkActionId,
-		completeSessionForkAction,
-		getSessionForkProvenance,
+		getCompactionMetadata:
+			projectionStore.attachmentStore.getCompactionMetadata,
 		getCompactions: wrapRead(projectionStore.getCompactions),
+		getEditMode: wrapRead(projectionStore.getEditMode),
 		getLatestCompaction: wrapRead(projectionStore.getLatestCompaction),
+		getOrCreateSessionForkActionId,
+		getPluginSessionState,
 		getSession: wrapRead(projectionStore.getSession),
-		...(projectionStore.getEditMode === undefined
-			? {}
-			: { getEditMode: wrapRead(projectionStore.getEditMode) }),
-		listSessionCatalog,
-		listRecentModelSelections,
-		listSessionRecords: wrapRead(projectionStore.listSessionRecords),
-		listSessionsPage,
-		readSessionHistoryPage,
-		readSessionHistoryTreePage,
-		readSessionHistoryPath,
-		readPluginSessionHistoryPage,
-		appendPluginSessionHistoryEntry,
-		hasSessionHistoryEntry,
-		navigateSessionHistory,
+		getSessionForkProvenance,
 		getSessionStatistics,
-		listSessionUsageEntries: wrapRead(projectionStore.listSessionUsageEntries),
-		listSessions,
-		withSessionBundleExport,
-		withSessionBundleImport: importSessionBundle,
+		hasSessionHistoryEntry,
+		hydrateAttachments: projectionStore.hydrateAttachments,
 		isSessionImportActivationPending,
 		isSessionImported,
-		confirmSessionImportActivation,
+		listRecentModelSelections,
+		listSessionCatalog,
+		listSessionRecords: wrapRead(projectionStore.listSessionRecords),
+		listSessions,
+		listSessionsPage,
+		listSessionUsageEntries: wrapRead(projectionStore.listSessionUsageEntries),
+		mutatePluginSessionState,
+		navigateSessionHistory,
+		readPluginSessionHistoryPage,
+		readSessionHistoryPage,
+		readSessionHistoryPath,
+		readSessionHistoryTreePage,
 		rebuildProjection,
+		releaseAttachments: async (attachmentIds) => {
+			await projectionStore.attachmentStore.release(attachmentIds);
+		},
 		resetSessionData,
+		resolveAttachmentReference: async (reference, signal) =>
+			await projectionStore.attachmentStore.resolve(reference, signal),
+		retainAttachments: async (attachmentIds) => {
+			await projectionStore.attachmentStore.retain(attachmentIds);
+		},
 		setEditMode,
 		updateSession,
 		updateSessionSubmission,
+		withSessionBundleExport,
+		withSessionBundleImport: importSessionBundle,
 	};
 };
 

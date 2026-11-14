@@ -1,10 +1,10 @@
 import { TextAttributes } from "@opentui/core";
+import type { SessionForkProvenance } from "@/modules/sessions/storage/session-lifecycle";
 import type { SessionWriterLockOwner } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionId } from "@/shared/identifiers";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { SessionCompaction } from "../../compaction/types";
 import type { SessionMessage } from "../../message";
-import type { SessionForkProvenance } from "../../storage/session-store";
 import type {
 	SessionStatistics,
 	SessionStatisticsUsageTotals,

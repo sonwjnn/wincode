@@ -10,12 +10,13 @@ import type {
 	SessionCapabilities,
 	SessionHost,
 } from "@/modules/sessions/host/types";
+import type { SessionRecords } from "@/modules/sessions/storage/session-records";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
 } from "../support/e2e-fake-runtime";
 import { agentId } from "../support/identifiers";
-import { successfulSessionWriteOutcome } from "../support/session-write-store";
+import { successfulSessionWriteOutcome } from "../support/session-facets";
 import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const root = await fs.mkdtemp(
@@ -88,13 +89,14 @@ const openFailedAttemptSession = async (
 					}),
 				};
 	};
-	const created = await services.store.createEmptySession({
+	const created = await services.storage.createEmptySession({
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 	});
 	const host: SessionHost = await capabilities()
 		.getSessionHostManager()
 		.openHost({
 			capabilities: capabilities(),
+			storage: services.storage,
 			autoContinue: false,
 			sessionId: created.id,
 		});
@@ -122,6 +124,7 @@ const openFailedAttemptSession = async (
 		});
 		liveHost = await capabilities().getSessionHostManager().openHost({
 			capabilities: capabilities(),
+			storage: services.storage,
 			autoContinue: false,
 			sessionId: created.id,
 		});
@@ -136,7 +139,7 @@ const openFailedAttemptSession = async (
 		},
 		fixture,
 		getHost: () => liveHost,
-		getStore: () => services.store,
+		getStore: () => services.storage,
 		reopen,
 		requests,
 		run,
@@ -295,7 +298,9 @@ test("reopening repairs a lost failed-attempt omission after a same-ID retry", a
 		run,
 		snapshot,
 	} = await openFailedAttemptSession("same-id-retry-after-lost-omission");
-	const store = getStore();
+	const store = getStore() as {
+		appendContextEdit: SessionRecords["appendContextEdit"];
+	};
 	const appendContextEdit = store.appendContextEdit;
 	let lostOmission = false;
 	store.appendContextEdit = async (sessionId, edit) => {
@@ -408,7 +413,9 @@ test("a failed attempt stays omitted after reopening the Session", async () => {
 test("a failed attempt omission failure blocks scheduling and is repaired on reopen", async () => {
 	const { dispose, fixture, getStore, reopen, requests, run, snapshot } =
 		await openFailedAttemptSession("partial-omission");
-	const store = getStore();
+	const store = getStore() as {
+		appendContextEdit: SessionRecords["appendContextEdit"];
+	};
 	const appendContextEdit = store.appendContextEdit;
 	let omissionWrites = 0;
 	store.appendContextEdit = async (sessionId, edit) => {
@@ -485,13 +492,14 @@ test("a completed turn keeps its Tool Call result in the next request", async ()
 			createProviderCollection: () => createFakeProviderCollection(recorder),
 		},
 	});
-	const created = await services.store.createEmptySession({
+	const created = await services.storage.createEmptySession({
 		model: DEFAULT_PROVIDER_MODEL_SELECTION,
 	});
 	const host: SessionHost = await services.capabilities
 		.getSessionHostManager()
 		.openHost({
 			capabilities: services.capabilities,
+			storage: services.storage,
 			autoContinue: false,
 			sessionId: created.id,
 		});

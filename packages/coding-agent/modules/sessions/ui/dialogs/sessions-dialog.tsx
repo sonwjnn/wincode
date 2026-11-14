@@ -2,6 +2,7 @@ import { RGBA } from "@opentui/core";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@/modules/sessions/session-pagination-types";
 import { useLatest } from "@/shared/hooks/use-latest";
 import { useDialog } from "@/shared/providers/dialog/dialog-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
@@ -11,12 +12,14 @@ import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 import { getInteractiveSessionHostManager } from "../../host/session-host-manager";
-import { getSessionStore } from "../../storage/get-session-store";
+import {
+	getSessionCatalog,
+	getSessionLifecycle,
+} from "../../storage/get-session-storage";
 import {
 	projectSessionStorageError,
 	requireSessionWriteReady,
 } from "../../storage/session-jsonl-store";
-import type { Session } from "../../storage/session-store";
 import { ExportSessionDialog } from "./export-session-dialog";
 import { ImportSessionDialog } from "./import-session-dialog";
 import { RenameSessionDialog } from "./rename-session-dialog";
@@ -210,7 +213,7 @@ export const SessionsDialogContent = () => {
 			setReadPoint(undefined);
 			setCatalogError(undefined);
 			try {
-				const page = await getSessionStore().listSessionsPage();
+				const page = await getSessionCatalog().listSessionsPage();
 				if (ignoreRef?.current || requestId !== pageRequestIdRef.current) {
 					return;
 				}
@@ -248,7 +251,7 @@ export const SessionsDialogContent = () => {
 		setLoadingMore(true);
 		setCatalogError(undefined);
 		try {
-			const page = await getSessionStore().listSessionsPage({ cursor });
+			const page = await getSessionCatalog().listSessionsPage({ cursor });
 			if (requestId !== pageRequestIdRef.current) {
 				return;
 			}
@@ -293,7 +296,7 @@ export const SessionsDialogContent = () => {
 		async (session: Session) => {
 			try {
 				requireSessionWriteReady(
-					await getSessionStore().updateSession(session.id, {
+					await getSessionLifecycle().updateSession(session.id, {
 						pinned: !session.pinned,
 					})
 				);
@@ -317,7 +320,7 @@ export const SessionsDialogContent = () => {
 				const deletion =
 					await getInteractiveSessionHostManager().withIdleForSessionLifecycle(
 						session.id,
-						() => getSessionStore().deleteSession(session.id)
+						() => getSessionLifecycle().deleteSession(session.id)
 					);
 				if (deletion.kind === "cleanup-pending") {
 					setNextCursor(undefined);

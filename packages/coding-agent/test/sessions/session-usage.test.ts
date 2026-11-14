@@ -4,7 +4,7 @@ import type { ProviderModelSelection } from "@/modules/providers/provider-model-
 import { resolveCompactionSettings } from "@/modules/sessions/compaction/config";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
 import type { SessionMessage } from "@/modules/sessions/message";
-import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-catalog";
 import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "@/modules/sessions/usage/context-window";
 import {
 	summarizeSessionUsage,

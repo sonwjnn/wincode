@@ -3,7 +3,7 @@ import type { SessionRecordId } from "@wincode/agent-core";
 import type { ModelUsage } from "@wincode/ai";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionCompaction } from "@/modules/sessions/compaction/types";
-import type { SessionUsageEntry } from "@/modules/sessions/storage/session-store";
+import type { SessionUsageEntry } from "@/modules/sessions/storage/session-catalog";
 import type {
 	SessionStatisticsAccountingInput,
 	SessionUsageContribution,

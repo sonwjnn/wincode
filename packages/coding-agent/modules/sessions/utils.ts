@@ -1,8 +1,8 @@
 import type { TrackedSubmissionIntent } from "@/modules/commands/submission-resolution";
 import type { SessionFilePart } from "@/modules/sessions/message";
+import type { Session } from "@/modules/sessions/session-pagination-types";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import type { SkillContext } from "@/modules/skills";
-import type { Session } from "./storage/session-store";
 
 export const getMostRecentSession = (
 	sessions: Session[]

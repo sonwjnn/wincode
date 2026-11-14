@@ -21,12 +21,12 @@ import type {
 import type { SessionSelection } from "../selection";
 import type { SessionSdkEvent } from "../session-events";
 import type { SessionHistoryNavigationRequest } from "../session-pagination-types";
+import type { SessionUsageEntry } from "../storage/session-catalog";
 import type {
 	SessionForkCheckpoint,
 	SessionForkResult,
-	SessionStore,
-	SessionUsageEntry,
-} from "../storage/session-store";
+} from "../storage/session-lifecycle";
+import type { SessionStorage } from "../storage/session-storage";
 /**
  * What one Session Host needs from the surface that constructed it, as lazy
  * getters rather than values: a session outlives the render that supplied its
@@ -52,8 +52,6 @@ export type SessionCapabilities = Readonly<{
 	) => ProviderCollection | undefined | Promise<ProviderCollection | undefined>;
 	/** The Agent registry, which resolves only after the session opened. */
 	getRegistry: () => AgentRegistry | null;
-	/** The durable store this session's records, compactions, and attachments live in. */
-	getStore: () => SessionStore;
 	getSessionHostManager: () => SessionHostManager;
 	getSessionSdk?: () => SessionSdkOperations | undefined;
 	getPluginRuntime?: () => PluginRuntime;
@@ -69,7 +67,6 @@ export type TurnRunnerCapabilities = Pick<
 	| "getPluginRuntime"
 	| "getRegistry"
 	| "getSessionSdk"
-	| "getStore"
 	| "getTurnToolResolver"
 >;
 
@@ -95,17 +92,13 @@ export type SessionAdapterCapabilities = Pick<
 	| "getPluginRuntime"
 	| "getRegistry"
 	| "getSessionSdk"
-	| "getStore"
 	| "getTurnToolResolver"
 >;
-
-/** The durable store used to project a Session's initial state. */
-export type SessionStoreCapabilities = Pick<SessionCapabilities, "getStore">;
 
 /** The Session Host Manager's preflight dependencies for a Provider selection. */
 export type HostManagerSelectionCapabilities = Pick<
 	SessionCapabilities,
-	"getPluginRuntime" | "getRegistry" | "getStore"
+	"getPluginRuntime" | "getRegistry"
 >;
 
 /**
@@ -232,6 +225,8 @@ export type SessionHostManager = Readonly<{
 		providerModel?: ProviderModelSelection;
 		agentPinSelection?: ProviderModelSelection;
 		sessionId: SessionId;
+		/** The facets the caller resolved, handed to the Host this call opens. */
+		storage: SessionStorage;
 		view?: boolean;
 	}) => Promise<SessionHost>;
 	releaseView: (sessionId: SessionId) => Promise<void>;
@@ -245,4 +240,6 @@ export type SessionHostOptions = Readonly<{
 	executionMode?: ExecutionMode;
 	providerModel?: ProviderModelSelection;
 	sessionId: SessionId;
+	/** The facets the Manager resolved once; the Host hands each module the one it needs. */
+	storage: SessionStorage;
 }>;

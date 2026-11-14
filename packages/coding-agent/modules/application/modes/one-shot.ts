@@ -552,7 +552,7 @@ const initializeOneShotSession = async (
 		[],
 		toSessionMessageId(`initial-${plannedSessionId}`)
 	);
-	const created = await services.store.createSession({
+	const created = await services.storage.createSession({
 		id: plannedSessionId,
 		agent: selection.agent,
 		message: initialMessage,
@@ -587,8 +587,8 @@ const preflightOneShotHost = async (
 		sessionId === undefined
 			? [undefined, []]
 			: await Promise.all([
-					services.store.getSession(sessionId),
-					services.store.listSessionRecords(sessionId),
+					services.storage.getSession(sessionId),
+					services.storage.listSessionRecords(sessionId),
 				]);
 	// The Session's recorded tiers: the row choice, then the newest message pair.
 	const restoredSelection = restoreSelection({
@@ -755,6 +755,7 @@ const openOneShotSessionHost = async ({
 	providerCollection,
 	providerModel,
 	sessionId,
+	storage,
 }: Readonly<{
 	capabilities: SessionServices["capabilities"];
 	executionMode: OneShotFormat;
@@ -762,6 +763,7 @@ const openOneShotSessionHost = async ({
 	providerCollection?: ProviderCollection;
 	providerModel: ProviderModelSelection;
 	sessionId: SessionId;
+	storage: SessionServices["storage"];
 }>): Promise<SessionHost> =>
 	manager.openHost({
 		capabilities,
@@ -769,6 +771,7 @@ const openOneShotSessionHost = async ({
 		...(providerCollection === undefined ? {} : { providerCollection }),
 		providerModel,
 		sessionId,
+		storage,
 		view: true,
 	});
 
@@ -831,6 +834,7 @@ const runOneShot = async (
 			providerCollection,
 			providerModel,
 			sessionId,
+			storage: services.storage,
 		});
 		assertPluginProviderSelectionOwner(
 			providerModel,

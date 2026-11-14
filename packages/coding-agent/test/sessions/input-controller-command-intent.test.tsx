@@ -8,15 +8,15 @@ import type {
 } from "@/modules/commands/command-controller";
 import type { TrackedSubmissionIntent } from "@/modules/commands/submission-resolution";
 import type { FileMentionOption } from "@/modules/file-mentions";
-import type {
-	PromptHistoryEntry,
-	PromptHistoryStore,
-} from "@/modules/sessions/hooks/input-controller/history";
+import type { PromptHistoryEntry } from "@/modules/sessions/hooks/input-controller/history";
 import type { SubmitSnapshot } from "@/modules/sessions/hooks/input-controller/submit";
 import type { ChatInputController } from "@/modules/sessions/hooks/input-controller/types";
 import { useChatInputController } from "@/modules/sessions/hooks/input-controller/use-chat-input-controller";
 import type { SessionMessage } from "@/modules/sessions/message";
-import type { PromptHistoryEntry as StoredPromptHistoryEntry } from "@/modules/sessions/storage/session-store";
+import type {
+	PromptHistoryStore,
+	PromptHistoryEntry as StoredPromptHistoryEntry,
+} from "@/modules/sessions/storage/prompt-history";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import { createComposerDocument } from "@/modules/sessions/ui/composer-document";
 import type {

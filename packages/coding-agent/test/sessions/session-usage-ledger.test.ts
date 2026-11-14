@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
+import type { SessionWriteOutcome } from "@/modules/sessions/session-write-outcome";
 import type {
 	CreateSessionUsageEntryInput,
 	SessionUsageEntry,
-	SessionWriteOutcome,
-} from "@/modules/sessions/storage/session-store";
+} from "@/modules/sessions/storage/session-catalog";
 import {
 	createSessionUsageLedger,
 	type SessionUsageLedger,

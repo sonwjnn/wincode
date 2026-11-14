@@ -18,7 +18,11 @@ import {
 	normalizePastedTextRangesForTrimmedText,
 	shiftPastedTextRangesForTrimmedText,
 } from "../../pasted-text";
-import { getSessionStore } from "../../storage/get-session-store";
+import {
+	getPromptHistoryStore,
+	getSessionAttachments,
+} from "../../storage/get-session-storage";
+import type { PromptHistoryStore } from "../../storage/prompt-history";
 import type { ChatPromptComposition } from "../../utils";
 import { restoreComposerDraft, writeComposerDraft } from "./draft-store";
 import { removeTriggerText } from "./escape-trigger";
@@ -179,7 +183,11 @@ export function useChatInputController({
 			const currentRecord = (async () => {
 				await previousRecord;
 				try {
-					const store = promptHistoryStore ?? getSessionStore();
+					const store: PromptHistoryStore = promptHistoryStore ?? {
+						...getPromptHistoryStore(),
+						externalizeAttachments:
+							getSessionAttachments().externalizeAttachments,
+					};
 					const { commandSelections = [], ...storedEntry } = entry;
 					const externalization = await store.externalizeAttachments([
 						{
@@ -212,7 +220,7 @@ export function useChatInputController({
 	);
 	useEffect(() => {
 		let active = true;
-		void (promptHistoryStore ?? getSessionStore())
+		void (promptHistoryStore ?? getPromptHistoryStore())
 			.getPromptHistory()
 			.then((globalEntries) => {
 				if (!active) {

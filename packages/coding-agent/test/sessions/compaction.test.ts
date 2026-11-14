@@ -51,6 +51,8 @@ import {
 	toolCallId,
 } from "../support/identifiers";
 
+import { attachmentsOver } from "../support/session-facets";
+
 const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
 	providerId: "openai",
@@ -1878,7 +1880,7 @@ test("serializes current-window attachments without hydrating payloads and persi
 	});
 	let serializedSummary = "";
 	const compaction = createSessionCompaction({
-		attachmentStore,
+		attachments: attachmentsOver(attachmentStore),
 		store: makeStore(),
 		summaryGenerator: async (input) => {
 			serializedSummary = input.serializedMessages;
@@ -2579,7 +2581,7 @@ test("passes the externalization lease to the store for indeterminate compaction
 	await sourceLease.release();
 	const store = makeStore();
 	const compaction = createSessionCompaction({
-		attachmentStore,
+		attachments: attachmentsOver(attachmentStore),
 		generateId: () => compactionId("entry-lease-reconciliation"),
 		store,
 		summaryGenerator: mock(async () => ({ text: "summary with a held image" })),
@@ -2644,7 +2646,7 @@ test("projects the newest attachment against the media budget for estimatedToken
 	const newReference = newReferenceLease.reference;
 	const store = makeStore();
 	const compaction = createSessionCompaction({
-		attachmentStore,
+		attachments: attachmentsOver(attachmentStore),
 		generateId: () => compactionId("entry-projection"),
 		store,
 		summaryGenerator: mock(async () => ({ text: "projected summary" })),

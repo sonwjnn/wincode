@@ -60,7 +60,10 @@ import { isSessionBusy } from "../../agent-session/utils";
 import { derivePromptHistory } from "../../hooks/input-controller/history";
 import { useAgentSession } from "../../hooks/use-agent-session";
 import type { ResolvedSessionSelection } from "../../selection";
-import { getSessionStore } from "../../storage/get-session-store";
+import {
+	getSessionLifecycle,
+	getSessionRecords,
+} from "../../storage/get-session-storage";
 import { requireSessionWriteReady } from "../../storage/session-jsonl-store";
 import type {
 	SessionSubmissionComposition,
@@ -320,7 +323,8 @@ export function SessionView({
 	);
 	const dialog = useDialog();
 	const { snapshot: configSnapshot } = useConfig();
-	const sessionStore = useMemo(() => getSessionStore(), []);
+	const sessionLifecycle = useMemo(() => getSessionLifecycle(), []);
+	const sessionRecords = useMemo(() => getSessionRecords(), []);
 	const [editMode, setEditMode] = useState<EditMode>("hashline");
 	const editModeLoadRevisionRef = useRef(0);
 	const setSessionEditMode = useCallback((mode: EditMode) => {
@@ -329,24 +333,19 @@ export function SessionView({
 	}, []);
 	const persistSessionEditMode = useCallback(
 		async (mode: EditMode) => {
-			if (sessionStore.setEditMode === undefined) {
-				throw new Error("Session storage does not support Edit Mode.");
-			}
-			requireSessionWriteReady(await sessionStore.setEditMode(sessionId, mode));
+			requireSessionWriteReady(
+				await sessionLifecycle.setEditMode(sessionId, mode)
+			);
 		},
-		[sessionId, sessionStore]
+		[sessionId, sessionLifecycle]
 	);
 	useEffect(() => {
 		let active = true;
 		const loadRevision = ++editModeLoadRevisionRef.current;
 		const loadEditMode = async (): Promise<void> => {
 			try {
-				const mode = await sessionStore.getEditMode?.(sessionId);
-				if (
-					active &&
-					loadRevision === editModeLoadRevisionRef.current &&
-					mode !== undefined
-				) {
+				const mode = await sessionLifecycle.getEditMode(sessionId);
+				if (active && loadRevision === editModeLoadRevisionRef.current) {
 					setEditMode(mode);
 				}
 			} catch {
@@ -357,7 +356,7 @@ export function SessionView({
 		return () => {
 			active = false;
 		};
-	}, [sessionId, sessionStore]);
+	}, [sessionId, sessionLifecycle]);
 	const settingsRuntime = useMemo(
 		() => ({
 			editMode,
@@ -604,7 +603,7 @@ export function SessionView({
 			return;
 		}
 		let active = true;
-		void sessionStore
+		void sessionRecords
 			.listSessionRecords(sessionId)
 			.then((records) => {
 				if (active) {
@@ -625,7 +624,7 @@ export function SessionView({
 		return () => {
 			active = false;
 		};
-	}, [isBusy, sessionId, sessionStore, show]);
+	}, [isBusy, sessionId, sessionRecords, show]);
 	const handleRewindFailure = (
 		error: unknown,
 		fallbackMessage: string

@@ -995,7 +995,18 @@ const readAttachmentPins = async (
 			throw new Error("The attachment ownership pins could not be verified.");
 		}
 		const pinPath = path.join(pinDirectory, entry.name);
-		const value: unknown = JSON.parse(await readUtf8File(pinPath));
+		// A pin can be released between the directory scan and this read; a pin that
+		// is gone is simply not live, so the scan neither fails nor reports it.
+		let pinContents: string;
+		try {
+			pinContents = await readUtf8File(pinPath);
+		} catch (error) {
+			if (isNodeError(error, "ENOENT")) {
+				continue;
+			}
+			throw error;
+		}
+		const value: unknown = JSON.parse(pinContents);
 		if (
 			!isPlainObject(value) ||
 			value.version !== 1 ||

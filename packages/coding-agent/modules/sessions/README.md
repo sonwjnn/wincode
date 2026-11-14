@@ -16,7 +16,7 @@ accepted SDK deliveries as ordinary user messages.
 
 `SessionSurface` opens the session and renders it: it constructs the Session Host, which loads the transcript and ordered local compaction entries, validates the messages, rebuilds the Session Context around the latest compaction, and constructs the Agent Session with all three. The Host exposes it as `agentSession`, shows the opening state until loading resolves, and hands the open Host to `SessionView`.
 
-The Host runs on Session Services: the surface composes one bundle from its providers, and the factory resolves the Plugin runtime, Session Store, Session Host Manager, and Session SDK before assembling the Session Capabilities the Host reads lazily.
+The Host runs on Session Services: the surface composes one bundle from its providers, and the factory resolves the Plugin runtime, Session storage, Session Host Manager, and Session SDK before assembling the Session Capabilities the Host reads lazily.
 
 ### Submit, steer, and continue
 
@@ -259,8 +259,9 @@ and the ordering between quarantine durability and truncation. They validate
 application behavior at those I/O boundaries, not power-loss behavior, device
 or filesystem caches, a physically full disk, or network-filesystem semantics.
 
-`storage/` isolates local persistence behind the `SessionStore` interface.
-The local Drizzle store maintains the rebuildable SQLite projection for
+`storage/` isolates local persistence behind six Session facets composed as
+`SessionStorage`; `SessionProjection` is the internal SQLite seam that no
+consumer sees. The local Drizzle store maintains the rebuildable SQLite projection for
 Session history, compactions, selection, and usage; content-addressed attachment
 blobs remain in separate storage.
 `session_record` rows contain one durable user message, a terminal assistant
@@ -297,8 +298,16 @@ holds their opaque payload while busy — see ADR-0021 — and a restart never
 replays them.
 
 
-- `session-store.ts` — store interface and DTOs.
-- `get-session-store.ts` — cached local store factory.
+- `session-records.ts` — durable turn writes: records, submissions, context edits, compactions, file observations.
+- `session-catalog.ts` — Session metadata, usage, settings, statistics, recent selections.
+- `session-history.ts` — history pages and tree, selected path, compactions, Plugin history entries.
+- `session-lifecycle.ts` — create, update, delete, fork, bundle transport, projection rebuild, writer lock.
+- `session-attachments.ts` — blob leases, retention, references, and display annotation.
+- `plugin-session-state.ts` — durable per-Plugin state.
+- `session-storage.ts` — the six facets as one value, and the shape the factory returns.
+- `session-projection.ts` — internal SQLite seam, joined to the facets by the JSONL store.
+- `prompt-history.ts` — workspace prompt history, which is not a Session facet.
+- `get-session-storage.ts` — cached local facet factory.
 - `drizzle-session-store.ts` — Drizzle SQLite implementation.
 - `session-record.ts` — record validation and CLI presentation projection.
 - `attachment-store.ts` — image blob storage, integrity-checked hydration, compaction projection, and garbage collection.
@@ -341,7 +350,7 @@ history and workspace/configuration data.
 - `host/session-host-manager.ts` — process-lifetime Host ownership across view switches, one-writer enforcement, and background Session events.
 - `host/agent-session-adapters.ts` — `createAgentSessionAdapters`: materializes the Agent Session's ports from the Session Capabilities the Host was handed — attachments, compaction, durable records, Selection resolution, File Mentions, Skills, and the turn runner it hands off.
 - `host/agent-session-turn-runner.ts` — `createAgentSessionTurnRunner`: runs one Agent Turn execution, resolving the Provider Model selection, snapshotting the Plugin Tools, composing the prompt, consuming the Agent Runtime, and owning the per-turn execution scopes the Host must hold.
-- `host/session-services.ts` — `openSessionServices`: the mode-, process-, or view-scoped Session Services. Resolves the Plugin runtime (loaded from policy or borrowed as a source), Session Store, Session Host Manager, and Session SDK, then assembles the Session Capabilities a Host reads lazily. They close only the resources they created; exported through `@wincode/coding-agent/session-services`.
+- `host/session-services.ts` — `openSessionServices`: the mode-, process-, or view-scoped Session Services. Resolves the Plugin runtime (loaded from policy or borrowed as a source), Session storage (the six facets), Session Host Manager, and Session SDK, then assembles the Session Capabilities a Host reads lazily. They close only the resources they created; exported through `@wincode/coding-agent/session-services`.
 - `host/use-session-services.ts` — Interactive Mode's adapter over `openSessionServices`: it reads its provider values and passes them as sources.
 - `useAgentSession(host)` — binds an open Host to React, mirrors its Snapshot, and forwards public commands.
 - `SessionSurface` — opens or retains a manager-owned Host, renders the opening state until it resolves and the failure when it rejects, and releases its view reference on unmount. Background task lifecycle belongs to the Subagents Plugin.

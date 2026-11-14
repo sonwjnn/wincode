@@ -518,7 +518,7 @@ test("Print mode checkpoints its initial prompt atomically before writing assist
 	});
 	let sessionId: string | undefined;
 	try {
-		const sessions = await verification.store.listSessions();
+		const sessions = await verification.storage.listSessions();
 		expect(sessions).toHaveLength(1);
 		sessionId = sessions[0]?.id;
 	} finally {
@@ -601,11 +601,11 @@ test("Print mode checkpoints its initial prompt atomically before writing assist
 		})
 	).services;
 	try {
-		const [session] = await finalVerification.store.listSessions();
+		const [session] = await finalVerification.storage.listSessions();
 		if (session === undefined) {
 			throw new Error("Expected the overridden One-Shot Session.");
 		}
-		const records = await finalVerification.store.listSessionRecords(
+		const records = await finalVerification.storage.listSessionRecords(
 			session.id
 		);
 		expect(records.at(-1)?.agentId).toBe(agentIdSchema.parse("review"));
@@ -646,7 +646,7 @@ test("one-shot ThinkingLevel selectors override configured and restored choices"
 		).services;
 		let sessionId: string | undefined;
 		try {
-			const sessions = await firstVerification.store.listSessions();
+			const sessions = await firstVerification.storage.listSessions();
 			expect(sessions).toHaveLength(1);
 			expect(sessions[0]?.thinkingLevel).toBe("medium");
 			sessionId = sessions[0]?.id;
@@ -685,7 +685,7 @@ test("one-shot ThinkingLevel selectors override configured and restored choices"
 			})
 		).services;
 		try {
-			const sessions = await finalVerification.store.listSessions();
+			const sessions = await finalVerification.storage.listSessions();
 			expect(sessions).toHaveLength(1);
 			expect(sessions[0]?.thinkingLevel).toBe("low");
 		} finally {
@@ -742,7 +742,9 @@ test("one-shot invalid explicit choices name their field and fail before send", 
 			workspace: invalidWorkspace,
 		});
 		try {
-			expect(await verification.services.store.listSessions()).toHaveLength(0);
+			expect(await verification.services.storage.listSessions()).toHaveLength(
+				0
+			);
 		} finally {
 			await verification.services.shutdown();
 		}
@@ -776,7 +778,7 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 			registry: () => registry,
 		},
 	});
-	const sessions = await lookup.store.listSessions();
+	const sessions = await lookup.storage.listSessions();
 	const sessionId = sessions.at(-1)?.id;
 	await lookup.shutdown();
 	if (sessionId === undefined) {
@@ -792,6 +794,7 @@ test("Print and JSON modes report a held Session Writer conflict", async () => {
 	const holder = await createSessionHost({
 		capabilities: holderAssembly.capabilities,
 		sessionId,
+		storage: holderAssembly.storage,
 	});
 	try {
 		const stdout = writer();
@@ -910,7 +913,9 @@ test("one-shot input rejects empty submissions before creating a Session", async
 			workspace: emptyWorkspace,
 		});
 		try {
-			expect(await verification.services.store.listSessions()).toHaveLength(0);
+			expect(await verification.services.storage.listSessions()).toHaveLength(
+				0
+			);
 		} finally {
 			await verification.services.shutdown();
 		}
@@ -1063,7 +1068,9 @@ test("one-shot rejects a disconnected model before creating a Session", async ()
 			workspace: disconnectedWorkspace,
 		});
 		try {
-			expect(await verification.services.store.listSessions()).toHaveLength(0);
+			expect(await verification.services.storage.listSessions()).toHaveLength(
+				0
+			);
 		} finally {
 			await verification.services.shutdown();
 		}
@@ -1163,14 +1170,14 @@ test("One-Shot rejects restored ownerless Provider Models before constructing or
 			cwd: oneShotWorkspace,
 			workspace: oneShotWorkspace,
 		});
-		expect(await sessionInspection.services.store.listSessions()).toEqual([]);
+		expect(await sessionInspection.services.storage.listSessions()).toEqual([]);
 		await sessionInspection.services.shutdown();
 
 		const seeded = await composeWithTrackedProvider({
 			cwd: oneShotWorkspace,
 			workspace: oneShotWorkspace,
 		});
-		const { id: sessionId } = await seeded.services.store.createEmptySession({
+		const { id: sessionId } = await seeded.services.storage.createEmptySession({
 			model: { modelId: toModelId(selectedModelId), providerId },
 		});
 		await seeded.services.shutdown();
@@ -1315,7 +1322,7 @@ test("One-Shot rejects a Host Provider collection without the trusted snapshot b
 			workspace: oneShotWorkspace,
 		});
 		try {
-			expect(await verification.services.store.listSessions()).toEqual([]);
+			expect(await verification.services.storage.listSessions()).toEqual([]);
 		} finally {
 			await verification.services.shutdown();
 		}
@@ -1417,8 +1424,11 @@ test("One-Shot rejects a stale Host Plugin snapshot before reserving a built-in 
 			collectionFactory
 		)(input);
 		services = result.services;
-		const externalizeAttachments = services.store.externalizeAttachments;
-		services.store.externalizeAttachments = async (...args) => {
+		const mutableStorage = services.storage as {
+			externalizeAttachments: typeof services.storage.externalizeAttachments;
+		};
+		const externalizeAttachments = mutableStorage.externalizeAttachments;
+		mutableStorage.externalizeAttachments = async (...args) => {
 			activity.externalizations += 1;
 			return externalizeAttachments(...args);
 		};
@@ -1464,7 +1474,7 @@ test("One-Shot rejects a stale Host Plugin snapshot before reserving a built-in 
 			},
 		});
 		try {
-			expect(await verification.store.listSessions()).toEqual([]);
+			expect(await verification.storage.listSessions()).toEqual([]);
 		} finally {
 			await verification.shutdown();
 		}
@@ -1545,7 +1555,7 @@ test("One-Shot --agent overrides a restored model with its current trusted Plugi
 			pluginRuntime,
 			workspace: oneShotWorkspace,
 		});
-		const { id: sessionId } = await seeded.services.store.createEmptySession({
+		const { id: sessionId } = await seeded.services.storage.createEmptySession({
 			model: { modelId: toModelId("restored-model"), providerId: "openai" },
 		});
 		await seeded.services.shutdown();
@@ -1578,7 +1588,7 @@ test("One-Shot --agent overrides a restored model with its current trusted Plugi
 		});
 		try {
 			expect(
-				await verification.services.store.getSession(sessionId)
+				await verification.services.storage.getSession(sessionId)
 			).toMatchObject({
 				model: {
 					modelId: oneShotPluginModel.modelId,
@@ -1717,7 +1727,7 @@ test("One-Shot rejects an ambiguous explicit Agent pin before Provider side effe
 			pluginRuntime,
 			workspace: oneShotWorkspace,
 		});
-		const { id: sessionId } = await seeded.services.store.createEmptySession({
+		const { id: sessionId } = await seeded.services.storage.createEmptySession({
 			model: { modelId: toModelId("restored-model"), providerId: "openai" },
 		});
 		await seeded.services.shutdown();
@@ -1781,7 +1791,7 @@ test("One-Shot keeps restored Plugin ownership strict until an Agent is explicit
 			pluginRuntime: oldRuntime,
 			workspace: oneShotWorkspace,
 		});
-		const { id: sessionId } = await seeded.services.store.createEmptySession({
+		const { id: sessionId } = await seeded.services.storage.createEmptySession({
 			model: {
 				modelId: toModelId(oneShotPluginModel.modelId),
 				pluginProviderSource: {
@@ -1911,7 +1921,7 @@ test("one-shot replaces unavailable SDK Agent pins only with exact Host models",
 			workspace: oneShotWorkspace,
 		});
 		try {
-			const sessions = await verification.services.store.listSessions();
+			const sessions = await verification.services.storage.listSessions();
 			expect(sessions).toHaveLength(1);
 			expect(String(sessions[0]?.model?.modelId)).toBe("one-shot-model-v2");
 			expect(sessions[0]?.model?.providerId).toBe("openai");
@@ -1960,7 +1970,9 @@ test("one-shot fails closed for an SDK Model the Host does not provide", async (
 			workspace: unavailableWorkspace,
 		});
 		try {
-			expect(await verification.services.store.listSessions()).toHaveLength(0);
+			expect(await verification.services.storage.listSessions()).toHaveLength(
+				0
+			);
 		} finally {
 			await verification.services.shutdown();
 		}
@@ -1986,7 +1998,7 @@ test("One-Shot checks fresh model availability before creating its durable Sessi
 			getAvailable: async () => {
 				if (servicesDuringAvailability !== undefined) {
 					sessionRowsDuringAvailability = (
-						await servicesDuringAvailability.store.listSessions()
+						await servicesDuringAvailability.storage.listSessions()
 					).length;
 				}
 				return await getAvailable();
@@ -2027,7 +2039,9 @@ test("One-Shot checks fresh model availability before creating its durable Sessi
 			workspace: unavailableWorkspace,
 		});
 		try {
-			expect(await verification.services.store.listSessions()).toHaveLength(0);
+			expect(await verification.services.storage.listSessions()).toHaveLength(
+				0
+			);
 		} finally {
 			await verification.services.shutdown();
 		}

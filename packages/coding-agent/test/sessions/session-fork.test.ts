@@ -34,12 +34,12 @@ import {
 } from "@/modules/sessions/storage/session-jsonl-codec";
 import type { SessionLogFileIo } from "@/modules/sessions/storage/session-jsonl-store";
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
-import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type {
 	SessionForkCheckpoint,
 	SessionForkResult,
-	SessionStore,
-} from "@/modules/sessions/storage/session-store";
+} from "@/modules/sessions/storage/session-lifecycle";
+import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
+import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { acquireSessionWriterLock } from "@/modules/sessions/storage/session-writer-lock";
 import { aggregateSessionStatisticsUsage } from "@/modules/sessions/usage/session-statistics";
 import type { FileVersion } from "@/modules/tools/versioned/model";
@@ -72,9 +72,9 @@ const createPersistence = (
 	fileIo: SessionLogFileIo = {}
 ): {
 	close: () => void;
-	createStore: (fileIo?: SessionLogFileIo) => SessionStore;
+	createStore: (fileIo?: SessionLogFileIo) => SessionStorage;
 	logRoot: string;
-	store: SessionStore;
+	storage: SessionStorage;
 } => {
 	const databasePath = path.join(temporaryRoot, `${name}.sqlite`);
 	const operational = createDatabase(databasePath);
@@ -88,7 +88,9 @@ const createPersistence = (
 		sessionLogRoot: logRoot,
 		workspaceRoot: workspace,
 	});
-	const createStore = (storeFileIo: SessionLogFileIo = fileIo): SessionStore =>
+	const createStore = (
+		storeFileIo: SessionLogFileIo = fileIo
+	): SessionStorage =>
 		createSessionJsonlStore(projectionStore, logRoot, storeFileIo);
 	return {
 		close: () => {
@@ -97,17 +99,17 @@ const createPersistence = (
 		},
 		createStore,
 		logRoot,
-		store: createStore(),
+		storage: createStore(),
 	};
 };
 
 const invokeFork = (
-	store: SessionStore,
+	storage: SessionStorage,
 	sourceSessionId: SessionId,
 	checkpoint: SessionForkCheckpoint,
 	operationId: string
 ): Promise<SessionForkResult> =>
-	store.forkSession(sourceSessionId, checkpoint, operationId);
+	storage.forkSession(sourceSessionId, checkpoint, operationId);
 
 const completedToolRecord = ({
 	batchCallIds,
@@ -157,7 +159,7 @@ test("UI fork retries reuse a durable ID, then allow a later fork of the same cu
 	const persistence = createPersistence("fork-action-id");
 	const sourceTurnId = agentTurnId("fork-action-id-turn");
 	try {
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("Fork action identity source."),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
@@ -181,13 +183,13 @@ test("UI fork retries reuse a durable ID, then allow a later fork of the same cu
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: terminalRecord,
 			sessionId: created.id,
 		});
 		const checkpoint = { recordId: terminalRecord.id };
 		const firstActionId =
-			await persistence.store.getOrCreateSessionForkActionId(
+			await persistence.storage.getOrCreateSessionForkActionId(
 				created.id,
 				checkpoint
 			);
@@ -200,7 +202,7 @@ test("UI fork retries reuse a durable ID, then allow a later fork of the same cu
 		expect(isValidSessionLogIdentifier(firstActionId)).toBe(true);
 
 		const firstFork = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			checkpoint,
 			firstActionId
@@ -221,7 +223,7 @@ test("UI fork retries reuse a durable ID, then allow a later fork of the same cu
 			firstActionId
 		);
 		const laterActionId =
-			await persistence.store.getOrCreateSessionForkActionId(
+			await persistence.storage.getOrCreateSessionForkActionId(
 				created.id,
 				checkpoint
 			);
@@ -233,7 +235,7 @@ test("UI fork retries reuse a durable ID, then allow a later fork of the same cu
 			)
 		).toBe(laterActionId);
 		const laterFork = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			checkpoint,
 			laterActionId
@@ -344,13 +346,13 @@ test("forked attachment references remain live after source deletion and attachm
 test("a refused multi-message record leaves no fork checkpoint target", async () => {
 	const persistence = createPersistence("multi-message-cut");
 	try {
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("Keep this source Session intact."),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("multi-message-cut-turn"),
 		});
-		const sourceRecords = await persistence.store.listSessionRecords(
+		const sourceRecords = await persistence.storage.listSessionRecords(
 			created.id
 		);
 		const sourceRecord = sourceRecords[0];
@@ -378,7 +380,7 @@ test("a refused multi-message record leaves no fork checkpoint target", async ()
 		);
 		const sourceLogBytes = await Bun.file(sourceLogPath).bytes();
 
-		const invalidRecordWrite = await persistence.store.commitSessionRecord({
+		const invalidRecordWrite = await persistence.storage.commitSessionRecord({
 			record: multiMessageRecord,
 			sessionId: created.id,
 		});
@@ -392,7 +394,7 @@ test("a refused multi-message record leaves no fork checkpoint target", async ()
 		});
 		await expect(
 			invokeFork(
-				persistence.store,
+				persistence.storage,
 				created.id,
 				{ recordId: multiMessageRecord.id },
 				"multi-message-cut-refusal"
@@ -403,9 +405,9 @@ test("a refused multi-message record leaves no fork checkpoint target", async ()
 		});
 
 		expect(
-			(await persistence.store.listSessions()).map(({ id }) => id)
+			(await persistence.storage.listSessions()).map(({ id }) => id)
 		).toEqual([created.id]);
-		expect(await persistence.store.listSessionRecords(created.id)).toEqual(
+		expect(await persistence.storage.listSessionRecords(created.id)).toEqual(
 			sourceRecords
 		);
 		expect([...(await Bun.file(sourceLogPath).bytes())]).toEqual([
@@ -419,14 +421,14 @@ test("a refused multi-message record leaves no fork checkpoint target", async ()
 test("fork storage accepts an accepted user boundary and rejects interrupted Agent Turn outcomes", async () => {
 	const persistence = createPersistence("invalid-cut");
 	try {
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("This is not a fork checkpoint."),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("invalid-cut-user-turn"),
 		});
 		const initialRecord = (
-			await persistence.store.listSessionRecords(created.id)
+			await persistence.storage.listSessionRecords(created.id)
 		)[0];
 		if (initialRecord === undefined) {
 			throw new Error(
@@ -434,14 +436,14 @@ test("fork storage accepts an accepted user boundary and rejects interrupted Age
 			);
 		}
 		const userFork = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			{ recordId: initialRecord.id },
 			"accepted-user-checkpoint"
 		);
 		expect(userFork.created).toBe(true);
 		expect(
-			await persistence.store.listSessionRecords(userFork.id)
+			await persistence.storage.listSessionRecords(userFork.id)
 		).toHaveLength(1);
 
 		const interruptedRecord: SessionRecord = {
@@ -471,19 +473,19 @@ test("fork storage accepts an accepted user boundary and rejects interrupted Age
 			turnId: agentTurnId("invalid-cut-user-turn"),
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: interruptedRecord,
 			sessionId: created.id,
 		});
 		await expect(
 			invokeFork(
-				persistence.store,
+				persistence.storage,
 				created.id,
 				{ recordId: interruptedRecord.id },
 				"invalid-interrupted-checkpoint"
 			)
 		).rejects.toMatchObject({ code: "session_checkpoint_invalid" });
-		expect(await persistence.store.listSessions()).toHaveLength(2);
+		expect(await persistence.storage.listSessions()).toHaveLength(2);
 	} finally {
 		persistence.close();
 	}
@@ -498,7 +500,7 @@ test("rewinding from an accepted pending user keeps source JSONL and workspace b
 	await Bun.write(workspacePath, workspaceBytes);
 	const submissionId = toSubmissionId("rewind-source-pending-submission");
 	try {
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage(
 				"Keep this accepted input as context only.",
@@ -510,7 +512,7 @@ test("rewinding from an accepted pending user keeps source JSONL and workspace b
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: agentTurnId("rewind-source-pending-turn"),
 		});
-		const sourceRecords = await persistence.store.listSessionRecords(
+		const sourceRecords = await persistence.storage.listSessionRecords(
 			created.id
 		);
 		const sourceLogPath = resolveSessionLogFilePath(
@@ -524,23 +526,23 @@ test("rewinding from an accepted pending user keeps source JSONL and workspace b
 		}
 
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			{ recordId: checkpoint.id },
 			"rewind-user-source-preservation"
 		);
 		const inheritedRecord = (
-			await persistence.store.listSessionRecords(forked.id)
+			await persistence.storage.listSessionRecords(forked.id)
 		)[0];
 		const inheritedMessage = inheritedRecord?.messages[0];
 
 		expect(inheritedMessage?.metadata?.submissionStatus).toBe("processed");
 		expect(inheritedMessage?.metadata?.submissionId).not.toBe(submissionId);
 		expect(
-			(await persistence.store.getSessionForkProvenance(forked.id))
+			(await persistence.storage.getSessionForkProvenance(forked.id))
 				?.inheritedSubmissions
 		).toMatchObject([{ sourceSubmissionId: submissionId, status: "pending" }]);
-		expect(await persistence.store.listSessionRecords(created.id)).toEqual(
+		expect(await persistence.storage.listSessionRecords(created.id)).toEqual(
 			sourceRecords
 		);
 		expect([...(await Bun.file(sourceLogPath).bytes())]).toEqual([
@@ -558,14 +560,14 @@ test("fork refuses a Tool Call cut inside an incomplete parallel batch before pu
 	const persistence = createPersistence("incomplete-tool-batch-cut");
 	try {
 		const sourceTurnId = agentTurnId("incomplete-tool-batch-turn");
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("Inspect these files safely."),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: sourceTurnId,
 		});
 		const sourceUser = (
-			await persistence.store.listSessionRecords(created.id)
+			await persistence.storage.listSessionRecords(created.id)
 		)[0];
 		const sourceMessageId = sourceUser?.messages[0]?.id;
 		if (sourceMessageId === undefined) {
@@ -587,7 +589,7 @@ test("fork refuses a Tool Call cut inside an incomplete parallel batch before pu
 			sourceUserMessageId: sourceMessageId,
 			turnId: sourceTurnId,
 		});
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: firstResult,
 			sessionId: created.id,
 		});
@@ -599,7 +601,7 @@ test("fork refuses a Tool Call cut inside an incomplete parallel batch before pu
 		const operationId = "incomplete-tool-batch-retry";
 		await expect(
 			invokeFork(
-				persistence.store,
+				persistence.storage,
 				created.id,
 				{ recordId: firstResult.id },
 				operationId
@@ -608,23 +610,25 @@ test("fork refuses a Tool Call cut inside an incomplete parallel batch before pu
 			code: "session_checkpoint_invalid",
 			message: "Parallel Tool Call batch is incomplete at this checkpoint.",
 		});
-		expect(await persistence.store.listSessions()).toHaveLength(1);
+		expect(await persistence.storage.listSessions()).toHaveLength(1);
 		expect([...(await Bun.file(sourceLogPath).bytes())]).toEqual([
 			...incompleteSourceBytes,
 		]);
 
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: secondResult,
 			sessionId: created.id,
 		});
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			{ recordId: secondResult.id },
 			operationId
 		);
 		expect(forked.created).toBe(true);
-		const forkedRecords = await persistence.store.listSessionRecords(forked.id);
+		const forkedRecords = await persistence.storage.listSessionRecords(
+			forked.id
+		);
 		expect(forkedRecords).toHaveLength(3);
 		const forkedToolParts = forkedRecords.flatMap((record) =>
 			record.messages.flatMap((message) =>
@@ -652,7 +656,7 @@ test("foreign writer contention reports session_in_use without reserving the ope
 	const persistence = createPersistence("busy-operation-fork");
 	const sourceTurnId = agentTurnId("busy-fork-source-turn");
 	try {
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("The first cut remains available."),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
@@ -676,7 +680,7 @@ test("foreign writer contention reports session_in_use without reserving the ope
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: firstTerminal,
 			sessionId: created.id,
 		});
@@ -685,7 +689,7 @@ test("foreign writer contention reports session_in_use without reserving the ope
 			"The retry selects the later valid cut.",
 			{ submissionStatus: "processed" }
 		);
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: buildUserSessionRecord({
 				agentId: agentId("build"),
 				message: secondUserMessage,
@@ -712,7 +716,7 @@ test("foreign writer contention reports session_in_use without reserving the ope
 			turnId: secondTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: secondTerminal,
 			sessionId: created.id,
 		});
@@ -726,7 +730,7 @@ test("foreign writer contention reports session_in_use without reserving the ope
 		try {
 			await expect(
 				invokeFork(
-					persistence.store,
+					persistence.storage,
 					created.id,
 					{ recordId: firstTerminal.id },
 					"busy-fork-reusable-operation"
@@ -737,19 +741,19 @@ test("foreign writer contention reports session_in_use without reserving the ope
 		}
 
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			{ recordId: secondTerminal.id },
 			"busy-fork-reusable-operation"
 		);
 		expect(forked.created).toBe(true);
 		expect(
-			(await persistence.store.getSessionForkProvenance(forked.id))
+			(await persistence.storage.getSessionForkProvenance(forked.id))
 				?.sourceRecordId
 		).toBe(secondTerminal.id);
 		await expect(
 			invokeFork(
-				persistence.store,
+				persistence.storage,
 				created.id,
 				{ recordId: firstTerminal.id },
 				"busy-fork-reusable-operation"
@@ -764,14 +768,14 @@ test("an invalid checkpoint does not reserve a fork operation ID", async () => {
 	const persistence = createPersistence("invalid-operation-fork");
 	const sourceTurnId = agentTurnId("invalid-operation-source-turn");
 	try {
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("The user record is not a fork cut."),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: sourceTurnId,
 		});
 		const initialRecord = (
-			await persistence.store.listSessionRecords(created.id)
+			await persistence.storage.listSessionRecords(created.id)
 		)[0];
 		if (initialRecord === undefined) {
 			throw new Error("Fork source did not persist its initial user record.");
@@ -796,13 +800,13 @@ test("an invalid checkpoint does not reserve a fork operation ID", async () => {
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: nonterminalRecord,
 			sessionId: created.id,
 		});
 		await expect(
 			invokeFork(
-				persistence.store,
+				persistence.storage,
 				created.id,
 				{ recordId: nonterminalRecord.id },
 				"invalid-checkpoint-reusable-operation"
@@ -827,12 +831,12 @@ test("an invalid checkpoint does not reserve a fork operation ID", async () => {
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: terminalRecord,
 			sessionId: created.id,
 		});
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			{ recordId: terminalRecord.id },
 			"invalid-checkpoint-reusable-operation"
@@ -862,7 +866,7 @@ test("a retry after publication returns the fork created before a durability fai
 	});
 	const sourceTurnId = agentTurnId("post-publish-source-turn");
 	try {
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("Recover the already-published fork."),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
@@ -886,7 +890,7 @@ test("a retry after publication returns the fork created before a durability fai
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: terminalRecord,
 			sessionId: created.id,
 		});
@@ -894,7 +898,7 @@ test("a retry after publication returns the fork created before a durability fai
 		let firstError: unknown;
 		try {
 			await invokeFork(
-				persistence.store,
+				persistence.storage,
 				created.id,
 				{ recordId: terminalRecord.id },
 				"post-publish-retry-operation"
@@ -917,9 +921,9 @@ test("a retry after publication returns the fork created before a durability fai
 			"post-publish-retry-operation"
 		);
 		expect(retried).toMatchObject({ created: false, id: firstError.sessionId });
-		expect(await persistence.store.listSessionRecords(retried.id)).toHaveLength(
-			2
-		);
+		expect(
+			await persistence.storage.listSessionRecords(retried.id)
+		).toHaveLength(2);
 	} finally {
 		persistence.close();
 	}
@@ -937,19 +941,19 @@ test("fork provenance retains source submission failure without replaying it", a
 	);
 	try {
 		const sourceTurnId = agentTurnId("fork-failed-source-turn");
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: sourceMessage,
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: sourceTurnId,
 		});
 		const sourceRecord = (
-			await persistence.store.listSessionRecords(created.id)
+			await persistence.storage.listSessionRecords(created.id)
 		)[0];
 		if (sourceRecord === undefined) {
 			throw new Error("Fork source did not persist its initial user record.");
 		}
-		await persistence.store.updateSessionSubmission({
+		await persistence.storage.updateSessionSubmission({
 			failure: "The source delivery failed.",
 			messageId: sourceMessage.id,
 			recordId: sourceRecord.id,
@@ -975,25 +979,25 @@ test("fork provenance retains source submission failure without replaying it", a
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: terminalRecord,
 			sessionId: created.id,
 		});
 
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			{ recordId: terminalRecord.id },
 			"fork-failed-source-provenance"
 		);
 		const inheritedUser = (
-			await persistence.store.listSessionRecords(forked.id)
+			await persistence.storage.listSessionRecords(forked.id)
 		)[0]?.messages[0];
 		expect(inheritedUser?.metadata?.submissionId).not.toBe(sourceSubmissionId);
 		expect(inheritedUser?.metadata?.submissionStatus).toBe("processed");
 		expect(inheritedUser?.metadata?.submissionFailure).toBeUndefined();
 		expect(
-			await persistence.store.getSessionForkProvenance(forked.id)
+			await persistence.storage.getSessionForkProvenance(forked.id)
 		).toMatchObject({
 			inheritedSubmissions: [
 				{
@@ -1019,7 +1023,7 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 	const selectedModel = providerModelSelectionFixture("openai/gpt-4.1");
 	try {
 		const sourceTurnId = agentTurnId("fork-cut-source-turn");
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage(
 				"Retain this prefix.",
@@ -1034,7 +1038,7 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
 			turnId: sourceTurnId,
 		});
-		await persistence.store.updateSession(created.id, {
+		await persistence.storage.updateSession(created.id, {
 			title: "Metadata at the fork cut",
 		});
 		const sourceCompactionId = compactionId("fork-cut-source-compaction");
@@ -1042,7 +1046,7 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 			inputTokens: 12,
 			outputTokens: 3,
 		};
-		const usageWrite = await persistence.store.createSessionUsageEntry({
+		const usageWrite = await persistence.storage.createSessionUsageEntry({
 			compactionId: sourceCompactionId,
 			costUsd: 0.25,
 			createdAt: new Date("2026-10-31T00:00:00.000Z"),
@@ -1056,7 +1060,7 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 			kind: "committed",
 			projection: "ready",
 		});
-		await persistence.store.appendCompaction({
+		await persistence.storage.appendCompaction({
 			firstKeptUiMessageId: sourceMessageId,
 			id: sourceCompactionId,
 			sessionId: created.id,
@@ -1090,7 +1094,7 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: terminalRecord,
 			sessionId: created.id,
 			sessionModel: selectedModel,
@@ -1105,7 +1109,7 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 			[],
 			sessionMessageId("fork-cut-pending-suffix-message")
 		);
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: buildUserSessionRecord({
 				agentId: agentId("build"),
 				message: pendingMessage,
@@ -1116,19 +1120,19 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 		});
 
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			{ recordId: terminalRecord.id },
 			"fork-cut-remapped-compaction"
 		);
-		const forkRecords = await persistence.store.listSessionRecords(forked.id);
+		const forkRecords = await persistence.storage.listSessionRecords(forked.id);
 		const forkUserMessage = forkRecords[0]?.messages[0];
 		expect(forkRecords).toHaveLength(2);
 		expect(
 			forkRecords.flatMap((record) => record.messages).map(({ id }) => id)
 		).not.toContain(pendingMessage.id);
 		expect(forkUserMessage?.metadata?.submissionStatus).toBe("processed");
-		const compactions = await persistence.store.getCompactions(forked.id);
+		const compactions = await persistence.storage.getCompactions(forked.id);
 		expect(compactions).toHaveLength(1);
 		expect(compactions[0]).toMatchObject({
 			firstKeptUiMessageId: forkUserMessage?.id,
@@ -1138,7 +1142,7 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 			},
 		});
 		expect(compactions[0]?.id).not.toBe(sourceCompactionId);
-		const forkStatistics = await persistence.store.getSessionStatistics(
+		const forkStatistics = await persistence.storage.getSessionStatistics(
 			forked.id
 		);
 		expect(forkStatistics.usage.inherited).toMatchObject({
@@ -1152,7 +1156,7 @@ test("fork cut remaps compaction references, captures source metadata and exclud
 		expect(
 			forkStatistics.usage.contributions.inherited[0]?.compactionId
 		).not.toBe(sourceCompactionId);
-		const forkSession = (await persistence.store.listSessions()).find(
+		const forkSession = (await persistence.storage.listSessions()).find(
 			({ id }) => id === forked.id
 		);
 		expect(forkSession).toMatchObject({
@@ -1174,7 +1178,7 @@ test("a cut drops later compaction and selection state while retaining full hist
 		const terminalMessageId = sessionMessageId(
 			"compaction-after-cut-terminal-message"
 		);
-		const created = await persistence.store.createSession({
+		const created = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage(
 				"Retain the complete history before this cut.",
@@ -1206,12 +1210,12 @@ test("a cut drops later compaction and selection state while retaining full hist
 			turnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: terminal,
 			sessionId: created.id,
 			sessionModel: selectedAtCut,
 		});
-		await persistence.store.appendCompaction({
+		await persistence.storage.appendCompaction({
 			firstKeptUiMessageId: initialMessageId,
 			id: compactionId("compaction-after-cut-summary"),
 			sessionId: created.id,
@@ -1226,7 +1230,7 @@ test("a cut drops later compaction and selection state while retaining full hist
 			estimatedTokensAfter: 8,
 			trigger: "manual",
 		});
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: buildUserSessionRecord({
 				agentId: agentId("build"),
 				message: createSessionUserMessage(
@@ -1244,22 +1248,22 @@ test("a cut drops later compaction and selection state while retaining full hist
 		});
 
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			created.id,
 			{ recordId: terminal.id },
 			"compaction-after-cut-fork"
 		);
-		const forkRecords = await persistence.store.listSessionRecords(forked.id);
+		const forkRecords = await persistence.storage.listSessionRecords(forked.id);
 		const forkMessages = forkRecords.flatMap((record) => record.messages);
-		expect(await persistence.store.getCompactions(forked.id)).toEqual([]);
+		expect(await persistence.storage.getCompactions(forked.id)).toEqual([]);
 		expect(forkRecords).toHaveLength(2);
 		expect(forkMessages.map(({ id }) => id)).not.toContain(
 			sessionMessageId("compaction-after-cut-suffix")
 		);
-		expect((await persistence.store.getSession(forked.id)).model).toEqual(
+		expect((await persistence.storage.getSession(forked.id)).model).toEqual(
 			selectedAtCut
 		);
-		expect((await persistence.store.getSession(created.id)).model).toEqual(
+		expect((await persistence.storage.getSession(created.id)).model).toEqual(
 			selectedAfterCut
 		);
 	} finally {
@@ -1271,7 +1275,7 @@ test("fork replay rejects dangling record, submission, and compaction provenance
 	const persistence = createPersistence("dangling-fork-provenance");
 	try {
 		const sourceTurnId = agentTurnId("dangling-fork-source-turn");
-		const source = await persistence.store.createSession({
+		const source = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("Fork replay reference source.", {
 				submissionId: toSubmissionId("dangling-fork-source-submission"),
@@ -1298,12 +1302,12 @@ test("fork replay rejects dangling record, submission, and compaction provenance
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: terminalRecord,
 			sessionId: source.id,
 		});
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			source.id,
 			{ recordId: terminalRecord.id },
 			"dangling-fork-provenance-operation"
@@ -1454,7 +1458,7 @@ test("fork provenance waits for a concurrent source append before declaring it u
 	let appendPromise: Promise<unknown> | undefined;
 	try {
 		const sourceTurnId = agentTurnId("fork-provenance-live-source-turn");
-		const source = await persistence.store.createSession({
+		const source = await persistence.storage.createSession({
 			agent: agentId("build"),
 			message: createSessionUserMessage("Keep fork provenance readable."),
 			model: DEFAULT_PROVIDER_MODEL_SELECTION,
@@ -1478,12 +1482,12 @@ test("fork provenance waits for a concurrent source append before declaring it u
 			turnId: sourceTurnId,
 			version: SESSION_RECORD_VERSION,
 		};
-		await persistence.store.commitSessionRecord({
+		await persistence.storage.commitSessionRecord({
 			record: terminalRecord,
 			sessionId: source.id,
 		});
 		const forked = await invokeFork(
-			persistence.store,
+			persistence.storage,
 			source.id,
 			{ recordId: terminalRecord.id },
 			"fork-provenance-concurrent-append-operation"
@@ -1492,7 +1496,7 @@ test("fork provenance waits for a concurrent source append before declaring it u
 			resolveSessionLogFilePath(persistence.logRoot, source.id)
 		);
 		pauseSourceAppend = true;
-		appendPromise = persistence.store.commitSessionRecord({
+		appendPromise = persistence.storage.commitSessionRecord({
 			record: {
 				agentId: agentId("build"),
 				id: sessionRecordId("fork-provenance-later-source-record"),
@@ -1522,7 +1526,7 @@ test("fork provenance waits for a concurrent source append before declaring it u
 				`Source append did not pause at ${sourceLogPath}; last write was ${lastWriteFilePath}.`
 			);
 		}
-		const provenancePromise = persistence.store.getSessionForkProvenance(
+		const provenancePromise = persistence.storage.getSessionForkProvenance(
 			forked.id
 		);
 		await Bun.sleep(30);
@@ -1541,7 +1545,7 @@ test("fork provenance waits for a concurrent source append before declaring it u
 
 test("forking a terminal Agent Turn publishes an independent remapped prefix and retries to the same Session", async () => {
 	const persistence = createPersistence("terminal-prefix");
-	const store = persistence.store;
+	const store = persistence.storage;
 	try {
 		const sourceTurnId = agentTurnId("fork-source-turn");
 		const fileObservationStore = store.fileObservationStore;

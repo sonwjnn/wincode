@@ -3,21 +3,13 @@ import type {
 	SessionFilePart,
 	SessionMessage,
 } from "@/modules/sessions/message";
+import type { PromptHistoryEntry as StoredPromptHistoryEntry } from "@/modules/sessions/storage/prompt-history";
 import { expandPastedText } from "../../pasted-text";
-import type {
-	SessionStore,
-	PromptHistoryEntry as StoredPromptHistoryEntry,
-} from "../../storage/session-store";
 
 /** Prompt-history state enriched with transient composer-only command intent. */
 export type PromptHistoryEntry = StoredPromptHistoryEntry & {
 	commandSelections?: readonly TrackedSubmissionIntent[];
 };
-
-export type PromptHistoryStore = Pick<
-	SessionStore,
-	"externalizeAttachments" | "getPromptHistory" | "recordPrompt"
->;
 
 const empty = (): PromptHistoryEntry => ({ text: "", files: [] });
 const sameFiles = (a: PromptHistoryEntry, b: PromptHistoryEntry): boolean =>

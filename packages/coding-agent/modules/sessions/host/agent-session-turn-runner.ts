@@ -57,7 +57,8 @@ import {
 	ProviderCollectionUnavailableError,
 	pluginProvidersFromRuntime,
 } from "../provider-collection";
-import type { SessionStore } from "../storage/session-store";
+import type { SessionLifecycle } from "../storage/session-lifecycle";
+import type { SessionRecords } from "../storage/session-records";
 import {
 	createTurnExecution,
 	type TurnExecution,
@@ -253,7 +254,10 @@ const collectExistingToolNames = (
 export type AgentSessionTurnRunnerOptions = Readonly<{
 	cacheWarming: SessionCacheWarming;
 	capabilities: TurnRunnerCapabilities;
+	/** Reads the Edit Mode a turn's edit tools run under; it can change between turns. */
+	editMode: Pick<SessionLifecycle, "getEditMode">;
 	providerCollection: ProviderCollection;
+	records: SessionRecords;
 	sessionId: SessionId;
 	statefulAgent: StatefulAgent<SessionQueuedSubmission>;
 }>;
@@ -268,6 +272,8 @@ export type AgentSessionTurnRunnerOptions = Readonly<{
 export const createAgentSessionTurnRunner = ({
 	cacheWarming,
 	capabilities,
+	editMode: editModeFacet,
+	records: recordFacet,
 	providerCollection,
 	sessionId,
 	statefulAgent,
@@ -355,8 +361,7 @@ export const createAgentSessionTurnRunner = ({
 
 	const prepareAgentTurn = async (
 		request: SessionTurnRequest,
-		scope: TurnExecution,
-		sessionStore: SessionStore
+		scope: TurnExecution
 	): Promise<AgentTurn> => {
 		const { execution, messages, resolvedAgent, signal } = request;
 		assertPluginProviderSelectionOwner(
@@ -367,13 +372,12 @@ export const createAgentSessionTurnRunner = ({
 		);
 		const config = capabilities.getConfig();
 		const versionedEditing: VersionedEditingContext | undefined =
-			sessionStore.fileObservationStore === undefined
+			recordFacet.fileObservationStore === undefined
 				? undefined
 				: {
-						editMode:
-							(await sessionStore.getEditMode?.(sessionId)) ?? "hashline",
+						editMode: await editModeFacet.getEditMode(sessionId),
 						sessionId,
-						store: sessionStore.fileObservationStore,
+						store: recordFacet.fileObservationStore,
 					};
 		const providerModel = providerCollection.getModel(
 			execution.model.providerId,
@@ -499,8 +503,7 @@ export const createAgentSessionTurnRunner = ({
 		scopes.set(execution.turnId, scope);
 		let turn: AgentTurn | undefined;
 		try {
-			const sessionStore = capabilities.getStore();
-			turn = await prepareAgentTurn(request, scope, sessionStore);
+			turn = await prepareAgentTurn(request, scope);
 			const modelRetry = await resolveSessionModelRetryPolicy(
 				capabilities.getConfig()
 			);

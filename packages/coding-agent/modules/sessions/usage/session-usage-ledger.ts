@@ -1,13 +1,13 @@
+import type {
+	CreateSessionUsageEntryInput,
+	SessionUsageEntry,
+} from "@/modules/sessions/storage/session-catalog";
 import type { SessionId } from "@/shared/identifiers";
+import type { SessionCatalog } from "../storage/session-catalog";
 import {
 	requireSessionWriteReady,
 	SessionWriteOutcomeError,
 } from "../storage/session-jsonl-store";
-import type {
-	CreateSessionUsageEntryInput,
-	SessionStore,
-	SessionUsageEntry,
-} from "../storage/session-store";
 
 export type SessionUsageLedger = Readonly<{
 	dispose: () => void;
@@ -21,7 +21,7 @@ export type SessionUsageLedger = Readonly<{
 export type SessionUsageLedgerOptions = Readonly<{
 	initialEntries: readonly SessionUsageEntry[];
 	sessionId: SessionId;
-	store: Pick<SessionStore, "createSessionUsageEntry">;
+	store: Pick<SessionCatalog, "createSessionUsageEntry">;
 }>;
 
 /** One Session-owned durable ledger shared by cache warming and compaction. */

@@ -69,7 +69,7 @@ const sdk = await createSessionSdkWithRuntime({
 	cwd: workspace,
 	databasePath,
 	pluginPaths: [],
-	store,
+	storage: store,
 	workspace,
 });
 const sessionId = await sdk.createEmptySession({

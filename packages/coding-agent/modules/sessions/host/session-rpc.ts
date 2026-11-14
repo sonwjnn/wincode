@@ -25,9 +25,8 @@ export type {
 export { createSessionUserMessage } from "../message";
 export type {
 	CreateSessionUsageEntryInput,
-	SessionStore,
 	SessionUsageEntry,
-} from "../storage/session-store";
+} from "../storage/session-catalog";
 export type { SessionSendInput } from "../submission-types";
 export type {
 	SessionPluginPolicy,

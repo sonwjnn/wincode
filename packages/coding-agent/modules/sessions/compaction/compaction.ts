@@ -39,14 +39,15 @@ import {
 	estimateAttachmentTokens,
 	formatAttachmentUnavailableMarker,
 	getAttachmentReference,
-	type SessionAttachmentStore,
 } from "../storage/attachment-store";
+import type { SessionAttachments } from "../storage/session-attachments";
+import type { SessionHistory } from "../storage/session-history";
 import {
 	isSessionWriteIndeterminate,
 	requireSessionWriteReady,
 } from "../storage/session-jsonl-store";
 import { isDurableSessionPart } from "../storage/session-record";
-import type { SessionStore } from "../storage/session-store";
+import type { SessionRecords } from "../storage/session-records";
 import {
 	estimateSessionContextTokens,
 	estimateSessionContextTokensForThreshold,
@@ -191,10 +192,8 @@ export const rebuildActiveMessages = (
 	return [createCompactionSummaryMessage(latest), ...activeMessages];
 };
 
-type CompactionStore = Pick<
-	SessionStore,
-	"appendCompaction" | "getLatestCompaction"
->;
+type CompactionStore = Pick<SessionRecords, "appendCompaction"> &
+	Pick<SessionHistory, "getLatestCompaction">;
 
 type CompactionRequestSettings = Pick<
 	ResolvedCompactionSettings,
@@ -310,7 +309,8 @@ const sameIntent = (left: CompactionIntent, right: CompactionIntent): boolean =>
 	left.focus === right.focus && left.trigger === right.trigger;
 
 type CompactionModuleDependencies = {
-	attachmentStore?: SessionAttachmentStore;
+	/** The Session Attachments facet: blob leases and metadata, never a raw sub-store. */
+	attachments?: SessionAttachments;
 	lifecycle?: CompactionLifecycle;
 	store: CompactionStore;
 	summaryGenerator?: SummaryGenerator;
@@ -1198,15 +1198,17 @@ const assertNotAborted = (signal?: AbortSignal): void => {
 };
 
 const externalizeForCompaction = async (
-	attachmentStore: SessionAttachmentStore | undefined,
+	externalizeAttachments:
+		| SessionAttachments["externalizeAttachments"]
+		| undefined,
 	messages: SessionMessage[],
 	signal?: AbortSignal
 ): Promise<AttachmentExternalizationLease> => {
-	if (!attachmentStore) {
+	if (!externalizeAttachments) {
 		return { messages, release: async () => undefined };
 	}
 	try {
-		return await attachmentStore.externalizeMessagesWithLease(messages, signal);
+		return await externalizeAttachments(messages, signal);
 	} catch (error) {
 		if (signal?.aborted) {
 			throw new SessionCompactionError(
@@ -1641,7 +1643,7 @@ const produceCompactionSummary = async ({
 };
 
 export const createSessionCompaction = ({
-	attachmentStore,
+	attachments,
 	lifecycle,
 	store,
 	summaryGenerator,
@@ -1782,7 +1784,7 @@ export const createSessionCompaction = ({
 			)
 		);
 		const externalization = await externalizeForCompaction(
-			attachmentStore,
+			attachments?.externalizeAttachments,
 			replaySafeMessages,
 			input.signal
 		);
@@ -1817,8 +1819,8 @@ export const createSessionCompaction = ({
 								},
 				}),
 			};
-			const attachmentMetadata = attachmentStore
-				? await attachmentStore.getCompactionMetadata(summarySpan, input.signal)
+			const attachmentMetadata = attachments
+				? await attachments.getCompactionMetadata(summarySpan, input.signal)
 				: undefined;
 			const fileOperations = collectCumulativeFileOperations({
 				messages: summarySpan,
