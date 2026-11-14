@@ -72,5 +72,6 @@ bun scripts/test-curation/report.ts                   # rewrites docs/test-curat
 
 - Line coverage only: Bun's lcov reporter emits no `BRDA` records, so no branch data exists.
 - Per-test coverage comes from running each test alone (`-t`), which discards cross-test state; tests with duplicate names are recorded as ambiguous unions.
+- `cluster.ts` extracts `test(...)`/`it(...)` calls, not `test.each` tables, so a table-driven case is measured by coverage but never clusters.
 - The revert arm reverse-applies only the cluster's subject module; a reverted fix can still touch shared code, so a detection there is weaker evidence than an asymmetric operator mutant.
 - Numbers describe one commit. Re-run after large refactors rather than citing a stale log.

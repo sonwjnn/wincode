@@ -194,60 +194,208 @@ const tierOf = (file: string): "core" | "extended" | "smoke" => {
 	return "extended";
 };
 
-const CLUSTER_VERDICTS: Record<number, { category: string; why: string }> = {
-	0: {
+type ClusterVerdict = {
+	category: "keep" | "merge-candidate";
+	members: readonly { file: string; name: string }[];
+	why: string;
+};
+
+/**
+ * Analyst decisions for clusters whose members share an identical covered-line
+ * set. Keyed by member identity rather than cluster index so a re-run that adds
+ * or removes a cluster cannot silently shift a verdict onto the wrong tests.
+ */
+const CLUSTER_VERDICTS: readonly ClusterVerdict[] = [
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/prompt-config-provider.test.ts",
+				name: "resets to low when the newly selected Provider Model supports it",
+			},
+			{
+				file: "packages/coding-agent/test/prompt-config-provider.test.ts",
+				name: "uses a higher-first fallback when the new model does not support low",
+			},
+			{
+				file: "packages/coding-agent/test/prompt-config-provider.test.ts",
+				name: "falls back to the closest lower supported level when no higher level exists",
+			},
+			{
+				file: "packages/coding-agent/test/prompt-config-provider.test.ts",
+				name: "uses explicit Off only when it is the sole supported fallback",
+			},
+		],
 		why: "Four distinct thinking-level fallback policies: lower-level reset, higher-first fallback, closest-lower fallback, Off only when sole. Same resolver, different rules.",
 	},
-	1: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/application/plugin-registry.test.ts",
+				name: "an undeclared policy category is rejected during plugin registration",
+			},
+			{
+				file: "packages/coding-agent/test/application/plugin-registry.test.ts",
+				name: "a family adapter must match its declared policy category",
+			},
+			{
+				file: "packages/coding-agent/test/application/plugin-registry.test.ts",
+				name: "providers without a context projection are rejected before resolution",
+			},
+		],
 		why: "Three distinct plugin-registration rejections: undeclared policy category, family/category mismatch, missing context projection.",
 	},
-	7: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/sessions/compaction.test.ts",
+				name: "only one compaction operation runs per session",
+			},
+			{
+				file: "packages/coding-agent/test/sessions/compaction.test.ts",
+				name: "joins an in-flight maintenance compaction across a selection change",
+			},
+		],
 		why: "Two different concurrency invariants: single in-flight compaction per session vs joining an in-flight maintenance compaction across a selection change.",
 	},
-	10: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/clipboard-selection-interactions.test.tsx",
+				name: "the copy shortcut copies a selection in manual mode",
+			},
+			{
+				file: "packages/coding-agent/test/clipboard-selection-interactions.test.tsx",
+				name: "the copy shortcut copies a selected range without clearing it",
+			},
+		],
 		why: "Manual-mode copy vs range copy without clearing: different mode flag and different post-state.",
 	},
-	17: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/sessions/compaction.test.ts",
+				name: "a Plugin custom summary still passes host validation and persistence",
+			},
+			{
+				file: "packages/coding-agent/test/sessions/compaction.test.ts",
+				name: "a Plugin summary avoids invoking a summary generator",
+			},
+		],
 		why: "Plugin summary persistence/validation vs generator must not be invoked: different oracles on the same path.",
 	},
-	23: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/ai/test/sdk-opencode-go-provider.test.ts",
+				name: "grok-4.6 avoids OpenCode Go's rejecting Chat Completions protocol",
+			},
+			{
+				file: "packages/ai/test/sdk-opencode-go-provider.test.ts",
+				name: "gpt-6-luna is selectable through OpenCode Go's Responses route",
+			},
+		],
 		why: "Two model-specific protocol routing rules (avoid Chat Completions vs selectable via Responses).",
 	},
-	24: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/application/cli-startup.test.ts",
+				name: "interactive entrypoint statically loads before runtime context is initialized",
+			},
+			{
+				file: "packages/coding-agent/test/application/cli-startup.test.ts",
+				name: "CLI help remains available before an interactive runtime is initialized",
+			},
+		],
 		why: "Two separate subprocess CLI behaviors: static load order vs help availability before runtime init.",
 	},
-	25: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/clipboard.test.ts",
+				name: "returns no content when the clipboard has no accepted image type",
+			},
+			{
+				file: "packages/coding-agent/test/clipboard.test.ts",
+				name: "returns no content when the platform cannot read images",
+			},
+		],
 		why: "Two distinct clipboard statuses (empty vs unsupported) mapping to the same no-content result.",
 	},
-	27: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/provider-themes.test.ts",
+				name: "resolves every bundled theme with complete markdown and syntax tokens",
+			},
+			{
+				file: "packages/coding-agent/test/provider-themes.test.ts",
+				name: "resolves every bundled theme with complete diff tokens",
+			},
+		],
 		why: "Markdown/syntax token keys vs diff token keys: disjoint key sets.",
 	},
-	28: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/provider-themes.test.ts",
+				name: "every bundled theme has a complete opencode-sourced override entry",
+			},
+			{
+				file: "packages/coding-agent/test/provider-themes.test.ts",
+				name: "every bundled theme has a complete OpenCode diff override entry",
+			},
+		],
 		why: "OpenCode markdown override entries vs diff override entries: disjoint override maps.",
 	},
-	30: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/sessions/compaction.test.ts",
+				name: "does not summarize history already covered by the recent budget",
+			},
+			{
+				file: "packages/coding-agent/test/sessions/compaction.test.ts",
+				name: "does not summarize when all complete history fits recent budget",
+			},
+		],
 		why: "Two distinct compaction guards: history already inside the recent budget vs all complete history inside it.",
 	},
-	33: {
-		category: "merge-candidate",
-		why: "Same request, same expected error; only the incompleteness reason differs (output-limit vs filtered). A table-driven test preserves both inputs and the shared oracle.",
-	},
-	34: {
+	{
 		category: "keep",
+		members: [
+			{
+				file: "packages/coding-agent/test/sessions/user-message.test.ts",
+				name: "accepts complete skill metadata",
+			},
+			{
+				file: "packages/coding-agent/test/sessions/user-message.test.ts",
+				name: "accepts sanitized activation metadata without instructions",
+			},
+		],
 		why: "Complete skill metadata vs activation metadata without instructions: the second asserts absence, which the first does not.",
 	},
-};
+];
+
+const verdictFor = (cluster: ClusterCoverage): ClusterVerdict | undefined =>
+	CLUSTER_VERDICTS.find((verdict) =>
+		cluster.members.some((member) =>
+			verdict.members.some(
+				(entry) => entry.file === member.file && entry.name === member.name
+			)
+		)
+	);
 
 const revertByCluster = new Map(
 	revert.results.map((entry) => [entry.cluster, entry])
@@ -440,7 +588,7 @@ const identicalClusters = coverage.clusterCoverage
 	.map((cluster, index) => ({ cluster, index }))
 	.filter(({ cluster }) => cluster.identicalPairs > 0);
 for (const { cluster, index } of identicalClusters) {
-	const verdict = CLUSTER_VERDICTS[index] ?? {
+	const verdict = verdictFor(cluster) ?? {
 		category: "review",
 		why: "not reviewed",
 	};
@@ -449,8 +597,16 @@ for (const { cluster, index } of identicalClusters) {
 	);
 }
 A();
+const keepClusters = identicalClusters.filter(
+	({ cluster }) => verdictFor(cluster)?.category === "keep"
+).length;
+const mergeClusters = identicalClusters.filter(
+	({ cluster }) => verdictFor(cluster)?.category === "merge-candidate"
+).length;
 A(
-	`**Result: ${identicalClusters.length - 1} of ${identicalClusters.length} clusters are distinct oracles that happen to share a code path; ${asymmetricPairs} of their pairs are proven distinct by asymmetric kill-sets. One cluster is a merge candidate.** The sharpest case is not in a cluster at all — it is a 99%-identical coverage pair in \`packages/utils/test/scalar-predicates.test.ts\`:`
+	mergeClusters === 0
+		? `**Result: all ${identicalClusters.length} identical-coverage clusters are distinct oracles that happen to share a code path; ${asymmetricPairs} of their pairs are proven distinct by asymmetric kill-sets. No merge candidate remains: the pair the previous audit found (\`summary-generator.test.ts\` output-limit vs filtered) is now one table-driven test.** The sharpest case is not in a cluster at all — it is a 99%-identical coverage pair in \`packages/utils/test/scalar-predicates.test.ts\`:`
+		: `**Result: ${keepClusters} of ${identicalClusters.length} clusters are distinct oracles that happen to share a code path; ${asymmetricPairs} of their pairs are proven distinct by asymmetric kill-sets. ${mergeClusters} cluster(s) remain merge candidates.** The sharpest case is not in a cluster at all — it is a 99%-identical coverage pair in \`packages/utils/test/scalar-predicates.test.ts\`:`
 );
 A();
 A(
@@ -560,16 +716,14 @@ A();
 A("Categories follow the skill's four states, each with its own action.");
 A();
 const keepClusterSizes = identicalClusters
-	.filter(({ index }) => CLUSTER_VERDICTS[index]?.category === "keep")
+	.filter(({ cluster }) => verdictFor(cluster)?.category === "keep")
 	.reduce((sum, { cluster }) => sum + cluster.size, 0);
 const provenKeep = [...asymmetricClusters.keys()].reduce(
 	(sum, index) => sum + (coverage.clusterCoverage[index]?.size ?? 0),
 	0
 );
 const mergeSize = identicalClusters
-	.filter(
-		({ index }) => CLUSTER_VERDICTS[index]?.category === "merge-candidate"
-	)
+	.filter(({ cluster }) => verdictFor(cluster)?.category === "merge-candidate")
 	.reduce((sum, { cluster }) => sum + cluster.size, 0);
 const reviewSize =
 	coverage.clusterCoverage.reduce((sum, cluster) => sum + cluster.size, 0) -
@@ -664,7 +818,7 @@ A(
 A("|---|---|---|---|---|---|---|---|---|");
 let auditRows = 0;
 coverage.clusterCoverage.forEach((cluster, index) => {
-	const verdict = CLUSTER_VERDICTS[index] ?? {
+	const verdict = verdictFor(cluster) ?? {
 		category: "review-candidate",
 		why: "near-duplicate, kill-set inconclusive",
 	};
@@ -706,7 +860,7 @@ A(
 	`| Per-test contexts captured | Partial by design: Bun has no dynamic contexts. ${coverage.tests} isolated runs; ${coverage.ambiguousTests} ambiguous-name cases flagged; no branch data exists (0 \`BRDA\` records). |`
 );
 A(
-	`| No deletion rests on coverage equality | Holds: 0 deletions proposed. The ${identicalClusters.length} identical-coverage clusters were reviewed individually; ${identicalClusters.length - 1} are keeps. |`
+	`| No deletion rests on coverage equality | Holds: 0 deletions proposed. The ${identicalClusters.length} identical-coverage clusters were reviewed individually; ${keepClusters} are keeps. |`
 );
 A(
 	"| Quarantine before removal | Not applicable: nothing was removed or quarantined. The log records zero deletions, so `git log --diff-filter=D -- tests/` is unchanged. |"
@@ -724,7 +878,7 @@ A();
 A("## 13. If this proceeds");
 A();
 A(
-	"1. Only one cluster (33, `summary-generator.test.ts:702/711`) has an identical setup and oracle. Folding it into a table-driven test is the only change this audit supports, and it is optional: it removes no assertion."
+	"1. This run finds no merge candidate. The one the previous audit found (`summary-generator.test.ts`, output-limit vs filtered) is now a single table-driven test in commit `7d2d57a6`; it kept both inputs and the shared oracle."
 );
 A(
 	"2. `session-host.test.ts`'s Google-cache test is fixed at the root: the volatile environment block left the cacheable system prefix, so live repository churn no longer invalidates the second Host's Cache. The test keeps running against the repository workspace as the regression check, and no quarantine was needed."
@@ -733,7 +887,7 @@ A(
 	"3. If any candidate is ever quarantined under a different review, follow the skill's order: skip/xfail with the log row id, named approver, two-release observation window, escaped-defect watch, then delete in small batches with `mutation_check: yes` recorded per row."
 );
 A(
-	`4. Do not prune on coverage: in this repo, ${((100 * coverage.linesCoveredByTwoOrMore) / coverage.distinctAppLines).toFixed(0)}% of covered lines are shared and ${coverage.coverageEqualityGroups.length} test groups are coverage-identical, so a coverage-driven prune would have flagged real oracles as redundant ${identicalClusters.length - 1} times out of ${identicalClusters.length}.`
+	`4. Do not prune on coverage: in this repo, ${((100 * coverage.linesCoveredByTwoOrMore) / coverage.distinctAppLines).toFixed(0)}% of covered lines are shared and ${coverage.coverageEqualityGroups.length} test groups are coverage-identical, so a coverage-driven prune would have flagged real oracles as redundant ${keepClusters} times out of ${identicalClusters.length}.`
 );
 
 await Bun.write(outFile, `${lines.join("\n")}\n`);
