@@ -299,18 +299,25 @@ export const createProjectedSessionStore = (
 		projection.getMaintenanceState().status === "ready" &&
 		(await logChangedSinceProjectionRead(logPath, capturedBytes));
 
+	const assertProjectionSessionBound = async (
+		sessionId: SessionId,
+		logPath: string
+	): Promise<void> => {
+		if (projection.isBoundToWorkspace(sessionId)) {
+			return;
+		}
+		if (!projection.isBoundToAnotherWorkspace(sessionId)) {
+			await fs.stat(logPath);
+		}
+		throw new Error("Session not found");
+	};
+
 	const ensureProjected = async (
 		sessionId: SessionId
 	): Promise<SessionLogState> => {
 		const generation = assertProjectionReady(sessionId);
 		const logPath = await log.logPath(sessionId);
-		if (!projection.isBoundToWorkspace(sessionId)) {
-			if (projection.isBoundToAnotherWorkspace(sessionId)) {
-				throw new Error("Session not found");
-			}
-			await fs.stat(logPath);
-			throw new Error("Session not found");
-		}
+		await assertProjectionSessionBound(sessionId, logPath);
 		await ports.checkDeletedMarker(sessionId);
 		for (let attempt = 0; attempt < 5; attempt += 1) {
 			let capturedBytes: Uint8Array | undefined;
@@ -427,12 +434,7 @@ export const createProjectedSessionStore = (
 		const generation = assertProjectionReady(sessionId);
 		const logPath = await log.logPath(sessionId);
 		await ports.reconcileDeletedSessionIfNeeded(sessionId);
-		if (!projection.isBoundToWorkspace(sessionId)) {
-			if (!projection.isBoundToAnotherWorkspace(sessionId)) {
-				await fs.stat(logPath);
-			}
-			throw new Error("Session not found");
-		}
+		await assertProjectionSessionBound(sessionId, logPath);
 		await ports.checkDeletedMarker(sessionId);
 		if (await hasPendingProjectionRecovery(sessionId)) {
 			await ensureProjected(sessionId);

@@ -133,7 +133,7 @@ export type SessionWrite = Readonly<{
 	type: Exclude<SessionLogEnvelope["type"], "session.header">;
 }>;
 
-export type SessionHistoryWrite = SessionWrite &
+type SessionHistoryWrite = SessionWrite &
 	Readonly<{ type: SessionHistoryEntryEventType }>;
 
 export const isSessionHistoryWrite = (
@@ -166,20 +166,18 @@ export const sessionDeletionOperationId = (sessionId: SessionId): string =>
 export const operationIdFileStem = (operationId: string): string =>
 	new Bun.CryptoHasher("sha256").update(operationId).digest("hex");
 
-type SerialQueue = KeyedSerialQueue;
-
 // One serial queue per canonical log root: two store instances over the same
 // root share it, so an in-process append from either one waits instead of
 // racing into the process-owned writer lock. Queue identity is the canonical
 // root, not the store instance and not the call site.
-const appendQueues = new Map<string, SerialQueue>();
-const forkQueues = new Map<string, SerialQueue>();
-const writerQueues = new Map<string, SerialQueue>();
+const appendQueues = new Map<string, KeyedSerialQueue>();
+const forkQueues = new Map<string, KeyedSerialQueue>();
+const writerQueues = new Map<string, KeyedSerialQueue>();
 
 const serialQueueFor = async (
 	logRoot: string,
-	registry: Map<string, SerialQueue>
-): Promise<SerialQueue> => {
+	registry: Map<string, KeyedSerialQueue>
+): Promise<KeyedSerialQueue> => {
 	const root = await canonicalLogRoot(logRoot);
 	let queue = registry.get(root);
 	if (queue === undefined) {
@@ -254,7 +252,7 @@ export const writeFully = async (
 	}
 };
 
-export const syncFile = async (
+const syncFile = async (
 	filePath: string,
 	handle: fs.FileHandle,
 	fileIo: SessionLogFileIo
@@ -267,7 +265,7 @@ export const syncFile = async (
 };
 
 /** Windows FlushFileBuffers requires GENERIC_WRITE, including for existing files. */
-export const openFileForSync = (filePath: string): Promise<fs.FileHandle> =>
+const openFileForSync = (filePath: string): Promise<fs.FileHandle> =>
 	fs.open(filePath, process.platform === "win32" ? "r+" : "r");
 
 export const syncDirectory = async (
@@ -338,7 +336,7 @@ export const firstDifferentByteOffset = (
 export const equalBytes = (left: Uint8Array, right: Uint8Array): boolean =>
 	firstDifferentByteOffset(left, right) === undefined;
 
-export const sessionWriteIntentPath = async (
+const sessionWriteIntentPath = async (
 	logRoot: string,
 	sessionId: SessionId
 ): Promise<string> =>
@@ -667,7 +665,7 @@ export const readSessionWriteIntent = async (
 	return intent;
 };
 
-export const writeSessionWriteIntent = async (
+const writeSessionWriteIntent = async (
 	logRoot: string,
 	intent: SessionWriteIntent & Readonly<{ timestamp: string }>,
 	fileIo: SessionLogFileIo
@@ -821,7 +819,7 @@ export const readSessionForkIntent = async (
 	return parsed.data;
 };
 
-export const publishCreateOnceJsonMarker = async <Value>({
+const publishCreateOnceJsonMarker = async <Value>({
 	directory,
 	fileIo,
 	markerPath,
@@ -872,7 +870,7 @@ export const publishCreateOnceJsonMarker = async <Value>({
 	}
 };
 
-export const writeSessionForkIntent = async (
+const writeSessionForkIntent = async (
 	logRoot: string,
 	intent: SessionForkIntent,
 	sourceSessionId: SessionId,
@@ -957,7 +955,7 @@ const sessionForkActionPath = async (
 	);
 };
 
-export const readSessionForkAction = async (
+const readSessionForkAction = async (
 	logRoot: string,
 	sourceSessionId: SessionId,
 	checkpoint: SessionForkCheckpoint
@@ -996,7 +994,7 @@ export const readSessionForkAction = async (
 	return parsed.data;
 };
 
-export const writeSessionForkAction = async (
+const writeSessionForkAction = async (
 	logRoot: string,
 	action: SessionForkAction,
 	checkpoint: SessionForkCheckpoint,
@@ -1077,7 +1075,7 @@ export const clearSessionForkAction = async (
 	}
 };
 
-export const clearSessionWriteIntent = async (
+const clearSessionWriteIntent = async (
 	logRoot: string,
 	intent: SessionWriteIntent,
 	fileIo: SessionLogFileIo
@@ -1099,7 +1097,7 @@ export const clearSessionWriteIntent = async (
 	);
 };
 
-export const syncAndVerifyLogSuffix = async (
+const syncAndVerifyLogSuffix = async (
 	logPath: string,
 	startOffset: number,
 	capturedBytes: Uint8Array,
@@ -1228,7 +1226,7 @@ const ensureDurableQuarantineArtifact = async (
 	}
 };
 
-export const quarantinePartialLogAppend = async (
+const quarantinePartialLogAppend = async (
 	logRoot: string,
 	logPath: string,
 	sessionId: SessionId,
@@ -1380,7 +1378,7 @@ export const creationDigest = (
 	return sessionLogOperationDigest("session.created", semantic);
 };
 
-export const findCreationOperation = (
+const findCreationOperation = (
 	state: SessionLogState,
 	write: SessionWrite,
 	sessionId: SessionId
@@ -2070,7 +2068,7 @@ export const createSessionLogFile = async (
 // Tree pages decode JSONL directly, so an append can expose a partial tail.
 // The write intent brackets bytes until sync; checking both sides of the read
 // lets a concurrent reader retry without acquiring writer authority.
-export const readLogForHistoryTree = async (
+const readLogForHistoryTree = async (
 	logRoot: string,
 	fileIo: SessionLogFileIo,
 	logPath: string,
@@ -2231,7 +2229,7 @@ const waitForPendingAppend = async (
 	await Bun.sleep(10);
 };
 
-export const readLogWithRetry = async (
+const readLogWithRetry = async (
 	logRoot: string,
 	fileIo: SessionLogFileIo,
 	sessionId: SessionId
@@ -2255,7 +2253,7 @@ export const readLogWithRetry = async (
 	}
 };
 
-export const readLogSuffix = async (
+const readLogSuffix = async (
 	logRoot: string,
 	fileIo: SessionLogFileIo,
 	sessionId: SessionId,
@@ -2326,7 +2324,7 @@ export type SessionImportActivationMarker = Readonly<{
 	workspaceId: WorkspaceId;
 }>;
 
-export const sessionImportActivationMarkerPath = async (
+const sessionImportActivationMarkerPath = async (
 	logRoot: string,
 	sessionId: SessionId
 ): Promise<string> =>
@@ -2977,7 +2975,7 @@ export function deletionReceiptFromEntry(
 	};
 }
 
-export type SessionDeletionMarker = SessionDeletionReceipt &
+type SessionDeletionMarker = SessionDeletionReceipt &
 	Readonly<{ logId: string }>;
 
 export const readDeletedMarker = async (
