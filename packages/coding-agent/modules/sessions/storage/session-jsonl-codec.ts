@@ -324,7 +324,7 @@ export type SessionJsonlProjection = Readonly<{
 	) => void;
 }>;
 
-export type SessionProjectionBlockedError = Error & {
+type SessionProjectionBlockedError = Error & {
 	code: "session_projection_blocked";
 };
 

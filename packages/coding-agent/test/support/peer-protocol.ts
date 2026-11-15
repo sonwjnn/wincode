@@ -1,5 +1,5 @@
 /** Persistent newline-delimited reader used by the peer-process protocol. */
-export type LineReader = Readonly<{
+type LineReader = Readonly<{
 	close: () => void;
 	next: () => Promise<string>;
 }>;
