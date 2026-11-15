@@ -13,8 +13,10 @@ import { isUndefined } from "@wincode/utils";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { createDatabase } from "@/modules/sessions/storage/client";
-import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
-import type { SessionProjection } from "@/modules/sessions/storage/session-projection";
+import {
+	createDrizzleSessionStore,
+	type DrizzleSessionStore,
+} from "@/modules/sessions/storage/drizzle-session-store";
 import {
 	buildUserSessionRecord,
 	SessionRecordInvariantError,
@@ -133,7 +135,7 @@ const toolRecord = (id: string): SessionRecord => ({
 
 type TestStore = {
 	databasePath: string;
-	storage: SessionProjection;
+	storage: DrizzleSessionStore;
 };
 
 type CreatedSession = {
@@ -154,7 +156,7 @@ const createTestStore = async (): Promise<TestStore> => {
 };
 
 const createSession = async (
-	storage: SessionProjection,
+	storage: DrizzleSessionStore,
 	text = "hello"
 ): Promise<CreatedSession> => {
 	const { id } = await storage.createSession({

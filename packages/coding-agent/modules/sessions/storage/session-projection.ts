@@ -1,18 +1,14 @@
-import type { SessionRecord } from "@wincode/agent-core";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { EditMode, FileObservationStore } from "@/modules/tools";
 import type { SessionId } from "@/shared/identifiers";
 import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
-import type { SessionContextEdit } from "../context-edits";
 import type { SessionMessage } from "../message";
 import type {
 	SessionBundleExportScope,
 	SessionBundleImportResult,
 } from "../session-bundle-contract";
-import type { Session } from "../session-pagination-types";
 import type {
 	AttachmentExternalizationLease,
 	AttachmentExternalizationOptions,
@@ -43,16 +39,14 @@ import type {
 } from "./session-writer-lock";
 
 /**
- * The internal seam between the Session facets and SQLite: the projection
- * tables a Session Log can rebuild. No Session consumer depends on it — only
- * the storage implementation and the tests that exercise projection behavior
- * directly do — and it is deliberately not a facet: its work is synchronous
- * SQLite, its write members return nothing, and `listRecentModelSelections` is
- * the one member whose result is not a promise.
+ * The internal write and maintenance seam between Session facets and the
+ * rebuildable SQLite projection. It is not a Session facet; only the storage
+ * implementation and focused projection tests depend on it.
  *
- * The JSONL store composes this projection with the authoritative logs and
- * exposes the asynchronous Session facets; `ProjectedSession` handles keep
- * projection reads bound to the required generation or read point.
+ * Raw projection row readers are deliberately absent: Session reads go through
+ * ProjectedSession, which binds each operation to head or a Read Point before
+ * returning data to facet orchestration. The JSONL store composes this seam
+ * with authoritative logs and exposes the asynchronous Session facets.
  */
 export type SessionProjection = {
 	acquireSessionWriter: (
@@ -84,28 +78,12 @@ export type SessionProjection = {
 		options?: AttachmentExternalizationOptions
 	) => Promise<AttachmentExternalizationLease>;
 	fileObservationStore?: FileObservationStore;
-	getCompactions: (sessionId: SessionId) => Promise<SessionCompaction[]>;
-	getEditMode: (sessionId: SessionId) => Promise<EditMode>;
-	getLatestCompaction: (
-		sessionId: SessionId
-	) => Promise<SessionCompaction | null>;
-	/** Internal only: the JSONL store reads context edits to build a history snapshot. */
-	getSessionContextEdits: (
-		sessionId: SessionId
-	) => Promise<SessionContextEdit[]>;
-	getSession: (sessionId: SessionId) => Promise<Session>;
 	hydrateAttachments: (
 		messages: readonly SessionMessage[],
 		options: AttachmentHydrationOptions
 	) => Promise<SessionMessage[]>;
 	isSessionImportActivationPending?: (sessionId: SessionId) => Promise<boolean>;
 	isSessionImported?: (sessionId: SessionId) => Promise<boolean>;
-	listRecentModelSelections: (limit: number) => ProviderModelSelection[];
-	listSessionRecords: (sessionId: SessionId) => Promise<SessionRecord[]>;
-	listSessions: () => Promise<Session[]>;
-	listSessionUsageEntries: (
-		sessionId: SessionId
-	) => Promise<SessionUsageEntry[]>;
 	resetSessionData: () => Promise<void>;
 	setEditMode?: (
 		sessionId: SessionId,

@@ -83,7 +83,7 @@ OS_USERNAME="${USER:-${LOGNAME:-$(id -un)}}"
     WINCODE_TEST_SESSION_INDEX_DIR="$TEST_HOME/session-indexes" \
     "$BUN_PATH" --no-env-file "$PREPARE"
 )
-env -i \
+if env -i \
   PATH="$PATH_VALUE" \
   USER="$OS_USERNAME" \
   LOGNAME="$OS_USERNAME" \
@@ -104,4 +104,10 @@ env -i \
   TMPDIR="$TEST_HOME/tmp" \
   "${COMMAND[@]}" \
   --trust-project \
-  ${PLUGIN_ARGS[@]+"${PLUGIN_ARGS[@]}"}
+  ${PLUGIN_ARGS[@]+"${PLUGIN_ARGS[@]}"}; then
+  EXIT_STATUS=0
+else
+  EXIT_STATUS=$?
+fi
+printf '%s\n' "$EXIT_STATUS" > "$TEST_HOME/.wincode-smoke-exit-status"
+exit "$EXIT_STATUS"

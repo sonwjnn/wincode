@@ -23,7 +23,12 @@ export type SessionWriterPeerResult = Readonly<{
 		| "delete-result"
 		| "read-error"
 		| "read-result"
+		| "rebuild-error"
+		| "rebuild-result"
+		| "tree-page-result"
 		| "unknown-command";
+	issues?: readonly unknown[];
+	nextCursor?: string;
 	outcome?: unknown;
 	recordCount?: number;
 	title?: string;

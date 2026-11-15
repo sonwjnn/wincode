@@ -99,11 +99,11 @@ import {
 	type AttachmentIngestLease,
 	digestBytes,
 } from "./attachment-store";
-import type { DrizzleSessionStore } from "./drizzle-session-store";
+import type { SessionJsonlProjectionStore } from "./drizzle-session-store";
 import { parseSessionLogFileName, resolveSessionLogFilePath } from "./path";
 import {
-	createProjectedSessionStore,
 	type ProjectedSessionStateRead,
+	sessionHistoryTreeProjectionLogId,
 } from "./projected-session";
 import {
 	type PreparedSessionBundleExport,
@@ -147,7 +147,6 @@ import {
 	sessionHistoryEntryIdForRecord,
 	sessionHistoryPathToEntryFromLog,
 	sessionLogOperationDigest,
-	sessionProjectionCursorsEqual,
 	sessionProjectionMatchesState,
 } from "./session-jsonl-codec";
 import { rebuildSessionJsonlProjection } from "./session-jsonl-rebuild";
@@ -236,6 +235,9 @@ import {
 } from "./session-writer-lock";
 
 export type SessionJsonlStoreTestObserver = Readonly<{
+	onSessionHistoryTreeReadPointValidated?: (
+		sessionId: SessionId
+	) => void | Promise<void>;
 	onPluginWriteGenerationValidated?: (
 		write: SessionWrite
 	) => void | Promise<void>;
@@ -597,7 +599,9 @@ const sessionHistoryTreeSnapshotCacheKey = (
 const resolveSessionHistoryTreeSnapshot = (
 	state: SessionLogState,
 	sessionId: SessionId,
-	cursor: SessionHistoryTreePageCursor | undefined
+	cursor: SessionHistoryTreePageCursor | undefined,
+	projectionId: string,
+	generation: number
 ): SessionHistoryTreeSnapshot => {
 	const readPointSequence = state.nextSequence - 1;
 	if (cursor === undefined) {
@@ -606,7 +610,12 @@ const resolveSessionHistoryTreeSnapshot = (
 			readPoint: {
 				kind: "history-tree-read-point",
 				lastHash: state.lastHash,
-				logId: state.logId,
+				logId: sessionHistoryTreeProjectionLogId(
+					sessionId,
+					state.logId,
+					projectionId,
+					generation
+				),
 				readPointSequence,
 				sessionId,
 				version: 1,
@@ -620,7 +629,13 @@ const resolveSessionHistoryTreeSnapshot = (
 	);
 	if (
 		cursor.sessionId !== sessionId ||
-		cursor.logId !== state.logId ||
+		cursor.logId !==
+			sessionHistoryTreeProjectionLogId(
+				sessionId,
+				state.logId,
+				projectionId,
+				generation
+			) ||
 		cursor.readPointSequence > readPointSequence ||
 		cursor.afterSequence > cursor.readPointSequence ||
 		snapshotEntry?.envelope.entryHash !== cursor.lastHash ||
@@ -2641,7 +2656,7 @@ const requirePublishedForkEntries = (
 };
 
 export const createSessionJsonlStore = (
-	projectionStore: DrizzleSessionStore,
+	projectionStore: SessionJsonlProjectionStore,
 	logRoot: string,
 	fileIo: SessionLogFileIo = {},
 	testObserver?: SessionJsonlStoreTestObserver
@@ -2694,7 +2709,7 @@ export const createSessionJsonlStore = (
 		);
 	};
 
-	const projected = createProjectedSessionStore({
+	const projected = projectionStore.createProjectedSessionStore({
 		assertNoUnresolvedOwnedSessionCreations: async (root) =>
 			await assertNoUnresolvedOwnedSessionCreations(root),
 		checkDeletedMarker: async (sessionId) =>
@@ -2703,21 +2718,6 @@ export const createSessionJsonlStore = (
 			pendingCreationAttachmentLeases.has(sessionId) ||
 			pendingAttachmentLeases.has(sessionId),
 		log: sessionLog,
-		projection,
-		projectionStore: {
-			getCompactions: async (sessionId) =>
-				await projectionStore.getCompactions(sessionId),
-			getEditMode: async (sessionId) =>
-				await projectionStore.getEditMode(sessionId),
-			getLatestCompaction: async (sessionId) =>
-				await projectionStore.getLatestCompaction(sessionId),
-			getSession: async (sessionId) =>
-				await projectionStore.getSession(sessionId),
-			listSessionRecords: async (sessionId) =>
-				await projectionStore.listSessionRecords(sessionId),
-			listSessionUsageEntries: async (sessionId) =>
-				await projectionStore.listSessionUsageEntries(sessionId),
-		},
 		reconcileDeletedSessionIfNeeded: async (sessionId) =>
 			await reconcileDeletedSessionIfNeeded(sessionId),
 		reconcileDeletedSessions: async () => await reconcileDeletedSessions(),
@@ -3759,7 +3759,6 @@ export const createSessionJsonlStore = (
 		signal?: AbortSignal
 	) => {
 		throwIfAborted(signal, "Session bundle export was cancelled.");
-		await projected.open(sessionId);
 		await assertSessionWritable(sessionId);
 		const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 		if (pendingIntent !== undefined) {
@@ -3776,33 +3775,21 @@ export const createSessionJsonlStore = (
 		}
 		const canonicalRoot = await fs.realpath(logRoot);
 		const logPath = resolveSessionLogFilePath(canonicalRoot, sessionId);
-		let bytes: Uint8Array;
-		let state: SessionLogState;
-		try {
-			({ bytes, state } = await sessionLog.read(sessionId));
-		} catch (error) {
-			if (isCode(error, "ENOENT")) {
-				throw new SessionLogError(
-					"session_not_found",
-					sessionId,
-					"Session not found.",
-					{ cause: error }
-				);
-			}
-			throw error;
-		}
+		const projectedRead = await (await projected.open(sessionId))
+			.atHeadState()
+			.catch((error: unknown) => {
+				if (isCode(error, "ENOENT")) {
+					throw new SessionLogError(
+						"session_not_found",
+						sessionId,
+						"Session not found.",
+						{ cause: error }
+					);
+				}
+				throw error;
+			});
+		const { bytes, state } = projectedRead;
 		const checked = validateSessionBundleLog(sessionId, bytes, "source");
-		const generation = (await projected.open(sessionId)).generation;
-		const cursor = projection.getCursor(sessionId);
-		(await projected.open(sessionId)).assertCursorWithinLog(cursor, state);
-		if (!sessionProjectionMatchesState(cursor, state, generation)) {
-			throw new SessionLogError(
-				"session_projection_blocked",
-				sessionId,
-				"Session projection is not at the verified JSONL cut; retry after projection recovery."
-			);
-		}
-		await projectionStore.getSession(sessionId);
 		await syncAndVerifyLogPrefix(
 			logPath,
 			bytes,
@@ -4767,43 +4754,6 @@ export const createSessionJsonlStore = (
 		}
 		return writeOutcome;
 	};
-	const pluginSessionStateFor = (
-		entries: readonly SessionLogEntry[],
-		pluginId: string,
-		key: string,
-		selectedHistoryEntryIds?: ReadonlySet<string>
-	): PluginSessionStateRecord | undefined => {
-		let current: PluginSessionStateRecord | undefined;
-		for (const { envelope } of entries) {
-			if (
-				selectedHistoryEntryIds !== undefined &&
-				(envelope.type === "plugin.state-replaced" ||
-					envelope.type === "plugin.state-deleted") &&
-				!selectedHistoryEntryIds.has(String(envelope.payload.historyEntryId))
-			) {
-				continue;
-			}
-			if (
-				envelope.type === "plugin.state-replaced" &&
-				envelope.payload.pluginId === pluginId &&
-				envelope.payload.key === key
-			) {
-				current = {
-					schemaVersion: Number(envelope.payload.schemaVersion),
-					value: envelope.payload.value as PluginSessionStateRecord["value"],
-				};
-				continue;
-			}
-			if (
-				envelope.type === "plugin.state-deleted" &&
-				envelope.payload.pluginId === pluginId &&
-				envelope.payload.key === key
-			) {
-				current = undefined;
-			}
-		}
-		return current;
-	};
 	const getPluginSessionState = async (
 		sessionId: SessionId,
 		pluginId: string,
@@ -4811,19 +4761,8 @@ export const createSessionJsonlStore = (
 	): Promise<PluginSessionStateRecord | undefined> => {
 		validatePluginSessionStatePluginId(pluginId);
 		validatePluginSessionStateKey(key);
-		const [state, historyPath] = await Promise.all([
-			(await (await projected.open(sessionId)).atHeadState()).state,
-			readSessionHistoryPath(sessionId),
-		]);
-		const selectedHistoryEntryIds = new Set(
-			historyPath.entries.map(({ id }) => id)
-		);
-		return pluginSessionStateFor(
-			state.entries,
-			pluginId,
-			key,
-			selectedHistoryEntryIds
-		);
+		const read = await (await projected.open(sessionId)).atHeadState();
+		return read.getPluginSessionState(pluginId, key);
 	};
 	const mutatePluginSessionState = async (
 		sessionId: SessionId,
@@ -4857,8 +4796,10 @@ export const createSessionJsonlStore = (
 			};
 			return await withTemporaryWriter(sessionId, async () => {
 				await assertSessionWritable(sessionId);
-				const state = (await (await projected.open(sessionId)).atHeadState())
-					.state;
+				const projectedRead = await (
+					await projected.open(sessionId)
+				).atHeadState();
+				const { state } = projectedRead;
 				const historyTree = buildSessionHistoryTreeEntries(
 					state,
 					sessionId,
@@ -4883,11 +4824,6 @@ export const createSessionJsonlStore = (
 				if (testObserver?.onPluginWriteGenerationValidated !== undefined) {
 					await testObserver.onPluginWriteGenerationValidated(write);
 				}
-				const selectedHistoryEntryIds = new Set(
-					historyTree.entries
-						.filter(({ selectedPath }) => selectedPath)
-						.map(({ id }) => id)
-				);
 				const historyAwareWrite = withSessionHistoryReferences(
 					sessionId,
 					state,
@@ -4899,12 +4835,7 @@ export const createSessionJsonlStore = (
 					sessionId
 				);
 				if (existingOperation === undefined) {
-					const previous = pluginSessionStateFor(
-						state.entries,
-						pluginId,
-						key,
-						selectedHistoryEntryIds
-					);
+					const previous = projectedRead.getPluginSessionState(pluginId, key);
 					if (
 						previous !== undefined &&
 						previous.schemaVersion !== schemaVersion
@@ -5232,9 +5163,9 @@ export const createSessionJsonlStore = (
 			return { writeOutcome };
 		}
 		try {
-			const entries = await projectionStore.listSessionUsageEntries(
-				input.sessionId
-			);
+			const entries = await (
+				await (await projected.open(input.sessionId)).atHead()
+			).listSessionUsageEntries();
 			const entry = entries.find(({ id }) => id === input.id);
 			if (entry !== undefined) {
 				return { entry, writeOutcome };
@@ -5922,7 +5853,7 @@ export const createSessionJsonlStore = (
 			if (!isCode(error, "ENOENT")) {
 				throw error;
 			}
-			const projectedSessions = await projectionStore.listSessions();
+			const projectedSessions = await projected.listSessions();
 			if (projectedSessions.some((session) => session.id === sessionId)) {
 				throw new SessionLogError(
 					"session_log_corrupt",
@@ -6137,11 +6068,6 @@ export const createSessionJsonlStore = (
 	const listSessionCatalog = async (
 		reconcileDeletions = true
 	): Promise<SessionCatalogResult> => {
-		if (projection.getMaintenanceState().status !== "ready") {
-			throw new Error(
-				"Session projection rebuild is incomplete; retry `wincode sessions rebuild` before listing Sessions."
-			);
-		}
 		await ensureDirectoryDurable(logRoot);
 		const deletionIssues = reconcileDeletions
 			? await reconcileDeletedSessions()
@@ -6152,9 +6078,9 @@ export const createSessionJsonlStore = (
 		for (const issue of deletionIssues) {
 			issues.set(issue.sessionId, issue);
 		}
-		const projected = await projectionStore.listSessions();
+		const projectedSessions = await projected.listSessions();
 		const sessions = await collectCatalogSessions(
-			projected,
+			projectedSessions,
 			sessionIds,
 			issues
 		);
@@ -6164,102 +6090,17 @@ export const createSessionJsonlStore = (
 	const listSessions = async (): Promise<Session[]> =>
 		(await listSessionCatalog()).sessions;
 
-	type RecentModelSelectionsRead = Readonly<{
-		cursors: readonly (SessionProjectionCursor | undefined)[];
-		generation: number;
-		selections: ProviderModelSelection[];
-	}>;
-	const readRecentModelSelections = (
-		sessionIds: readonly SessionId[],
-		limit: number
-	): RecentModelSelectionsRead => {
-		const maintenance = projection.getMaintenanceState();
-		const cursors = sessionIds.map((sessionId) =>
-			projection.getCursor(sessionId)
-		);
-		const selections = projection.withReadyGenerationRead(sessionIds, () =>
-			projectionStore.listRecentModelSelections(limit)
-		);
-		return { cursors, generation: maintenance.generation, selections };
-	};
-	const recentModelSelectionsReadIsCurrent = (
-		sessionIds: readonly SessionId[],
-		read: RecentModelSelectionsRead
-	): boolean => {
-		const maintenance = projection.getMaintenanceState();
-		return (
-			maintenance.status === "ready" &&
-			maintenance.generation === read.generation &&
-			Bun.deepEquals(sessionIds, projection.listBoundSessionIds(), true) &&
-			sessionIds.every((sessionId, index) =>
-				sessionProjectionCursorsEqual(
-					read.cursors[index],
-					projection.getCursor(sessionId)
-				)
-			)
-		);
-	};
-	const isRetryableGenerationError = (error: unknown): boolean =>
-		isCode(error, "session_projection_blocked") &&
-		projection.getMaintenanceState().status === "ready";
-	type RecentModelSelectionsAttempt =
-		| Readonly<{ error?: SessionLogError; kind: "retry" }>
-		| Readonly<{ kind: "ready"; selections: ProviderModelSelection[] }>;
-	const readRecentModelSelectionsAttempt = async (
-		limit: number
-	): Promise<RecentModelSelectionsAttempt> => {
-		const sessionIds = projection.listBoundSessionIds();
-		await projected.catchUpRecentModelSelections(sessionIds);
-		if (!Bun.deepEquals(sessionIds, projection.listBoundSessionIds(), true)) {
-			return { kind: "retry" };
-		}
-		let read: RecentModelSelectionsRead;
-		try {
-			read = readRecentModelSelections(sessionIds, limit);
-		} catch (error) {
-			if (!isRetryableGenerationError(error)) {
-				throw error;
-			}
-			return {
-				kind: "retry",
-				...(error instanceof SessionLogError ? { error } : {}),
-			};
-		}
-		await projected.catchUpRecentModelSelections(sessionIds);
-		return recentModelSelectionsReadIsCurrent(sessionIds, read)
-			? { kind: "ready", selections: read.selections }
-			: { kind: "retry" };
-	};
 	const listRecentModelSelections = async (
 		limit: number
-	): Promise<ProviderModelSelection[]> => {
-		if (limit <= 0) {
-			return [];
-		}
-		let lastGenerationError: SessionLogError | undefined;
-		for (let attempt = 0; attempt < 5; attempt += 1) {
-			const result = await readRecentModelSelectionsAttempt(limit);
-			if (result.kind === "ready") {
-				return result.selections;
-			}
-			if (result.error !== undefined) {
-				lastGenerationError = result.error;
-			}
-		}
-		if (lastGenerationError !== undefined) {
-			throw lastGenerationError;
-		}
-		throw new Error(
-			"Session projections kept changing while reading recent Model selections."
-		);
-	};
+	): Promise<ProviderModelSelection[]> =>
+		await projected.listRecentModelSelections(limit);
 
 	const readCatalogPageInsideLifecycleGate = async (
 		cursor: SessionCatalogPageCursor | undefined,
 		limit: number
 	) =>
 		withSessionCatalogLifecycleGate(logRoot, async () => {
-			const page = projectionStore.readSessionCatalogPageProjection({
+			const page = await projected.readCatalogPage({
 				...(cursor === undefined ? {} : { cursor }),
 				limit,
 			});
@@ -6294,11 +6135,6 @@ export const createSessionJsonlStore = (
 				);
 			}
 			cursor = decoded;
-		}
-		if (cursor === undefined) {
-			await projected.catchUpBoundCatalog();
-		} else {
-			projected.assertCatalogReadPoint(cursor);
 		}
 		const page = await readCatalogPageInsideLifecycleGate(cursor, limit);
 		const nextCursor =
@@ -6349,12 +6185,10 @@ export const createSessionJsonlStore = (
 				}
 				throw error;
 			}
-			const page = await view.read(() =>
-				projectionStore.readSessionHistoryPageProjection(sessionId, {
-					...(cursor === undefined ? {} : { cursor }),
-					limit,
-				})
-			);
+			const page = await view.readHistoryPage({
+				...(cursor === undefined ? {} : { cursor }),
+				limit,
+			});
 			const nextCursor =
 				page.hasMore && page.beforeSequence !== undefined
 					? encodeSessionPageToken({
@@ -6479,7 +6313,28 @@ export const createSessionJsonlStore = (
 		}
 		const handle = await projected.open(sessionId);
 		const view =
-			cursor === undefined ? await handle.atHead() : await handle.at(cursor);
+			cursor === undefined
+				? await handle.atHead()
+				: await handle.at({
+						kind: "history-tree-read-point",
+						lastHash: cursor.lastHash,
+						logId: cursor.logId,
+						readPointSequence: cursor.readPointSequence,
+						sessionId: cursor.sessionId,
+						version: cursor.version,
+					});
+		if (
+			cursor !== undefined &&
+			cursor.afterSequence > cursor.readPointSequence
+		) {
+			throw new SessionPaginationError(
+				"cursor_expired",
+				"Session history tree snapshot is no longer available."
+			);
+		}
+		if (cursor !== undefined) {
+			await testObserver?.onSessionHistoryTreeReadPointValidated?.(sessionId);
+		}
 		return withSessionCatalogLifecycleGate(logRoot, async () => {
 			assertSessionHistoryWorkspaceBinding(sessionId, cursor);
 			try {
@@ -6493,48 +6348,51 @@ export const createSessionJsonlStore = (
 				}
 				throw error;
 			}
-			return await view.read(async () => {
-				const logPath = resolveSessionLogFilePath(
-					await fs.realpath(logRoot),
-					sessionId
-				);
-				if (cursor !== undefined) {
-					const cached = await getCachedSessionHistoryTreeSnapshot(
-						logPath,
-						sessionId,
-						cursor
-					);
-					if (cached !== undefined) {
-						return pageSessionHistoryTree(
-							cached,
-							cached.readPoint,
-							cursor.afterSequence,
-							limit
-						);
-					}
-				}
-				const { state } = await sessionLog.readForHistoryTree(sessionId);
-				const snapshot = resolveSessionHistoryTreeSnapshot(
-					state,
+			const logPath = resolveSessionLogFilePath(
+				await fs.realpath(logRoot),
+				sessionId
+			);
+			if (cursor !== undefined) {
+				const cached = await getCachedSessionHistoryTreeSnapshot(
+					logPath,
 					sessionId,
 					cursor
 				);
-				const tree = buildSessionHistoryTreeEntries(
-					state,
-					sessionId,
-					snapshot.snapshotSequence
-				);
-				const page = pageSessionHistoryTree(
-					tree,
-					snapshot.readPoint,
-					snapshot.afterSequence,
-					limit
-				);
-				if (page.nextCursor !== undefined) {
-					await cacheSessionHistoryTreeSnapshot(logPath, snapshot, tree);
+				if (cached !== undefined) {
+					const page = pageSessionHistoryTree(
+						cached,
+						cached.readPoint,
+						cursor.afterSequence,
+						limit
+					);
+					view.assertCurrent();
+					return page;
 				}
-				return page;
-			});
+			}
+			const state = await view.readHistoryTreeLog();
+			const snapshot = resolveSessionHistoryTreeSnapshot(
+				state,
+				sessionId,
+				cursor,
+				view.projectionId,
+				view.generation
+			);
+			const tree = buildSessionHistoryTreeEntries(
+				state,
+				sessionId,
+				snapshot.snapshotSequence
+			);
+			const page = pageSessionHistoryTree(
+				tree,
+				snapshot.readPoint,
+				snapshot.afterSequence,
+				limit
+			);
+			if (page.nextCursor !== undefined) {
+				await cacheSessionHistoryTreeSnapshot(logPath, snapshot, tree);
+			}
+			view.assertCurrent();
+			return page;
 		});
 	};
 
@@ -6610,91 +6468,89 @@ export const createSessionJsonlStore = (
 		return await withSessionCatalogLifecycleGate(logRoot, async () => {
 			assertSessionHistoryWorkspaceBinding(sessionId, undefined);
 			await checkDeletedMarker(sessionId);
-			return await view.read(async () => {
-				const { state } = await sessionLog.readForHistoryTree(sessionId);
-				const tree = buildSessionHistoryTreeEntries(
-					state,
-					sessionId,
-					state.nextSequence - 1
-				);
-				const entries = tree.entries.filter(({ selectedPath }) => selectedPath);
-				const submissionUpdates = new Map(
-					entries.flatMap((entry) =>
-						entry.kind === "submission-status"
-							? [
-									[
-										`${entry.recordId}\0${entry.messageId}\0${entry.submissionId}`,
-										entry,
-									],
-								]
-							: []
-					)
-				);
-				const records = entries.flatMap((entry) =>
-					entry.kind === "record"
+			const state = await view.readHistoryTreeLog();
+			const tree = buildSessionHistoryTreeEntries(
+				state,
+				sessionId,
+				state.nextSequence - 1
+			);
+			const entries = tree.entries.filter(({ selectedPath }) => selectedPath);
+			const submissionUpdates = new Map(
+				entries.flatMap((entry) =>
+					entry.kind === "submission-status"
 						? [
-								{
-									...entry.record,
-									messages: entry.record.messages.map((message) => {
-										const submissionId = message.metadata?.submissionId;
-										if (message.role !== "user" || submissionId === undefined) {
-											return message;
-										}
-										const status = submissionUpdates.get(
-											`${entry.recordId}\0${message.id}\0${submissionId}`
-										);
-										return status === undefined
-											? message
-											: withSubmissionStatus(message, {
-													failure: status.failure,
-													status: status.status,
-													submissionId: toSubmissionId(status.submissionId),
-												});
-									}),
-								},
+								[
+									`${entry.recordId}\0${entry.messageId}\0${entry.submissionId}`,
+									entry,
+								],
 							]
 						: []
-				);
-				const compactionIds = new Set(
-					entries.flatMap((entry) =>
-						entry.kind === "compaction" ? [entry.compactionId] : []
-					)
-				);
-				const contextEditOperationIds = new Set(
-					entries.flatMap((entry) =>
-						entry.kind === "context-edit" ? [entry.operationId] : []
-					)
-				);
-				const [allCompactions, allContextEdits] = await Promise.all([
-					projectionStore.getCompactions(sessionId),
-					projectionStore.getSessionContextEdits(sessionId),
-				]);
-				let model = state.entries.find(
-					({ envelope }) => envelope.type === "session.created"
-				)?.envelope.payload.model as ProviderModelSelection | undefined;
-				let thinkingLevel = state.entries.find(
-					({ envelope }) => envelope.type === "session.created"
-				)?.envelope.payload.thinkingLevel as ThinkingLevel | undefined;
-				for (const entry of entries) {
-					if (entry.kind !== "record") {
-						continue;
-					}
-					model = entry.sessionModel ?? model;
-					thinkingLevel = entry.sessionThinkingLevel ?? thinkingLevel;
+				)
+			);
+			const records = entries.flatMap((entry) =>
+				entry.kind === "record"
+					? [
+							{
+								...entry.record,
+								messages: entry.record.messages.map((message) => {
+									const submissionId = message.metadata?.submissionId;
+									if (message.role !== "user" || submissionId === undefined) {
+										return message;
+									}
+									const status = submissionUpdates.get(
+										`${entry.recordId}\0${message.id}\0${submissionId}`
+									);
+									return status === undefined
+										? message
+										: withSubmissionStatus(message, {
+												failure: status.failure,
+												status: status.status,
+												submissionId: toSubmissionId(status.submissionId),
+											});
+								}),
+							},
+						]
+					: []
+			);
+			const compactionIds = new Set(
+				entries.flatMap((entry) =>
+					entry.kind === "compaction" ? [entry.compactionId] : []
+				)
+			);
+			const contextEditOperationIds = new Set(
+				entries.flatMap((entry) =>
+					entry.kind === "context-edit" ? [entry.operationId] : []
+				)
+			);
+			const [allCompactions, allContextEdits] = await Promise.all([
+				view.getCompactions(),
+				view.getSessionContextEdits(),
+			]);
+			let model = state.entries.find(
+				({ envelope }) => envelope.type === "session.created"
+			)?.envelope.payload.model as ProviderModelSelection | undefined;
+			let thinkingLevel = state.entries.find(
+				({ envelope }) => envelope.type === "session.created"
+			)?.envelope.payload.thinkingLevel as ThinkingLevel | undefined;
+			for (const entry of entries) {
+				if (entry.kind !== "record") {
+					continue;
 				}
-				return {
-					activeLeafId: tree.activeLeafId,
-					compactions: allCompactions.filter(({ id }) => compactionIds.has(id)),
-					contextEdits: allContextEdits.filter(({ operationId }) =>
-						contextEditOperationIds.has(operationId)
-					),
-					entries,
-					historyGeneration: tree.historyGeneration,
-					model,
-					records,
-					thinkingLevel,
-				};
-			});
+				model = entry.sessionModel ?? model;
+				thinkingLevel = entry.sessionThinkingLevel ?? thinkingLevel;
+			}
+			return {
+				activeLeafId: tree.activeLeafId,
+				compactions: allCompactions.filter(({ id }) => compactionIds.has(id)),
+				contextEdits: allContextEdits.filter(({ operationId }) =>
+					contextEditOperationIds.has(operationId)
+				),
+				entries,
+				historyGeneration: tree.historyGeneration,
+				model,
+				records,
+				thinkingLevel,
+			};
 		});
 	};
 
@@ -7763,56 +7619,52 @@ export const createSessionJsonlStore = (
 				}
 				throw error;
 			}
-			return await view.read(async () => {
-				const statisticsProjection =
-					projectionStore.readSessionStatisticsProjection(
-						sessionId,
-						requestedReadPoint,
-						options.turnId
-					);
-				const forkProvenance =
-					statisticsProjection.forkProvenance === undefined
-						? undefined
-						: toSessionForkProvenance(statisticsProjection.forkProvenance);
-				const { state } = await sessionLog.read(sessionId);
-				const historyTree = buildSessionHistoryTreeEntries(
-					state,
-					sessionId,
-					statisticsProjection.readPoint.readPointSequence
-				);
-				const selectedPath: SessionStatisticsHistoryPath = {
-					compactionIds: new Set(
-						historyTree.entries.flatMap((entry) =>
-							entry.kind === "compaction" && entry.selectedPath
-								? [String(entry.compactionId)]
-								: []
-						)
-					),
-					recordIds: new Set(
-						historyTree.entries.flatMap((entry) =>
-							entry.kind === "record" && entry.selectedPath
-								? [String(entry.recordId)]
-								: []
-						)
-					),
-				};
-				return buildSessionStatistics({
-					compactions: statisticsProjection.compactions,
-					inheritedCompactionIds: new Set(
-						forkProvenance?.inheritedCompactionIds.map(String) ?? []
-					),
-					inheritedRecordIds: new Set(
-						forkProvenance?.inheritedRecordIds.map(String) ?? []
-					),
-					inheritedUsage: forkProvenance?.inheritedUsage,
-					readPoint: encodeSessionPageToken(statisticsProjection.readPoint),
-					records: statisticsProjection.records,
-					selectedPath,
-					sessionId,
-					summary: statisticsProjection.summary,
-					...(options.turnId === undefined ? {} : { turnId: options.turnId }),
-					usageEntries: statisticsProjection.usageEntries,
-				});
+			const statisticsProjection = await view.readStatistics(
+				requestedReadPoint,
+				options.turnId
+			);
+			const forkProvenance =
+				statisticsProjection.forkProvenance === undefined
+					? undefined
+					: toSessionForkProvenance(statisticsProjection.forkProvenance);
+			const state = await view.readSessionLog();
+			const historyTree = buildSessionHistoryTreeEntries(
+				state,
+				sessionId,
+				statisticsProjection.readPoint.readPointSequence
+			);
+			const selectedPath: SessionStatisticsHistoryPath = {
+				compactionIds: new Set(
+					historyTree.entries.flatMap((entry) =>
+						entry.kind === "compaction" && entry.selectedPath
+							? [String(entry.compactionId)]
+							: []
+					)
+				),
+				recordIds: new Set(
+					historyTree.entries.flatMap((entry) =>
+						entry.kind === "record" && entry.selectedPath
+							? [String(entry.recordId)]
+							: []
+					)
+				),
+			};
+			return buildSessionStatistics({
+				compactions: statisticsProjection.compactions,
+				inheritedCompactionIds: new Set(
+					forkProvenance?.inheritedCompactionIds.map(String) ?? []
+				),
+				inheritedRecordIds: new Set(
+					forkProvenance?.inheritedRecordIds.map(String) ?? []
+				),
+				inheritedUsage: forkProvenance?.inheritedUsage,
+				readPoint: encodeSessionPageToken(statisticsProjection.readPoint),
+				records: statisticsProjection.records,
+				selectedPath,
+				sessionId,
+				summary: statisticsProjection.summary,
+				...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+				usageEntries: statisticsProjection.usageEntries,
 			});
 		});
 	};
@@ -8153,19 +8005,24 @@ export const createSessionJsonlStore = (
 			await readThroughHandle(
 				sessionId,
 				(view) => view.getCompactions(),
-				() => projectionStore.getCompactions(sessionId)
+				async () => []
 			),
 		getEditMode: async (sessionId) =>
 			await readThroughHandle(
 				sessionId,
 				(view) => view.getEditMode(),
-				() => projectionStore.getEditMode(sessionId)
+				async () => {
+					if (!projection.isBoundToWorkspace(sessionId)) {
+						throw new Error("Session is not bound to this workspace.");
+					}
+					return "hashline" as const;
+				}
 			),
 		getLatestCompaction: async (sessionId) =>
 			await readThroughHandle(
 				sessionId,
 				(view) => view.getLatestCompaction(),
-				() => projectionStore.getLatestCompaction(sessionId)
+				async () => null
 			),
 		getOrCreateSessionForkActionId,
 		getPluginSessionState,
@@ -8173,7 +8030,15 @@ export const createSessionJsonlStore = (
 			await readThroughHandle(
 				sessionId,
 				(view) => view.getSession(),
-				() => projectionStore.getSession(sessionId)
+				async () => {
+					const existing = (await projected.listSessions()).find(
+						(session) => session.id === sessionId
+					);
+					if (existing === undefined) {
+						throw new Error("Session not found");
+					}
+					return existing;
+				}
 			),
 		getSessionForkProvenance,
 		getSessionStatistics,
@@ -8187,7 +8052,7 @@ export const createSessionJsonlStore = (
 			await readThroughHandle(
 				sessionId,
 				(view) => view.listSessionRecords(),
-				() => projectionStore.listSessionRecords(sessionId)
+				async () => []
 			),
 		listSessions,
 		listSessionsPage,
@@ -8195,7 +8060,7 @@ export const createSessionJsonlStore = (
 			await readThroughHandle(
 				sessionId,
 				(view) => view.listSessionUsageEntries(),
-				() => projectionStore.listSessionUsageEntries(sessionId)
+				async () => []
 			),
 		mutatePluginSessionState,
 		navigateSessionHistory,

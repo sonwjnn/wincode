@@ -14,8 +14,8 @@ import {
 } from "@/shared/identifiers";
 import { errorDiagnosticFields } from "@/shared/utils/error-log-fields";
 import {
-	createKeyedSerialQueue,
-	type KeyedSerialQueue,
+	createKeyedSerialQueueRegistry,
+	type KeyedSerialQueueRegistry,
 } from "@/shared/utils/keyed-serial-queue";
 import { isValidSessionLogIdentifier } from "../session-log-identifiers";
 import {
@@ -166,26 +166,19 @@ export const sessionDeletionOperationId = (sessionId: SessionId): string =>
 export const operationIdFileStem = (operationId: string): string =>
 	new Bun.CryptoHasher("sha256").update(operationId).digest("hex");
 
-// One serial queue per canonical log root: two store instances over the same
-// root share it, so an in-process append from either one waits instead of
-// racing into the process-owned writer lock. Queue identity is the canonical
-// root, not the store instance and not the call site.
-const appendQueues = new Map<string, KeyedSerialQueue>();
-const forkQueues = new Map<string, KeyedSerialQueue>();
-const writerQueues = new Map<string, KeyedSerialQueue>();
+// Registry identity is the canonical log root, so store instances and
+// symlink aliases share active queues without retaining idle roots.
+const appendQueues = createKeyedSerialQueueRegistry();
+const forkQueues = createKeyedSerialQueueRegistry();
+const writerQueues = createKeyedSerialQueueRegistry();
 
-const serialQueueFor = async (
+const runSerialQueue = async <Result>(
 	logRoot: string,
-	registry: Map<string, KeyedSerialQueue>
-): Promise<KeyedSerialQueue> => {
-	const root = await canonicalLogRoot(logRoot);
-	let queue = registry.get(root);
-	if (queue === undefined) {
-		queue = createKeyedSerialQueue();
-		registry.set(root, queue);
-	}
-	return queue;
-};
+	registry: KeyedSerialQueueRegistry,
+	key: string,
+	operation: () => Promise<Result>
+): Promise<Result> =>
+	await registry.run(await canonicalLogRoot(logRoot), key, operation);
 export const validSessionId = (sessionId: SessionId): string => {
 	if (!isValidSessionId(sessionId)) {
 		throw new Error("Session ID is not safe for a Session log path.");
@@ -2654,10 +2647,13 @@ export const sessionLogFor = (
 	const runSerial = async <Result>(
 		sessionId: SessionId,
 		operation: () => Promise<Result>
-	): Promise<Result> => {
-		const queue = await serialQueueFor(logRoot, appendQueues);
-		return await queue.run(validSessionId(sessionId), operation);
-	};
+	): Promise<Result> =>
+		await runSerialQueue(
+			logRoot,
+			appendQueues,
+			validSessionId(sessionId),
+			operation
+		);
 
 	const appendBytes = async (
 		sessionId: SessionId,
@@ -2917,32 +2913,42 @@ export const sessionLogFor = (
 		ensureDirectory: async (directory, mode) =>
 			await ensureDirectoryDurable(directory, mode, fileIo),
 		runSerial,
-		runWriter: async (sessionId, operation) => {
-			const queue = await serialQueueFor(logRoot, writerQueues);
-			return await queue.run(validSessionId(sessionId), operation);
-		},
+		runWriter: async (sessionId, operation) =>
+			await runSerialQueue(
+				logRoot,
+				writerQueues,
+				validSessionId(sessionId),
+				operation
+			),
 		withAppendQueue: async <Result>(
 			sessionIds: readonly SessionId[],
 			operation: () => Promise<Result>
 		): Promise<Result> => {
-			const queue = await serialQueueFor(logRoot, appendQueues);
 			const keys = [...new Set(sessionIds)].sort().map(validSessionId);
+			if (keys.length === 0) {
+				return await operation();
+			}
+			const root = await canonicalLogRoot(logRoot);
 			const acquire = async (index: number): Promise<Result> => {
 				const key = keys[index];
 				if (key === undefined) {
 					return await operation();
 				}
-				return await queue.run(key, async () => await acquire(index + 1));
+				return await appendQueues.run(
+					root,
+					key,
+					async () => await acquire(index + 1)
+				);
 			};
 			return await acquire(0);
 		},
-		withForkQueue: async (sourceSessionId, operationId, operation) => {
-			const queue = await serialQueueFor(logRoot, forkQueues);
-			return await queue.run(
+		withForkQueue: async (sourceSessionId, operationId, operation) =>
+			await runSerialQueue(
+				logRoot,
+				forkQueues,
 				`${validSessionId(sourceSessionId)}\0fork\0${operationId}`,
 				operation
-			);
-		},
+			),
 	};
 };
 export const toReceipt = (

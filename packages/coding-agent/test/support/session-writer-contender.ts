@@ -41,6 +41,14 @@ try {
 	const writer = await storage.acquireSessionWriter(sessionId, {
 		executionMode: "interactive",
 	});
+	let writerReleased = false;
+	const releaseWriter = async (): Promise<void> => {
+		if (writerReleased) {
+			return;
+		}
+		writerReleased = true;
+		await writer.release();
+	};
 	report({ kind: "acquired" });
 	const lines = createLineReader(Bun.stdin.stream());
 	for (;;) {
@@ -51,6 +59,30 @@ try {
 		}
 		if (command === "release" || command === "exit") {
 			break;
+		}
+		if (command === "tree-page") {
+			try {
+				const page = await storage.readSessionHistoryTreePage(sessionId, {
+					limit: 1,
+				});
+				report({ kind: "tree-page-result", nextCursor: page.nextCursor });
+			} catch (error) {
+				report({ code: readErrorCode(error), kind: "read-error" });
+			}
+			continue;
+		}
+		if (command === "rebuild") {
+			try {
+				await releaseWriter();
+				const result = await storage.rebuildProjection(
+					{ kind: "session", sessionId },
+					(operation) => operation()
+				);
+				report({ kind: "rebuild-result", issues: result.issues });
+			} catch (error) {
+				report({ code: readErrorCode(error), kind: "rebuild-error" });
+			}
+			continue;
 		}
 		if (command.startsWith("append ")) {
 			const input = JSON.parse(command.slice("append ".length)) as Readonly<{
@@ -122,7 +154,7 @@ try {
 		}
 		report({ kind: "unknown-command" });
 	}
-	await writer.release();
+	await releaseWriter();
 } catch (error) {
 	report({ code: readErrorCode(error), kind: "rejected" });
 } finally {

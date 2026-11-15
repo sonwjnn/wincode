@@ -264,10 +264,17 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 [[ "$(tmux display-message -p -t "$SESSION" '#{pane_dead}' 2>/dev/null || true)" == '1' ]] || \
   fail_with_frame 'the /exit command did not stop the TUI.'
-EXIT_STATUS="$(tmux display-message -p -t "$SESSION" '#{pane_dead_status}')"
-EXIT_SIGNAL="$(tmux display-message -p -t "$SESSION" '#{pane_dead_signal}')"
-[[ "$EXIT_STATUS" == '0' ]] || \
-  fail_with_frame "TUI exited with status ${EXIT_STATUS:-unknown}${EXIT_SIGNAL:+ (signal $EXIT_SIGNAL)}."
+# The launcher records the child's status because tmux may leave its status unset.
+EXIT_STATUS=""
+if [[ -f "$TEST_HOME/.wincode-smoke-exit-status" ]]; then
+  IFS= read -r EXIT_STATUS < "$TEST_HOME/.wincode-smoke-exit-status"
+fi
+if [[ "$EXIT_STATUS" != '0' ]]; then
+  PANE_STATUS="$(tmux display-message -p -t "$SESSION" '#{pane_dead_status}')"
+  EXIT_SIGNAL="$(tmux display-message -p -t "$SESSION" '#{pane_dead_signal}')"
+  fail_with_frame \
+    "TUI exited with status ${EXIT_STATUS:-unknown}${EXIT_SIGNAL:+ (signal $EXIT_SIGNAL)}; tmux status ${PANE_STATUS:-unknown}."
+fi
 if [[ "$BRANCH_EXPORT_SMOKE" == 1 ]]; then
   OS_USERNAME="${USER:-${LOGNAME:-$(id -un)}}"
   env -i \

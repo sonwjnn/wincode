@@ -54,6 +54,7 @@ import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
+import type { SessionContextEdit } from "../context-edits";
 import { type SessionMessage, withSubmissionStatus } from "../message";
 import { restorePastedTextMarkers } from "../pasted-text";
 import type { Session } from "../session-pagination-types";
@@ -81,6 +82,11 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSnapshotRoot,
 } from "./path";
+import {
+	createProjectedSessionStore as buildProjectedSessionStore,
+	type ProjectedSessionDependencies,
+	type ProjectedSessionStore,
+} from "./projected-session";
 import type { PromptHistory, PromptHistoryEntry } from "./prompt-history";
 import { createDrizzleRecoveryStore } from "./recovery-store";
 import {
@@ -1923,7 +1929,28 @@ const readSessionStatisticsProjection = (
 export type DrizzleSessionStore = SessionProjection &
 	Readonly<{
 		assertResetAllowed: () => Promise<void>;
+		createProjectedSessionStore: (
+			dependencies: Omit<
+				ProjectedSessionDependencies,
+				"projection" | "projectionStore"
+			>
+		) => ProjectedSessionStore;
+		getCompactions: (sessionId: SessionId) => Promise<SessionCompaction[]>;
+		getEditMode: (sessionId: SessionId) => Promise<EditMode>;
+		getLatestCompaction: (
+			sessionId: SessionId
+		) => Promise<SessionCompaction | null>;
+		getSessionContextEdits: (
+			sessionId: SessionId
+		) => Promise<SessionContextEdit[]>;
+		getSession: (sessionId: SessionId) => Promise<Session>;
 		jsonlProjection: SessionJsonlProjection;
+		listRecentModelSelections: (limit: number) => ProviderModelSelection[];
+		listSessionRecords: (sessionId: SessionId) => Promise<SessionRecord[]>;
+		listSessionUsageEntries: (
+			sessionId: SessionId
+		) => Promise<SessionUsageEntry[]>;
+		listSessions: () => Promise<Session[]>;
 		markSessionDeleted: (sessionId: SessionId) => void;
 		promptHistory: PromptHistory;
 		readSessionCatalogPageProjection: (
@@ -1940,6 +1967,17 @@ export type DrizzleSessionStore = SessionProjection &
 		) => SessionStatisticsProjection;
 		setAttachmentCollectionBarrier: (barrier: () => Promise<void>) => void;
 	}>;
+
+export type SessionJsonlProjectionStore = SessionProjection &
+	Pick<
+		DrizzleSessionStore,
+		| "assertResetAllowed"
+		| "createProjectedSessionStore"
+		| "jsonlProjection"
+		| "markSessionDeleted"
+		| "promptHistory"
+		| "setAttachmentCollectionBarrier"
+	>;
 
 export const createDrizzleSessionStore = (
 	database?: SessionDatabase,
@@ -2093,8 +2131,193 @@ export const createDrizzleSessionStore = (
 		throw error;
 	};
 
+	const projectedSessionReads: ProjectedSessionDependencies["projectionStore"] =
+		{
+			getCompactions: (sessionId) => {
+				if (
+					!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)
+				) {
+					return Promise.resolve([]);
+				}
+				const rows = db
+					.select({ compaction: sessionCompaction })
+					.from(sessionCompaction)
+					.where(eq(sessionCompaction.sessionId, sessionId))
+					.orderBy(asc(sessionCompaction.sequence))
+					.all();
+				return Promise.resolve(
+					rows.map(({ compaction }) => toSessionCompaction(compaction))
+				);
+			},
+			getEditMode: async (sessionId) => {
+				assertSessionBinding(operationalDb, workspace.id, sessionId);
+				const row = db
+					.select({ editMode: session.editMode })
+					.from(session)
+					.where(eq(session.id, sessionId))
+					.get();
+				return row?.editMode ?? "hashline";
+			},
+			getLatestCompaction: (sessionId) => {
+				if (
+					!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)
+				) {
+					return Promise.resolve(null);
+				}
+				const row = db
+					.select({ compaction: sessionCompaction })
+					.from(sessionCompaction)
+					.where(eq(sessionCompaction.sessionId, sessionId))
+					.orderBy(desc(sessionCompaction.sequence))
+					.limit(1)
+					.get();
+				return Promise.resolve(
+					row ? toSessionCompaction(row.compaction) : null
+				);
+			},
+			getSession: (sessionId) => {
+				try {
+					assertSessionBinding(operationalDb, workspace.id, sessionId);
+				} catch (error) {
+					return Promise.reject(error);
+				}
+				const row = db
+					.select({ session })
+					.from(session)
+					.where(eq(session.id, sessionId))
+					.get()?.session;
+				if (!row) {
+					return Promise.reject(new Error("Session not found"));
+				}
+				return Promise.resolve(toSession(row));
+			},
+			getSessionContextEdits: (sessionId) => {
+				if (
+					!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)
+				) {
+					return Promise.resolve([]);
+				}
+				const rows = db
+					.select({ edit: sessionContextEdit })
+					.from(sessionContextEdit)
+					.where(eq(sessionContextEdit.sessionId, sessionId))
+					.orderBy(asc(sessionContextEdit.sequence))
+					.all();
+				return Promise.resolve(
+					rows.map(({ edit }) => ({
+						operationId: edit.operationId,
+						replacement:
+							edit.replacementText === null
+								? null
+								: { text: edit.replacementText },
+						targetId: toSessionMessageId(edit.targetId),
+					}))
+				);
+			},
+			listRecentModelSelections: (limit) => {
+				if (limit <= 0) {
+					return [];
+				}
+				const boundSessionIds = new Set(
+					operationalDb
+						.select({ sessionId: localSessionBinding.sessionId })
+						.from(localSessionBinding)
+						.where(eq(localSessionBinding.workspaceId, workspace.id))
+						.all()
+						.map(({ sessionId }) => sessionId)
+				);
+				const rows = db
+					.select({
+						createdAt: sessionRecord.createdAt,
+						model: sessionRecord.modelJson,
+						sessionId: sessionRecord.sessionId,
+					})
+					.from(sessionRecord)
+					.orderBy(desc(sessionRecord.createdAt))
+					.all()
+					.filter(({ sessionId }) => boundSessionIds.has(sessionId));
+				const result: ProviderModelSelection[] = [];
+				const seen = new Set<string>();
+				for (const row of rows) {
+					const parsed = providerModelSelectionSchema.safeParse({
+						modelId: row.model.modelId,
+						providerId: row.model.providerId,
+					});
+					if (!parsed.success) {
+						continue;
+					}
+					const key = `${parsed.data.providerId}:${parsed.data.modelId}`;
+					if (seen.has(key)) {
+						continue;
+					}
+					seen.add(key);
+					result.push(parsed.data);
+					if (result.length === limit) {
+						break;
+					}
+				}
+				return result;
+			},
+			listSessionRecords: async (sessionId) =>
+				await readSessionRecords(db, operationalDb, workspace.id, sessionId),
+			listSessionUsageEntries: async (sessionId) =>
+				await readSessionUsageEntries(
+					db,
+					operationalDb,
+					workspace.id,
+					sessionId
+				),
+			listSessions: () => {
+				const boundSessionIds = new Set(
+					operationalDb
+						.select({ sessionId: localSessionBinding.sessionId })
+						.from(localSessionBinding)
+						.where(eq(localSessionBinding.workspaceId, workspace.id))
+						.all()
+						.map(({ sessionId }) => sessionId)
+				);
+				const rows = db
+					.select({ session })
+					.from(session)
+					.orderBy(
+						desc(session.pinned),
+						desc(session.lastMessageAt),
+						desc(session.createdAt)
+					)
+					.all()
+					.filter(({ session: row }) => boundSessionIds.has(row.id));
+				return Promise.resolve(rows.map(({ session: row }) => toSession(row)));
+			},
+			readSessionCatalogPageProjection: (input) =>
+				readSessionCatalogPageProjection(db, workspace.id, input),
+			readSessionHistoryPageProjection: (sessionId, input) =>
+				readSessionHistoryPageProjection(
+					db,
+					operationalDb,
+					workspace.id,
+					sessionId,
+					input
+				),
+			readSessionStatisticsProjection: (sessionId, readPoint, turnId) =>
+				readSessionStatisticsProjection(
+					db,
+					operationalDb,
+					workspace.id,
+					sessionId,
+					readPoint,
+					turnId
+				),
+		};
+
 	return {
 		assertResetAllowed,
+		createProjectedSessionStore: (dependencies) =>
+			buildProjectedSessionStore({
+				...dependencies,
+				projection: jsonlProjection,
+				projectionStore: projectedSessionReads,
+			}),
+		...projectedSessionReads,
 		jsonlProjection,
 		setAttachmentCollectionBarrier: (barrier) => {
 			attachmentCollectionBarrier = barrier;
@@ -2172,8 +2395,6 @@ export const createDrizzleSessionStore = (
 		},
 		createSessionUsageEntry: async (input) =>
 			writeSessionUsageEntry(db, operationalDb, workspace.id, input),
-		listSessionUsageEntries: async (sessionId) =>
-			readSessionUsageEntries(db, operationalDb, workspace.id, sessionId),
 		createEmptySession: async ({
 			createdAt,
 			id = createSessionId(),
@@ -2270,57 +2491,6 @@ export const createDrizzleSessionStore = (
 			}
 		},
 
-		getCompactions: (sessionId: SessionId) => {
-			if (!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)) {
-				return Promise.resolve([]);
-			}
-			const rows = db
-				.select({ compaction: sessionCompaction })
-				.from(sessionCompaction)
-				.where(eq(sessionCompaction.sessionId, sessionId))
-				.orderBy(asc(sessionCompaction.sequence))
-				.all();
-			return Promise.resolve(
-				rows.map(({ compaction }) => toSessionCompaction(compaction))
-			);
-		},
-
-		getSessionContextEdits: (sessionId: SessionId) => {
-			if (!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)) {
-				return Promise.resolve([]);
-			}
-			const rows = db
-				.select({ edit: sessionContextEdit })
-				.from(sessionContextEdit)
-				.where(eq(sessionContextEdit.sessionId, sessionId))
-				.orderBy(asc(sessionContextEdit.sequence))
-				.all();
-			return Promise.resolve(
-				rows.map(({ edit }) => ({
-					operationId: edit.operationId,
-					replacement:
-						edit.replacementText === null
-							? null
-							: { text: edit.replacementText },
-					targetId: toSessionMessageId(edit.targetId),
-				}))
-			);
-		},
-
-		getLatestCompaction: (sessionId: SessionId) => {
-			if (!sessionIsBoundToWorkspace(operationalDb, workspace.id, sessionId)) {
-				return Promise.resolve(null);
-			}
-			const row = db
-				.select({ compaction: sessionCompaction })
-				.from(sessionCompaction)
-				.where(eq(sessionCompaction.sessionId, sessionId))
-				.orderBy(desc(sessionCompaction.sequence))
-				.limit(1)
-				.get();
-			return Promise.resolve(row ? toSessionCompaction(row.compaction) : null);
-		},
-
 		commitSessionRecord: async ({
 			sessionModel,
 			sessionThinkingLevel,
@@ -2334,56 +2504,10 @@ export const createDrizzleSessionStore = (
 				sessionId,
 			});
 		},
-		listSessionRecords: async (sessionId: SessionId) =>
-			readSessionRecords(db, operationalDb, workspace.id, sessionId),
-		readSessionHistoryPageProjection: (sessionId, input) =>
-			readSessionHistoryPageProjection(
-				db,
-				operationalDb,
-				workspace.id,
-				sessionId,
-				input
-			),
-		readSessionStatisticsProjection: (sessionId, readPoint, turnId) =>
-			readSessionStatisticsProjection(
-				db,
-				operationalDb,
-				workspace.id,
-				sessionId,
-				readPoint,
-				turnId
-			),
 		updateSessionSubmission: async (input) =>
 			updateSessionSubmissionCheckpoint(db, operationalDb, workspace.id, input),
-		getSession: (sessionId: SessionId) => {
-			try {
-				assertSessionBinding(operationalDb, workspace.id, sessionId);
-			} catch (error) {
-				return Promise.reject(error);
-			}
-			const row = db
-				.select({ session })
-				.from(session)
-				.where(eq(session.id, sessionId))
-				.get()?.session;
-
-			if (!row) {
-				return Promise.reject(new Error("Session not found"));
-			}
-
-			return Promise.resolve(toSession(row));
-		},
 		acquireSessionWriter: (sessionId, writerOptions) =>
 			acquireSessionWriterLock(sessionLogRoot, sessionId, writerOptions),
-		getEditMode: async (sessionId: SessionId): Promise<EditMode> => {
-			assertSessionBinding(operationalDb, workspace.id, sessionId);
-			const row = db
-				.select({ editMode: session.editMode })
-				.from(session)
-				.where(eq(session.id, sessionId))
-				.get();
-			return row?.editMode ?? "hashline";
-		},
 		setEditMode: async (sessionId: SessionId, mode: EditMode) => {
 			assertSessionBinding(operationalDb, workspace.id, sessionId);
 			db.transaction((tx) => {
@@ -2392,74 +2516,6 @@ export const createDrizzleSessionStore = (
 					.where(eq(session.id, sessionId))
 					.run();
 			});
-		},
-		readSessionCatalogPageProjection: (input) =>
-			readSessionCatalogPageProjection(db, workspace.id, input),
-		listSessions: () => {
-			const boundSessionIds = new Set(
-				operationalDb
-					.select({ sessionId: localSessionBinding.sessionId })
-					.from(localSessionBinding)
-					.where(eq(localSessionBinding.workspaceId, workspace.id))
-					.all()
-					.map(({ sessionId }) => sessionId)
-			);
-			const rows = db
-				.select({ session })
-				.from(session)
-				.orderBy(
-					desc(session.pinned),
-					desc(session.lastMessageAt),
-					desc(session.createdAt)
-				)
-				.all()
-				.filter(({ session: row }) => boundSessionIds.has(row.id));
-
-			return Promise.resolve(rows.map(({ session: row }) => toSession(row)));
-		},
-		listRecentModelSelections: (limit: number) => {
-			if (limit <= 0) {
-				return [];
-			}
-			const boundSessionIds = new Set(
-				operationalDb
-					.select({ sessionId: localSessionBinding.sessionId })
-					.from(localSessionBinding)
-					.where(eq(localSessionBinding.workspaceId, workspace.id))
-					.all()
-					.map(({ sessionId }) => sessionId)
-			);
-			const rows = db
-				.select({
-					createdAt: sessionRecord.createdAt,
-					model: sessionRecord.modelJson,
-					sessionId: sessionRecord.sessionId,
-				})
-				.from(sessionRecord)
-				.orderBy(desc(sessionRecord.createdAt))
-				.all()
-				.filter(({ sessionId }) => boundSessionIds.has(sessionId));
-			const result: ProviderModelSelection[] = [];
-			const seen = new Set<string>();
-			for (const row of rows) {
-				const parsed = providerModelSelectionSchema.safeParse({
-					modelId: row.model.modelId,
-					providerId: row.model.providerId,
-				});
-				if (!parsed.success) {
-					continue;
-				}
-				const key = `${parsed.data.providerId}:${parsed.data.modelId}`;
-				if (seen.has(key)) {
-					continue;
-				}
-				seen.add(key);
-				result.push(parsed.data);
-				if (result.length === limit) {
-					break;
-				}
-			}
-			return result;
 		},
 
 		updateSession: (sessionId: SessionId, data: UpdateSessionInput) => {
