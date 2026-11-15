@@ -45,10 +45,6 @@ import type {
 import { Spinner } from "@/shared/ui/spinner";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import type { SessionQueuedSubmission } from "../../agent-session/types";
-import {
-	isCompactionSummaryMessage,
-	type SessionCompaction,
-} from "../../compaction";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
 import { summarizeSessionUsage } from "../../usage/session-usage";
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
@@ -59,12 +55,11 @@ import {
 } from "../messages";
 import { ChatMessage, ChatNotificationMessage } from "./chat-message";
 import { ChatTextArea } from "./chat-text-area";
-import {
-	buildSessionTranscriptTimeline,
-	type SessionTimelineItem,
+import type {
+	SessionTimelineItem,
+	SessionTranscriptProjection,
 } from "./chat-timeline";
 import {
-	groupMessagesBySessionTurn,
 	resolveRetryMessageId,
 	resolveSessionTurnFooterMessages,
 } from "./chat-turns";
@@ -85,7 +80,7 @@ type ChatShellProps = {
 	>;
 	rewindingCheckpointId?: SessionRecordId;
 	onRewindCheckpoint?: (recordId: SessionRecordId) => void | Promise<void>;
-	compactions?: readonly SessionCompaction[];
+	transcript: SessionTranscriptProjection;
 	draftKey?: string;
 	error?: unknown;
 	/** Only a turn error can duplicate a terminal assistant error; other sources remain visible. */
@@ -93,7 +88,6 @@ type ChatShellProps = {
 	isBusy: boolean;
 	isSelectionReady?: boolean;
 	isCompacting: boolean;
-	messages: readonly SessionMessage[];
 	onCompact?: (focus?: string) => Promise<boolean> | boolean;
 	onProviderModelChanged?: () => void;
 	onOpenSettings?: (section?: string) => Promise<void> | void;
@@ -210,15 +204,7 @@ const resolveNotificationSlot = (
 	if (anchor === undefined) {
 		return timeline.length;
 	}
-	const currentMessageCount = timeline.reduce(
-		(count, item) =>
-			item.kind === "turn" ? count + item.turn.messages.length : count,
-		0
-	);
-	if (
-		anchor.afterCompactionId !== undefined &&
-		currentMessageCount === anchor.messageCount
-	) {
+	if (anchor.afterCompactionId !== undefined) {
 		const compactionIndex = timeline.findIndex(
 			(item) =>
 				item.kind === "compaction" &&
@@ -295,14 +281,13 @@ export function ChatShell({
 	forkCheckpoints,
 	rewindingCheckpointId,
 	onRewindCheckpoint,
-	compactions = [],
+	transcript,
 	draftKey,
 	error,
 	errorSource,
 	isBusy,
 	isSelectionReady,
 	isCompacting,
-	messages,
 	onCompact,
 	onProviderModelChanged,
 	onOpenSettings,
@@ -425,19 +410,14 @@ export function ChatShell({
 		enabled: true,
 		scopeId: focusScopeId,
 	});
-	const displayMessages = messages.filter(
-		(message) => !isCompactionSummaryMessage(message)
-	);
+	const displayMessages = transcript.messages;
 	const isRepeatedTerminalError = repeatsTerminalError(
 		error,
 		displayMessages,
 		errorSource
 	);
-	const turns = groupMessagesBySessionTurn(displayMessages);
-	const transcriptTimeline = buildSessionTranscriptTimeline(
-		messages,
-		compactions
-	);
+	const turns = transcript.turns;
+	const transcriptTimeline = transcript.timeline;
 	const { notificationsByMessageId, timelineNotifications } =
 		partitionNotificationsByMessage(notifications, displayMessages);
 	const hasTranscriptNotice =

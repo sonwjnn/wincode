@@ -163,7 +163,7 @@ export const resolveRetryMessageId = (
 };
 
 export const resolveSessionTurnFooterMessages = (
-	turns: SessionTurn[]
+	turns: readonly SessionTurn[]
 ): Map<string, SessionMessage> => {
 	const footers = new Map<string, SessionMessage>();
 

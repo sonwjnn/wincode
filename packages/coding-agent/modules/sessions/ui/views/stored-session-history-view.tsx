@@ -10,7 +10,7 @@ import type {
 	SessionStatisticsUsageTotals,
 } from "../../usage/session-statistics";
 import { ChatMessage } from "../components/chat-message";
-import { buildSessionTimeline } from "../components/chat-timeline";
+import { buildSessionTranscriptProjection } from "../components/chat-timeline";
 import { resolveSessionTurnFooterMessages } from "../components/chat-turns";
 import { CompactionDivider } from "../components/compaction-divider";
 import { SessionForkProvenanceBanner } from "../components/session-fork-provenance-banner";
@@ -63,10 +63,8 @@ export function StoredSessionHistoryView({
 	statistics,
 }: StoredSessionHistoryViewProps) {
 	const { colors } = useTheme();
-	const timeline = buildSessionTimeline(messages, compactions);
-	const turns = timeline.flatMap((item) =>
-		item.kind === "turn" ? [item.turn] : []
-	);
+	const transcript = buildSessionTranscriptProjection(messages, compactions);
+	const { timeline, turns } = transcript;
 	const footerMessages = resolveSessionTurnFooterMessages(turns);
 	const isBusy =
 		isRefreshing || isRetrying || isSelectingModel || isLoadingMore;

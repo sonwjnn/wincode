@@ -12,78 +12,60 @@ export type SessionTimelineItem =
 
 export type SessionTimelineAnchor = UiNotificationAnchor;
 
-export const buildSessionTimeline = (
-	messages: readonly SessionMessage[],
+export type SessionTranscriptProjection = Readonly<{
+	messages: readonly SessionMessage[];
+	turns: readonly SessionTurn[];
+	timeline: readonly SessionTimelineItem[];
+	notificationAnchor: SessionTimelineAnchor;
+}>;
+
+export const buildSessionTranscriptProjection = (
+	transcriptMessages: readonly SessionMessage[],
 	compactions: readonly SessionCompaction[] = []
-): SessionTimelineItem[] => {
-	const displayMessages = messages.filter(
+): SessionTranscriptProjection => {
+	const messages = transcriptMessages.filter(
 		(message) => !isCompactionSummaryMessage(message)
 	);
-	const turns = groupMessagesBySessionTurn([...displayMessages]);
+	const turns = groupMessagesBySessionTurn([...messages]);
+	const turnIdByMessageId = new Map<string, string>();
+	for (const turn of turns) {
+		for (const message of turn.messages) {
+			turnIdByMessageId.set(message.id, turn.id);
+		}
+	}
+
 	const orderedCompactions = [...compactions].sort(
 		(left, right) => left.sequence - right.sequence
 	);
-	const placed = new Set<string>();
-	const timeline: SessionTimelineItem[] = [];
-
-	for (const turn of turns) {
-		timeline.push({ kind: "turn", turn });
-		const turnMessageIds = new Set(turn.messages.map((message) => message.id));
-		for (const compaction of orderedCompactions) {
-			if (
-				!placed.has(compaction.id) &&
-				turnMessageIds.has(compaction.throughMessageUiId)
-			) {
-				timeline.push({ kind: "compaction", compaction });
-				placed.add(compaction.id);
-			}
+	const compactionsByTurnId = new Map<string, SessionCompaction[]>();
+	const unmatchedCompactions: SessionCompaction[] = [];
+	for (const compaction of orderedCompactions) {
+		const turnId = turnIdByMessageId.get(compaction.throughMessageUiId);
+		if (turnId === undefined) {
+			unmatchedCompactions.push(compaction);
+			continue;
 		}
+		const turnCompactions = compactionsByTurnId.get(turnId) ?? [];
+		turnCompactions.push(compaction);
+		compactionsByTurnId.set(turnId, turnCompactions);
 	}
 
-	for (const compaction of orderedCompactions) {
-		if (!placed.has(compaction.id)) {
+	const timeline: SessionTimelineItem[] = [];
+	for (const turn of turns) {
+		timeline.push({ kind: "turn", turn });
+		for (const compaction of compactionsByTurnId.get(turn.id) ?? []) {
 			timeline.push({ kind: "compaction", compaction });
 		}
 	}
+	for (const compaction of unmatchedCompactions) {
+		timeline.push({ kind: "compaction", compaction });
+	}
 
-	return timeline;
-};
-
-export const buildSessionTranscriptTimeline = (
-	messages: readonly SessionMessage[],
-	compactions: readonly SessionCompaction[] = []
-): SessionTimelineItem[] => {
-	const newestCompaction = compactions.reduce<SessionCompaction | undefined>(
-		(newest, compaction) =>
-			newest === undefined || compaction.sequence > newest.sequence
-				? compaction
-				: newest,
-		undefined
-	);
-	const historicalCompactions = compactions.filter(
-		({ id }) => id !== newestCompaction?.id
-	);
-	const timeline = buildSessionTimeline(messages, historicalCompactions);
-	return newestCompaction === undefined
-		? timeline
-		: [...timeline, { kind: "compaction", compaction: newestCompaction }];
-};
-
-export const getSessionTimelineAnchor = (
-	messages: readonly SessionMessage[],
-	compactions: readonly SessionCompaction[] = []
-): SessionTimelineAnchor => {
-	const timeline = buildSessionTranscriptTimeline(messages, compactions);
-	const messageCount = timeline.reduce(
-		(count, item) =>
-			item.kind === "turn" ? count + item.turn.messages.length : count,
-		0
-	);
 	const lastItem = timeline.at(-1);
 	const lastTurnMessage =
 		lastItem?.kind === "turn" ? lastItem.turn.messages.at(-1) : undefined;
-	return {
-		messageCount,
+	const notificationAnchor: SessionTimelineAnchor = {
+		messageCount: messages.length,
 		timelineItemCount: timeline.length,
 		...(lastTurnMessage === undefined
 			? {}
@@ -92,4 +74,6 @@ export const getSessionTimelineAnchor = (
 			? { afterCompactionId: lastItem.compaction.id }
 			: {}),
 	};
+
+	return { messages, turns, timeline, notificationAnchor };
 };
