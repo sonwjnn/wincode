@@ -12,10 +12,12 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
+import { decodeSessionLog } from "@/modules/sessions/storage/session-jsonl-codec";
 import {
 	createSessionJsonlStore,
 	type SessionJsonlStoreTestObserver,
 } from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
@@ -43,13 +45,18 @@ type Fixture = Readonly<{
 	store: StoreHandle;
 }>;
 
+type FixtureOptions = Readonly<{
+	fileIo?: SessionLogFileIo;
+	testObserver?: SessionJsonlStoreTestObserver;
+}>;
+
 const fixtures: Fixture[] = [];
 const peers: SessionWriterContenderProcess[] = [];
 
 const createStore = (
 	root: string,
 	logRoot: string,
-	testObserver?: SessionJsonlStoreTestObserver
+	{ fileIo, testObserver }: FixtureOptions = {}
 ): StoreHandle => {
 	const connection = createDatabase(path.join(root, "sessions.sqlite"));
 	const projectionStore = createDrizzleSessionStore(connection.db, {
@@ -62,14 +69,14 @@ const createStore = (
 		storage: createSessionJsonlStore(
 			projectionStore,
 			logRoot,
-			{},
+			fileIo,
 			testObserver
 		),
 	};
 };
 
 const createFixture = async (
-	testObserver?: SessionJsonlStoreTestObserver
+	options: FixtureOptions = {}
 ): Promise<Fixture> => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-session-freshness-")
@@ -81,7 +88,7 @@ const createFixture = async (
 	const fixture: Fixture = {
 		logRoot,
 		root,
-		store: createStore(root, logRoot, testObserver),
+		store: createStore(root, logRoot, options),
 	};
 	fixtures.push(fixture);
 	return fixture;
@@ -153,6 +160,91 @@ describe("Session projection freshness", () => {
 			recordCount: 2,
 		});
 		await peer.release();
+	});
+
+	test("a head read retries when a peer append advances its captured projection snapshot", async () => {
+		let sourceLogFileName = "";
+		let appendOnSync = false;
+		let appendOutcome: unknown;
+		let peer: SessionWriterContenderProcess | undefined;
+		const fileIo: SessionLogFileIo = {
+			sync: async (filePath, handle) => {
+				await handle.sync();
+				// This sync follows the head snapshot capture; the peer advances the cursor before validation.
+				if (!appendOnSync || path.basename(filePath) !== sourceLogFileName) {
+					return;
+				}
+				appendOnSync = false;
+				if (peer === undefined) {
+					throw new Error("The peer writer was not started.");
+				}
+				appendOutcome = await peer.request(
+					`append ${JSON.stringify({
+						operationId: "peer-head-snapshot-append",
+						title: "Peer append during head read",
+					})}`
+				);
+			},
+		};
+		const fixture = await createFixture({ fileIo });
+		const created = await createSession(fixture.store.storage);
+		sourceLogFileName = `${created.id}.jsonl`;
+		peer = startPeer(fixture, created.id);
+		expect(await peer.result).toEqual({ kind: "acquired" });
+
+		appendOnSync = true;
+		const session = await fixture.store.storage.getSession(created.id);
+		expect(appendOutcome).toMatchObject({
+			kind: "append-result",
+			outcome: { kind: "committed" },
+		});
+		expect(appendOnSync).toBe(false);
+		expect(session.title).toBe("Peer append during head read");
+		await peer.release();
+	});
+
+	test("a head read reports first-byte diagnostics when its captured log is rewritten or truncated", async () => {
+		for (const mutation of ["rewrite", "truncate"] as const) {
+			let sourceLogFileName = "";
+			let mutateOnSync = false;
+			let changedOffset = -1;
+			const fileIo: SessionLogFileIo = {
+				sync: async (filePath, handle) => {
+					await handle.sync();
+					if (!mutateOnSync || path.basename(filePath) !== sourceLogFileName) {
+						return;
+					}
+					mutateOnSync = false;
+					const bytes = await Bun.file(filePath).bytes();
+					changedOffset = bytes.byteLength - 2;
+					if (mutation === "rewrite") {
+						bytes[changedOffset] = (bytes[changedOffset] ?? 0) === 0 ? 1 : 0;
+						await Bun.write(filePath, bytes);
+						return;
+					}
+					await Bun.write(filePath, bytes.subarray(0, changedOffset));
+				},
+			};
+			const fixture = await createFixture({ fileIo });
+			const created = await createSession(fixture.store.storage);
+			sourceLogFileName = `${created.id}.jsonl`;
+			const logPath = resolveSessionLogFilePath(fixture.logRoot, created.id);
+			const originalBytes = await Bun.file(logPath).bytes();
+			const expectedOffset = originalBytes.byteLength - 2;
+			const expectedSequence =
+				decodeSessionLog(created.id, originalBytes).nextSequence - 1;
+
+			mutateOnSync = true;
+			await expect(
+				fixture.store.storage.getSession(created.id)
+			).rejects.toMatchObject({
+				code: "session_log_corrupt",
+				offset: expectedOffset,
+				sequence: expectedSequence,
+			});
+			expect(mutateOnSync).toBe(false);
+			expect(changedOffset).toBe(expectedOffset);
+		}
 	});
 
 	test("history and tree read points keep the same snapshot after a peer append", async () => {
@@ -367,9 +459,11 @@ describe("Session projection freshness", () => {
 		const readPointValidated = Promise.withResolvers<void>();
 		const releaseRead = Promise.withResolvers<void>();
 		const fixture = await createFixture({
-			onSessionHistoryTreeReadPointValidated: async () => {
-				readPointValidated.resolve();
-				await releaseRead.promise;
+			testObserver: {
+				onSessionHistoryTreeReadPointValidated: async () => {
+					readPointValidated.resolve();
+					await releaseRead.promise;
+				},
 			},
 		});
 		const created = await createSession(fixture.store.storage);
