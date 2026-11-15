@@ -1,13 +1,18 @@
 import * as fs from "node:fs/promises";
+import type { SessionRecord } from "@wincode/agent-core";
 import { isCode } from "@wincode/utils";
+import type { EditMode } from "@/modules/tools";
 import type { SessionId } from "@/shared/identifiers";
-import type { SessionCatalogIssue } from "./session-catalog";
+import type { SessionCompaction } from "../compaction/types";
+import type { Session } from "../session-pagination-types";
+import type { SessionCatalogIssue, SessionUsageEntry } from "./session-catalog";
 import {
 	isSessionHistoryEntryEventType,
 	type SessionJsonlProjection,
 	SessionLogError,
 	type SessionLogState,
 	type SessionProjectionCursor,
+	sessionProjectionBlocked,
 	sessionProjectionCursorsEqual,
 	sessionProjectionMatchesState,
 } from "./session-jsonl-codec";
@@ -42,12 +47,23 @@ const isProjectionReadPoint = (
 	"generation" in readPoint && "projectionId" in readPoint;
 
 export type ProjectedSessionRead = Readonly<{
+	getCompactions: () => Promise<SessionCompaction[]>;
+	getEditMode: () => Promise<EditMode>;
+	getLatestCompaction: () => Promise<SessionCompaction | null>;
+	getSession: () => Promise<Session>;
 	/** Projection generation this read is bound to. */
 	generation: number;
+	listSessionRecords: () => Promise<SessionRecord[]>;
+	listSessionUsageEntries: () => Promise<SessionUsageEntry[]>;
 	/** Runs the projection read under the mode that produced this view. */
 	read: <Result>(operation: () => Promise<Result> | Result) => Promise<Result>;
 	sessionId: SessionId;
 }>;
+
+export type ProjectedSessionStateRead = ProjectedSessionRead &
+	Readonly<{
+		state: SessionLogState;
+	}>;
 
 /**
  * The only way to read a projection. A handle binds one Session and the
@@ -58,9 +74,17 @@ export type ProjectedSessionRead = Readonly<{
  * before the read, and fails with `cursor_expired` once it no longer exists.
  */
 export type ProjectedSession = Readonly<{
+	assertAtHead: (
+		cursor: SessionProjectionCursor | undefined,
+		state: SessionLogState
+	) => void;
+	assertCursorWithinLog: (
+		cursor: SessionProjectionCursor | undefined,
+		state: SessionLogState
+	) => void;
 	at: (readPoint: ProjectedSessionReadPoint) => Promise<ProjectedSessionRead>;
 	atHead: () => Promise<ProjectedSessionRead>;
-	atHeadState: () => Promise<SessionLogState>;
+	atHeadState: () => Promise<ProjectedSessionStateRead>;
 	generation: number;
 	sessionId: SessionId;
 }>;
@@ -81,7 +105,16 @@ export type ProjectedSessionDependencies = Readonly<{
 		| "workspaceId"
 	>;
 	projectionStore: Readonly<{
-		getSession: (sessionId: SessionId) => Promise<unknown>;
+		getCompactions: (sessionId: SessionId) => Promise<SessionCompaction[]>;
+		getEditMode: (sessionId: SessionId) => Promise<EditMode>;
+		getLatestCompaction: (
+			sessionId: SessionId
+		) => Promise<SessionCompaction | null>;
+		getSession: (sessionId: SessionId) => Promise<Session>;
+		listSessionRecords: (sessionId: SessionId) => Promise<SessionRecord[]>;
+		listSessionUsageEntries: (
+			sessionId: SessionId
+		) => Promise<SessionUsageEntry[]>;
 	}>;
 	reconcileDeletedSessionIfNeeded: (sessionId: SessionId) => Promise<void>;
 	reconcileDeletedSessions: () => Promise<readonly SessionCatalogIssue[]>;
@@ -105,17 +138,6 @@ export type ProjectedSessionStore = Readonly<{
 		sessionIds: readonly SessionId[]
 	) => Promise<void>;
 	open: (sessionId: SessionId) => Promise<ProjectedSession>;
-	assertAtHead: (
-		sessionId: SessionId,
-		cursor: SessionProjectionCursor | undefined,
-		state: SessionLogState
-	) => void;
-	assertCursorWithinLog: (
-		sessionId: SessionId,
-		cursor: SessionProjectionCursor | undefined,
-		state: SessionLogState
-	) => void;
-	ready: (sessionId: SessionId) => number;
 	reconcileDeleted: () => Promise<void>;
 }>;
 
@@ -567,11 +589,9 @@ export const createProjectedSessionStore = (
 	const assertCatalogReadPoint = (readPoint: ProjectionReadPoint): void => {
 		const maintenance = projection.getMaintenanceState();
 		if (maintenance.status !== "ready") {
-			const error = new Error(
+			throw sessionProjectionBlocked(
 				"Session projection rebuild is incomplete; retry `wincode sessions rebuild` before reading Session pages."
-			) as Error & { code: string };
-			error.code = "session_projection_blocked";
-			throw error;
+			);
 		}
 		if (
 			readPoint.projectionId !== undefined &&
@@ -602,6 +622,48 @@ export const createProjectedSessionStore = (
 		}
 	};
 
+	const assertCurrentGeneration = (generation: number): void => {
+		if (projection.getMaintenanceState().generation !== generation) {
+			throw sessionProjectionBlocked(
+				"Session projection changed while the read was in progress; retry after projection maintenance."
+			);
+		}
+	};
+
+	const createReadView = (
+		targetSessionId: SessionId,
+		generation: number,
+		check: () => void
+	): ProjectedSessionRead => {
+		const view: ProjectedSessionRead = {
+			generation,
+			sessionId: targetSessionId,
+			read: async (operation) => {
+				check();
+				return await operation();
+			},
+			getCompactions: async () =>
+				await view.read(() => projectionStore.getCompactions(targetSessionId)),
+			getEditMode: async () =>
+				await view.read(() => projectionStore.getEditMode(targetSessionId)),
+			getLatestCompaction: async () =>
+				await view.read(() =>
+					projectionStore.getLatestCompaction(targetSessionId)
+				),
+			getSession: async () =>
+				await view.read(() => projectionStore.getSession(targetSessionId)),
+			listSessionRecords: async () =>
+				await view.read(() =>
+					projectionStore.listSessionRecords(targetSessionId)
+				),
+			listSessionUsageEntries: async () =>
+				await view.read(() =>
+					projectionStore.listSessionUsageEntries(targetSessionId)
+				),
+		};
+		return view;
+	};
+
 	const open = async (sessionId: SessionId): Promise<ProjectedSession> => {
 		const generation = assertProjectionReady(sessionId);
 		return {
@@ -609,16 +671,11 @@ export const createProjectedSessionStore = (
 			sessionId,
 			at: async (readPoint) => {
 				assertReadPoint(sessionId, readPoint);
-				return {
-					generation: isProjectionReadPoint(readPoint)
-						? readPoint.generation
-						: generation,
+				return createReadView(
 					sessionId,
-					read: async (operation) => {
-						assertReadPoint(sessionId, readPoint);
-						return await operation();
-					},
-				};
+					isProjectionReadPoint(readPoint) ? readPoint.generation : generation,
+					() => assertReadPoint(sessionId, readPoint)
+				);
 			},
 			atHead: async () => {
 				await ports.reconcileDeletedSessionIfNeeded(sessionId);
@@ -627,13 +684,24 @@ export const createProjectedSessionStore = (
 				}
 				await ensureProjectionCaughtUp(sessionId);
 				const current = assertProjectionReady(sessionId);
+				return createReadView(sessionId, current, () =>
+					assertCurrentGeneration(current)
+				);
+			},
+			assertAtHead: (cursor, state) =>
+				assertProjectionAtLogHead(sessionId, cursor, state),
+			assertCursorWithinLog: (cursor, state) =>
+				assertCursorDoesNotExceedLog(sessionId, cursor, state),
+			atHeadState: async () => {
+				const state = await ensureProjected(sessionId);
+				const current = assertProjectionReady(sessionId);
 				return {
-					generation: current,
-					sessionId,
-					read: async (operation) => await operation(),
+					...createReadView(sessionId, current, () =>
+						assertCurrentGeneration(current)
+					),
+					state,
 				};
 			},
-			atHeadState: async () => await ensureProjected(sessionId),
 		};
 	};
 
@@ -642,9 +710,6 @@ export const createProjectedSessionStore = (
 		catchUpBoundCatalog: ensureBoundCatalogLogsProjected,
 		catchUpRecentModelSelections: ensureRecentModelSelectionsProjected,
 		open,
-		assertAtHead: assertProjectionAtLogHead,
-		assertCursorWithinLog: assertCursorDoesNotExceedLog,
-		ready: assertProjectionReady,
 		reconcileDeleted: ensureDeletedSessionsReconciled,
 	};
 };

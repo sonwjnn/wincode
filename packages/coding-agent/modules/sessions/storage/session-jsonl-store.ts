@@ -101,7 +101,10 @@ import {
 } from "./attachment-store";
 import type { DrizzleSessionStore } from "./drizzle-session-store";
 import { parseSessionLogFileName, resolveSessionLogFilePath } from "./path";
-import { createProjectedSessionStore } from "./projected-session";
+import {
+	createProjectedSessionStore,
+	type ProjectedSessionStateRead,
+} from "./projected-session";
 import {
 	type PreparedSessionBundleExport,
 	type PreparedSessionBundleImport,
@@ -2702,8 +2705,18 @@ export const createSessionJsonlStore = (
 		log: sessionLog,
 		projection,
 		projectionStore: {
+			getCompactions: async (sessionId) =>
+				await projectionStore.getCompactions(sessionId),
+			getEditMode: async (sessionId) =>
+				await projectionStore.getEditMode(sessionId),
+			getLatestCompaction: async (sessionId) =>
+				await projectionStore.getLatestCompaction(sessionId),
 			getSession: async (sessionId) =>
 				await projectionStore.getSession(sessionId),
+			listSessionRecords: async (sessionId) =>
+				await projectionStore.listSessionRecords(sessionId),
+			listSessionUsageEntries: async (sessionId) =>
+				await projectionStore.listSessionUsageEntries(sessionId),
 		},
 		reconcileDeletedSessionIfNeeded: async (sessionId) =>
 			await reconcileDeletedSessionIfNeeded(sessionId),
@@ -3170,7 +3183,7 @@ export const createSessionJsonlStore = (
 		pendingIntent: SessionWriteIntent | undefined
 	): Promise<SessionLogState> => {
 		try {
-			return await (await projected.open(sessionId)).atHeadState();
+			return (await (await projected.open(sessionId)).atHeadState()).state;
 		} catch (error) {
 			if (
 				pendingIntent !== undefined ||
@@ -3229,7 +3242,7 @@ export const createSessionJsonlStore = (
 				createdNew: false,
 				entry,
 				receiptBlocked: false,
-				state: await (await projected.open(sessionId)).atHeadState(),
+				state: (await (await projected.open(sessionId)).atHeadState()).state,
 			};
 		} catch (error) {
 			throw new SessionWriteOutcomeError(toReceipt(entry, "blocked"), error);
@@ -3723,7 +3736,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		options?: SessionWriterLockOptions
 	): Promise<SessionWriterLock> => {
-		projected.ready(sessionId);
+		await projected.open(sessionId);
 		const writer = await acquireSessionWriterLock(logRoot, sessionId, options);
 		const key = await lockKey(logRoot, sessionId);
 		heldWriterKeys.add(key);
@@ -3746,7 +3759,7 @@ export const createSessionJsonlStore = (
 		signal?: AbortSignal
 	) => {
 		throwIfAborted(signal, "Session bundle export was cancelled.");
-		projected.ready(sessionId);
+		await projected.open(sessionId);
 		await assertSessionWritable(sessionId);
 		const pendingIntent = await sessionLog.readWriteIntent(sessionId);
 		if (pendingIntent !== undefined) {
@@ -3779,9 +3792,9 @@ export const createSessionJsonlStore = (
 			throw error;
 		}
 		const checked = validateSessionBundleLog(sessionId, bytes, "source");
-		const generation = projected.ready(sessionId);
+		const generation = (await projected.open(sessionId)).generation;
 		const cursor = projection.getCursor(sessionId);
-		projected.assertCursorWithinLog(sessionId, cursor, state);
+		(await projected.open(sessionId)).assertCursorWithinLog(cursor, state);
 		if (!sessionProjectionMatchesState(cursor, state, generation)) {
 			throw new SessionLogError(
 				"session_projection_blocked",
@@ -4552,11 +4565,19 @@ export const createSessionJsonlStore = (
 				cursor,
 				replace ? "replace" : "append"
 			);
-			projected.assertAtHead(
-				sessionId,
-				projection.getCursor(sessionId),
-				created.state
-			);
+			if (
+				!sessionProjectionMatchesState(
+					projection.getCursor(sessionId),
+					created.state,
+					projection.getMaintenanceState().generation
+				)
+			) {
+				throw new SessionLogError(
+					"session_projection_blocked",
+					sessionId,
+					"SQLite projection did not reach the committed Session log head."
+				);
+			}
 			return toReceipt(created.entry, "ready");
 		} catch {
 			if (
@@ -4590,7 +4611,7 @@ export const createSessionJsonlStore = (
 		try {
 			const createdAt = input.createdAt ?? new Date();
 			return await withTemporaryWriter(sessionId, async () => {
-				projected.ready(sessionId);
+				await projected.open(sessionId);
 				await assertSessionWritable(sessionId);
 				const created = await createSessionLogFile(
 					logRoot,
@@ -4625,7 +4646,7 @@ export const createSessionJsonlStore = (
 		let message = input.message;
 		try {
 			return await withTemporaryWriter(sessionId, async () => {
-				projected.ready(sessionId);
+				await projected.open(sessionId);
 				await assertSessionWritable(sessionId);
 				let lease = pendingCreationAttachmentLeases.get(sessionId);
 				if (
@@ -4791,7 +4812,7 @@ export const createSessionJsonlStore = (
 		validatePluginSessionStatePluginId(pluginId);
 		validatePluginSessionStateKey(key);
 		const [state, historyPath] = await Promise.all([
-			(await projected.open(sessionId)).atHeadState(),
+			(await (await projected.open(sessionId)).atHeadState()).state,
 			readSessionHistoryPath(sessionId),
 		]);
 		const selectedHistoryEntryIds = new Set(
@@ -4836,7 +4857,8 @@ export const createSessionJsonlStore = (
 			};
 			return await withTemporaryWriter(sessionId, async () => {
 				await assertSessionWritable(sessionId);
-				const state = await (await projected.open(sessionId)).atHeadState();
+				const state = (await (await projected.open(sessionId)).atHeadState())
+					.state;
 				const historyTree = buildSessionHistoryTreeEntries(
 					state,
 					sessionId,
@@ -4943,7 +4965,8 @@ export const createSessionJsonlStore = (
 			const payload = copyPluginSessionHistoryPayload(input.payload);
 			return await withTemporaryWriter(sessionId, async () => {
 				await assertSessionWritable(sessionId);
-				const state = await (await projected.open(sessionId)).atHeadState();
+				const state = (await (await projected.open(sessionId)).atHeadState())
+					.state;
 				const historyTree = buildSessionHistoryTreeEntries(
 					state,
 					sessionId,
@@ -5009,7 +5032,7 @@ export const createSessionJsonlStore = (
 		sessionId: SessionId,
 		entryId: SessionHistoryEntryId
 	): Promise<boolean> => {
-		const state = await (await projected.open(sessionId)).atHeadState();
+		const state = (await (await projected.open(sessionId)).atHeadState()).state;
 		return historyEntryExists(state, entryId);
 	};
 	const navigateSessionHistory = async (
@@ -5018,7 +5041,8 @@ export const createSessionJsonlStore = (
 	): Promise<SessionWriteOutcome> =>
 		withWriteOutcome(sessionId, request.operationId, async () => {
 			await assertSessionWritable(sessionId);
-			const state = await (await projected.open(sessionId)).atHeadState();
+			const state = (await (await projected.open(sessionId)).atHeadState())
+				.state;
 			return await commitWrite(sessionId, {
 				operationId: request.operationId,
 				payload: {
@@ -5269,7 +5293,7 @@ export const createSessionJsonlStore = (
 				: await stateForPendingAppend(input.sessionId, matchingIntent);
 		const state =
 			pendingAppend?.state ??
-			(await (await projected.open(input.sessionId)).atHeadState());
+			(await (await projected.open(input.sessionId)).atHeadState()).state;
 		const retryCreatedAt =
 			pendingAppend?.createdAt ?? matchingIntent?.timestamp;
 		assertCompactionRetryTimestampRecoverable(
@@ -5357,7 +5381,7 @@ export const createSessionJsonlStore = (
 		const id: CompactionId = input.id ?? toCompactionId(randomUUIDv7());
 		const operationId = `compaction-${id}`;
 		const result = await withTemporaryWriter(input.sessionId, async () => {
-			projected.ready(input.sessionId);
+			await projected.open(input.sessionId);
 			await assertSessionWritable(input.sessionId);
 			const pendingIntent = await readSessionWriteIntent(
 				logRoot,
@@ -5885,33 +5909,30 @@ export const createSessionJsonlStore = (
 		);
 	};
 
-	const wrapRead =
-		<Args extends readonly unknown[], Result>(
-			read: (...args: Args) => Promise<Result>
-		): ((...args: Args) => Promise<Result>) =>
-		async (...args) => {
-			const sessionId = args[0];
-			if (typeof sessionId === "string") {
-				try {
-					await reconcileDeletedSessionIfNeeded(sessionId as SessionId);
-					const handle = await projected.open(sessionId as SessionId);
-					await handle.atHeadState();
-				} catch (error) {
-					if (!isCode(error, "ENOENT")) {
-						throw error;
-					}
-					const projectedSessions = await projectionStore.listSessions();
-					if (projectedSessions.some((session) => session.id === sessionId)) {
-						throw new SessionLogError(
-							"session_log_corrupt",
-							sessionId as SessionId,
-							"A projected Session is missing its authoritative JSONL log."
-						);
-					}
-				}
+	const readThroughHandle = async <Result>(
+		sessionId: SessionId,
+		read: (view: ProjectedSessionStateRead) => Promise<Result>,
+		fallback: () => Promise<Result>
+	): Promise<Result> => {
+		let view: ProjectedSessionStateRead | undefined;
+		try {
+			await reconcileDeletedSessionIfNeeded(sessionId);
+			view = await (await projected.open(sessionId)).atHeadState();
+		} catch (error) {
+			if (!isCode(error, "ENOENT")) {
+				throw error;
 			}
-			return read(...args);
-		};
+			const projectedSessions = await projectionStore.listSessions();
+			if (projectedSessions.some((session) => session.id === sessionId)) {
+				throw new SessionLogError(
+					"session_log_corrupt",
+					sessionId,
+					"A projected Session is missing its authoritative JSONL log."
+				);
+			}
+		}
+		return view === undefined ? await fallback() : await read(view);
+	};
 
 	const catalogIssue = (
 		sessionId: SessionId,
@@ -6537,7 +6558,7 @@ export const createSessionJsonlStore = (
 				readPoint: page.readPoint,
 			};
 		}
-		const state = await (await projected.open(sessionId)).atHeadState();
+		const state = (await (await projected.open(sessionId)).atHeadState()).state;
 		const envelopesByEntryId = new Map<string, SessionLogEnvelope>();
 		for (const { envelope } of state.entries) {
 			if (envelope.type === "plugin.entry-appended") {
@@ -6896,11 +6917,11 @@ export const createSessionJsonlStore = (
 						);
 					}
 				}
-				projected.ready(sourceSessionId);
+				await projected.open(sourceSessionId);
 				await assertSessionWritable(sourceSessionId);
-				const sourceState = await (
-					await projected.open(sourceSessionId)
-				).atHeadState();
+				const sourceState = (
+					await (await projected.open(sourceSessionId)).atHeadState()
+				).state;
 				const checkpointEntry = sourceState.entries.find(
 					(entry) =>
 						recordFromSessionLogEntry(entry)?.id === checkpoint.recordId
@@ -7943,7 +7964,19 @@ export const createSessionJsonlStore = (
 			cursor,
 			"maintenance"
 		);
-		projected.assertAtHead(sessionId, projection.getCursor(sessionId), state);
+		if (
+			!sessionProjectionMatchesState(
+				projection.getCursor(sessionId),
+				state,
+				projection.getMaintenanceState().generation
+			)
+		) {
+			throw new SessionLogError(
+				"session_projection_blocked",
+				sessionId,
+				"SQLite projection did not reach the committed Session log head."
+			);
+		}
 		await releaseReconciledAttachmentLeases(sessionId, state);
 		const creationLease = pendingCreationAttachmentLeases.get(sessionId);
 		if (
@@ -8052,7 +8085,7 @@ export const createSessionJsonlStore = (
 	): Promise<SessionSubmissionRecordReceipt | undefined> => {
 		await reconcileDeletedSessionIfNeeded(sessionId);
 		return await withTemporaryWriter(sessionId, async () => {
-			projected.ready(sessionId);
+			await projected.open(sessionId);
 			await checkDeletedMarker(sessionId);
 			const logPath = resolveSessionLogFilePath(
 				await fs.realpath(logRoot),
@@ -8116,12 +8149,32 @@ export const createSessionJsonlStore = (
 		forkSessionWithHeldWriter,
 		getCompactionMetadata:
 			projectionStore.attachmentStore.getCompactionMetadata,
-		getCompactions: wrapRead(projectionStore.getCompactions),
-		getEditMode: wrapRead(projectionStore.getEditMode),
-		getLatestCompaction: wrapRead(projectionStore.getLatestCompaction),
+		getCompactions: async (sessionId) =>
+			await readThroughHandle(
+				sessionId,
+				(view) => view.getCompactions(),
+				() => projectionStore.getCompactions(sessionId)
+			),
+		getEditMode: async (sessionId) =>
+			await readThroughHandle(
+				sessionId,
+				(view) => view.getEditMode(),
+				() => projectionStore.getEditMode(sessionId)
+			),
+		getLatestCompaction: async (sessionId) =>
+			await readThroughHandle(
+				sessionId,
+				(view) => view.getLatestCompaction(),
+				() => projectionStore.getLatestCompaction(sessionId)
+			),
 		getOrCreateSessionForkActionId,
 		getPluginSessionState,
-		getSession: wrapRead(projectionStore.getSession),
+		getSession: async (sessionId) =>
+			await readThroughHandle(
+				sessionId,
+				(view) => view.getSession(),
+				() => projectionStore.getSession(sessionId)
+			),
 		getSessionForkProvenance,
 		getSessionStatistics,
 		hasSessionHistoryEntry,
@@ -8130,10 +8183,20 @@ export const createSessionJsonlStore = (
 		isSessionImported,
 		listRecentModelSelections,
 		listSessionCatalog,
-		listSessionRecords: wrapRead(projectionStore.listSessionRecords),
+		listSessionRecords: async (sessionId) =>
+			await readThroughHandle(
+				sessionId,
+				(view) => view.listSessionRecords(),
+				() => projectionStore.listSessionRecords(sessionId)
+			),
 		listSessions,
 		listSessionsPage,
-		listSessionUsageEntries: wrapRead(projectionStore.listSessionUsageEntries),
+		listSessionUsageEntries: async (sessionId) =>
+			await readThroughHandle(
+				sessionId,
+				(view) => view.listSessionUsageEntries(),
+				() => projectionStore.listSessionUsageEntries(sessionId)
+			),
 		mutatePluginSessionState,
 		navigateSessionHistory,
 		readPluginSessionHistoryPage,

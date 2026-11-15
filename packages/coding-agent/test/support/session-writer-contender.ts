@@ -4,6 +4,7 @@ import {
 	toSessionMessageId,
 	toSessionRecordId,
 } from "@wincode/agent-core";
+import { codeOf } from "@wincode/utils";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "../../modules/providers/provider-model-selection";
 import { createDatabase } from "../../modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "../../modules/sessions/storage/drizzle-session-store";
@@ -11,6 +12,7 @@ import { resolveLocalSessionLogRoot } from "../../modules/sessions/storage/path"
 import { createSessionJsonlStore } from "../../modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "../../modules/sessions/storage/session-record";
 import { toSessionId } from "../../shared/identifiers";
+import { createLineReader } from "./peer-protocol";
 
 const payload = JSON.parse(process.argv[2] ?? "") as Readonly<{
 	attachmentRoot: string;
@@ -33,41 +35,16 @@ const storage = createSessionJsonlStore(
 const report = (value: unknown): void => {
 	process.stdout.write(`${JSON.stringify(value)}\n`);
 };
-const createLineReader = (): (() => Promise<string>) => {
-	const reader = Bun.stdin.stream().getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-	return async () => {
-		for (;;) {
-			const newline = buffer.indexOf("\n");
-			if (newline >= 0) {
-				const line = buffer.slice(0, newline);
-				buffer = buffer.slice(newline + 1);
-				return line;
-			}
-			const { done, value } = await reader.read();
-			if (done) {
-				return "";
-			}
-			buffer += decoder.decode(value, { stream: true });
-		}
-	};
-};
-const readErrorCode = (error: unknown): string =>
-	typeof error === "object" &&
-	error !== null &&
-	typeof Reflect.get(error, "code") === "string"
-		? (Reflect.get(error, "code") as string)
-		: "unknown";
+const readErrorCode = (error: unknown): string => codeOf(error) ?? "unknown";
 
 try {
 	const writer = await storage.acquireSessionWriter(sessionId, {
 		executionMode: "interactive",
 	});
 	report({ kind: "acquired" });
-	const nextLine = createLineReader();
+	const lines = createLineReader(Bun.stdin.stream());
 	for (;;) {
-		const line = await nextLine();
+		const line = await lines.next();
 		const command = line.trim();
 		if (command === "") {
 			continue;

@@ -15,7 +15,7 @@ import {
 import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
-import type { SessionId } from "@/shared/identifiers";
+import { type SessionId, toSessionId } from "@/shared/identifiers";
 import {
 	agentId,
 	agentTurnId,
@@ -179,6 +179,39 @@ describe("Session projection freshness", () => {
 		]);
 		expect(secondPage.readPoint).toEqual(firstReadPoint);
 		await peer.release();
+	});
+
+	test("a blocked projection rejects reads with the rebuild hint and recovers", async () => {
+		const fixture = await createFixture();
+		const sessionId = toSessionId("freshness-blocked-projection");
+		await fixture.store.storage.createEmptySession({ id: sessionId });
+		const sqlite = fixture.store.connection.sqlite;
+		sqlite.exec(`
+			CREATE TRIGGER reject_freshness_projection
+			BEFORE UPDATE ON session
+			BEGIN
+				SELECT RAISE(ABORT, 'injected projection failure');
+			END;
+		`);
+		try {
+			const outcome = await fixture.store.storage.updateSession(sessionId, {
+				operationId: "freshness-blocked-update",
+				title: "Committed while blocked",
+			});
+			expect(outcome).toMatchObject({
+				kind: "committed",
+				projection: "blocked",
+			});
+			await expect(
+				fixture.store.storage.getSession(sessionId)
+			).rejects.toMatchObject({ code: "session_projection_blocked" });
+		} finally {
+			sqlite.exec("DROP TRIGGER IF EXISTS reject_freshness_projection");
+		}
+
+		expect((await fixture.store.storage.getSession(sessionId)).title).toBe(
+			"Committed while blocked"
+		);
 	});
 
 	test("a read point reports cursor_expired after its Session is deleted", async () => {

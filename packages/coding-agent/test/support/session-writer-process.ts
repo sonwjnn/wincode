@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { createLineReader } from "./peer-protocol";
 
 export type SessionWriterContenderResult =
 	| Readonly<{ kind: "acquired" }>
@@ -35,37 +36,6 @@ export type SessionWriterContenderProcess = Readonly<{
 	release: () => Promise<void>;
 	stop: () => Promise<void>;
 }>;
-
-const createLineReader = (
-	stream: ReadableStream<Uint8Array>
-): Readonly<{
-	close: () => void;
-	next: () => Promise<string>;
-}> => {
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	let text = "";
-	return {
-		close: () => {
-			reader.releaseLock();
-		},
-		next: async () => {
-			for (;;) {
-				const newline = text.indexOf("\n");
-				if (newline >= 0) {
-					const line = text.slice(0, newline);
-					text = text.slice(newline + 1);
-					return line;
-				}
-				const { done, value } = await reader.read();
-				if (done) {
-					throw new Error("The writer contender exited before reporting.");
-				}
-				text += decoder.decode(value, { stream: true });
-			}
-		},
-	};
-};
 
 export const startSessionWriterContender = (
 	options: SessionWriterContenderOptions

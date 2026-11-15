@@ -16,10 +16,18 @@ export const isUndefined = (value: unknown): value is undefined =>
 
 export const isNull = (value: unknown): value is null => value === null;
 
-export const isCode = (value: unknown, code: string): boolean =>
-	typeof value === "object" &&
-	value !== null &&
-	Reflect.get(value, "code") === code;
+export const codeOf = (value: unknown): string | undefined => {
+	if (typeof value !== "object" || value === null) {
+		return;
+	}
+	const code = Reflect.get(value, "code");
+	return typeof code === "string" ? code : undefined;
+};
+
+export const isCode = <Code extends string>(
+	value: unknown,
+	code: Code
+): value is { code: Code } => codeOf(value) === code;
 
 export const isError = (value: unknown): value is Error =>
 	value instanceof Error;

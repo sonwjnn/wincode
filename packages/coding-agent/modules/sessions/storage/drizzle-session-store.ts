@@ -110,6 +110,7 @@ import {
 	type SessionForkedPayload,
 	type SessionJsonlProjection,
 	SessionLogError,
+	sessionProjectionBlocked,
 } from "./session-jsonl-codec";
 import { createSessionJsonlProjection } from "./session-jsonl-projection";
 import type {
@@ -967,9 +968,7 @@ const pageProjectionBlocked = (
 	if (sessionId !== undefined) {
 		throw new SessionLogError("session_projection_blocked", sessionId, message);
 	}
-	const error = new Error(message) as Error & { code: string };
-	error.code = "session_projection_blocked";
-	throw error;
+	throw sessionProjectionBlocked(message);
 };
 
 type SessionTransaction = Parameters<

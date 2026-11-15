@@ -324,6 +324,17 @@ export type SessionJsonlProjection = Readonly<{
 	) => void;
 }>;
 
+export type SessionProjectionBlockedError = Error & {
+	code: "session_projection_blocked";
+};
+
+export const sessionProjectionBlocked = (
+	message: string
+): SessionProjectionBlockedError =>
+	Object.assign(new Error(message), {
+		code: "session_projection_blocked" as const,
+	});
+
 export class SessionLogError extends Error {
 	readonly code:
 		| "session_log_corrupt"
