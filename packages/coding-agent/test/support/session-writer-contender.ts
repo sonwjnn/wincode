@@ -120,6 +120,15 @@ try {
 			}
 			continue;
 		}
+		if (command === "delete") {
+			try {
+				const outcome = await storage.deleteSession(sessionId);
+				report({ kind: "delete-result", outcome });
+			} catch (error) {
+				report({ code: readErrorCode(error), kind: "delete-error" });
+			}
+			continue;
+		}
 		if (command === "read") {
 			try {
 				const session = await storage.getSession(sessionId);

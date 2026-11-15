@@ -406,6 +406,9 @@ export const createProjectedSessionStore = (
 		const logPath = await log.logPath(sessionId);
 		await ports.reconcileDeletedSessionIfNeeded(sessionId);
 		if (!projection.isBoundToWorkspace(sessionId)) {
+			if (!projection.isBoundToAnotherWorkspace(sessionId)) {
+				await fs.stat(logPath);
+			}
 			throw new Error("Session not found");
 		}
 		await ports.checkDeletedMarker(sessionId);
@@ -618,6 +621,10 @@ export const createProjectedSessionStore = (
 				};
 			},
 			atHead: async () => {
+				await ports.reconcileDeletedSessionIfNeeded(sessionId);
+				if (!projection.isBoundToWorkspace(sessionId)) {
+					throw new Error("Session not found");
+				}
 				await ensureProjectionCaughtUp(sessionId);
 				const current = assertProjectionReady(sessionId);
 				return {

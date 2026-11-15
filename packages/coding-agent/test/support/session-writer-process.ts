@@ -18,6 +18,8 @@ export type SessionWriterPeerResult = Readonly<{
 	kind:
 		| "append-error"
 		| "append-result"
+		| "delete-error"
+		| "delete-result"
 		| "read-error"
 		| "read-result"
 		| "unknown-command";

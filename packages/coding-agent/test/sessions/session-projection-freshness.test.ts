@@ -206,6 +206,44 @@ describe("Session projection freshness", () => {
 		).rejects.toMatchObject({ code: "cursor_expired" });
 	});
 
+	test("a peer deletion invalidates a read point and does not resurrect the Session", async () => {
+		const fixture = await createFixture();
+		const created = await createSession(fixture.store.storage);
+		for (const index of [1, 2]) {
+			const outcome = await fixture.store.storage.commitSessionRecord({
+				record: buildRecord(index),
+				sessionId: created.id,
+			});
+			expect(outcome).toMatchObject({ kind: "committed" });
+		}
+		const firstPage = await fixture.store.storage.readSessionHistoryPage(
+			created.id,
+			{ limit: 1 }
+		);
+		expect(firstPage.nextCursor).toBeDefined();
+
+		const peer = startPeer(fixture, created.id);
+		expect(await peer.result).toEqual({ kind: "acquired" });
+		expect(await peer.request("delete")).toMatchObject({
+			kind: "delete-result",
+			outcome: { kind: "committed" },
+		});
+
+		await expect(
+			fixture.store.storage.readSessionHistoryPage(created.id, {
+				cursor: firstPage.nextCursor,
+				limit: 1,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+		await expect(
+			fixture.store.storage.readSessionHistoryPage(created.id)
+		).rejects.toThrow();
+		await expect(
+			fixture.store.storage.getSession(created.id)
+		).rejects.toThrow();
+		await peer.release();
+	});
+
 	test("two instances over the same log root queue appends instead of failing", async () => {
 		const fixture = await createFixture();
 		await expectInterleavedAppends(fixture, fixture.logRoot, "same-root");
