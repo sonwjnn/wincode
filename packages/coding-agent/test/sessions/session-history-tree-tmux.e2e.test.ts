@@ -63,12 +63,17 @@ const withTerminalSmoke = async (
 	const sendKeys = async (...keys: string[]): Promise<void> => {
 		await runTmux(["send-keys", "-t", tmuxSession, ...keys]);
 	};
-	// The startup composer renders before it accepts a Submission, so the first
-	// Enter can be swallowed on a slow host. Retry only while the startup view
-	// and the typed prompt are both still on screen.
+	// The startup composer renders before it accepts a Submission, so text and
+	// the first Enter can be swallowed on a slow host. Wait until literal text
+	// is visible before submitting, then retry only while the prompt is on screen.
 	const sendPrompt = async (text: string): Promise<void> => {
-		await sendKeys(text, "Enter");
+		await runTmux(["send-keys", "-l", "-t", tmuxSession, text]);
+		await waitForFrame(
+			(frame) => frame.includes(text),
+			`the composer to receive ${text}`
+		);
 		const deadline = Date.now() + 15_000;
+		await sendKeys("Enter");
 		await Bun.sleep(300);
 		while (Date.now() < deadline) {
 			const frame = await runTmux(["capture-pane", "-t", tmuxSession, "-p"]);
