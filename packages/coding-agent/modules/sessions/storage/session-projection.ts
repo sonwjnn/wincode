@@ -50,8 +50,9 @@ import type {
  * SQLite, its write members return nothing, and `listRecentModelSelections` is
  * the one member whose result is not a promise.
  *
- * `wrapRead` in the JSONL store is the only place this seam is joined to the
- * async facets in this cut, so freshness logic stays where it already was.
+ * The JSONL store composes this projection with the authoritative logs and
+ * exposes the asynchronous Session facets; `ProjectedSession` handles keep
+ * projection reads bound to the required generation or read point.
  */
 export type SessionProjection = {
 	acquireSessionWriter: (

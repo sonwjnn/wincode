@@ -16,6 +16,7 @@ import type { TurnToolResolver } from "../hooks/runtime-turn";
 import type { SessionProviderCollectionFactory } from "../provider-collection";
 import {
 	createSessionSdkOperations,
+	createSessionSdkRuntimeFactory,
 	type SessionSdkRuntimeOptions,
 } from "../sdk";
 import type { SessionSdkOperations } from "../sdk-contract";
@@ -189,6 +190,11 @@ export const openSessionServices = async ({
 		});
 		const assembly = created;
 		const { capabilities } = assembly;
+		const sessionHostManager = capabilities.getSessionHostManager();
+		const createSessionRuntime = createSessionSdkRuntimeFactory(
+			sessionHostManager,
+			assembly.storage
+		);
 		sessionSdk = createSessionSdkOperations(
 			{
 				cwd,
@@ -215,15 +221,19 @@ export const openSessionServices = async ({
 						);
 				},
 				getRegistry: () => capabilities.getRegistry(),
-				storage: assembly.storage,
 				...omitUndefined({
 					createProviderCollection: sources.createProviderCollection,
 					turnToolResolver: capabilities.getTurnToolResolver?.(),
 				}),
 				workspace,
 			} satisfies SessionSdkRuntimeOptions,
-			capabilities.getSessionHostManager(),
-			assembly.storage
+			sessionHostManager,
+			{
+				catalog: assembly.storage,
+				history: assembly.storage,
+				lifecycle: assembly.storage,
+			},
+			createSessionRuntime
 		);
 		return Object.freeze({
 			capabilities,

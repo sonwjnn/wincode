@@ -194,6 +194,7 @@
     "packages/coding-agent/test/sessions/session-sdk.test.ts": "smoke",
     "packages/coding-agent/test/sessions/session-services.test.ts": "core",
     "packages/coding-agent/test/sessions/session-statistics.test.ts": "core",
+    "packages/coding-agent/test/sessions/session-storage-boundary-check.test.ts": "core",
     "packages/coding-agent/test/sessions/session-storage-durability.test.ts": "smoke",
     "packages/coding-agent/test/sessions/session-usage-ledger.test.ts": "core",
     "packages/coding-agent/test/sessions/session-usage.test.ts": "smoke",

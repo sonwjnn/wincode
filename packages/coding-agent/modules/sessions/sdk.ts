@@ -88,10 +88,13 @@ import {
 	type SessionSdkSelectionDefaults,
 	sessionSelectionDefaults,
 } from "@/modules/sessions/selection";
+import type { SessionCatalog } from "@/modules/sessions/storage/session-catalog";
+import type { SessionHistory } from "@/modules/sessions/storage/session-history";
 import {
 	projectSessionStorageError,
 	requireSessionWriteReady,
 } from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionLifecycle } from "@/modules/sessions/storage/session-lifecycle";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import { projectSessionMessageRecords } from "@/modules/sessions/transcript-projection";
@@ -134,6 +137,24 @@ export type SessionSdkRuntimeOptions = Omit<
 		projectTrust?: "trust" | "deny";
 		workspace?: string;
 	}>;
+
+type SessionSdkOperationOptions = Omit<SessionSdkRuntimeOptions, "storage">;
+
+type SessionSdkOperationStorage = Readonly<{
+	catalog: Pick<
+		SessionCatalog,
+		"getSession" | "getSessionStatistics" | "listSessionsPage"
+	>;
+	history: Pick<
+		SessionHistory,
+		"readSessionHistoryPage" | "readSessionHistoryTreePage"
+	>;
+	lifecycle: SessionLifecycle;
+}>;
+
+type SessionSdkRuntimeFactory = (
+	options: SessionSdkOperationOptions
+) => Promise<SessionSdk>;
 
 const snapshotCapabilityCeiling = (
 	...ceilings: readonly (SessionSdkCapabilityCeiling | undefined)[]
@@ -178,6 +199,17 @@ const optionsForSessionRuntime = (
 		...sharedOptions,
 		...(capabilityCeiling === undefined ? {} : { capabilityCeiling }),
 	};
+};
+
+const optionsForSessionSdkOperationRuntime = (
+	options: SessionSdkOperationOptions,
+	capabilityCeiling: SessionSdkCapabilityCeiling | undefined
+): SessionSdkOperationOptions => {
+	const { storage: _storage, ...operationOptions } = optionsForSessionRuntime(
+		options,
+		capabilityCeiling
+	);
+	return operationOptions;
 };
 
 const closeUntransferredProviderCollection = async (
@@ -1707,11 +1739,24 @@ export const createSessionSdkWithRuntime = (
 	options: SessionSdkRuntimeOptions
 ): Promise<SessionSdk> => createSessionSdkInternal(options);
 
+/** Binds one SDK runtime factory to the storage and Host Manager it shares. */
+export const createSessionSdkRuntimeFactory =
+	(
+		manager: SessionHostManager,
+		storage: SessionStorage
+	): SessionSdkRuntimeFactory =>
+	(options) =>
+		createSessionSdkInternal(
+			{ ...options, storage },
+			{ ignoreConfiguredPlugins: true, manager, storage }
+		);
+
 /** Creates generic Session SDK operations backed by an existing Session Host. */
 export const createSessionSdkOperations = (
-	options: SessionSdkRuntimeOptions,
+	options: SessionSdkOperationOptions,
 	manager: SessionHostManager,
-	storage: SessionStorage
+	storage: SessionSdkOperationStorage,
+	createRuntime: SessionSdkRuntimeFactory
 ): SessionSdkOperations => {
 	const hostRuntimeOptions = options;
 	const capabilityCeiling = snapshotCapabilityCeiling(
@@ -1727,7 +1772,7 @@ export const createSessionSdkOperations = (
 				runtimeOptions.pluginProviderIds ?? []
 			);
 			if (runtimeOptions.sessionId !== undefined) {
-				const storedSession = await storage.getSession(
+				const storedSession = await storage.catalog.getSession(
 					toSessionId(runtimeOptions.sessionId)
 				);
 				if (storedSession.model !== undefined) {
@@ -1752,32 +1797,29 @@ export const createSessionSdkOperations = (
 					return matchingSources;
 				}
 			);
-			return createSessionSdkInternal(
-				{
-					...optionsForSessionRuntime(
-						hostRuntimeOptions,
-						runtimeCapabilityCeiling
-					),
-					getPluginProviderSources: hostRuntimeOptions.getPluginProviderSources,
-					pluginFactories: runtimeOptions.pluginFactories ?? [],
-					pluginPaths: runtimeOptions.pluginPaths ?? [],
-					...(requestedProviderIds.length === 0
-						? {}
-						: { pluginProviderSources: selectedPluginProviderSources }),
-					...(runtimeOptions.projectTrust === undefined
-						? {}
-						: { projectTrust: runtimeOptions.projectTrust }),
-					storage,
-				},
-				{ ignoreConfiguredPlugins: true, manager, storage }
-			);
+			return createRuntime({
+				...optionsForSessionSdkOperationRuntime(
+					hostRuntimeOptions,
+					runtimeCapabilityCeiling
+				),
+				getPluginProviderSources: hostRuntimeOptions.getPluginProviderSources,
+				pluginFactories: runtimeOptions.pluginFactories ?? [],
+				pluginPaths: runtimeOptions.pluginPaths ?? [],
+				...(requestedProviderIds.length === 0
+					? {}
+					: { pluginProviderSources: selectedPluginProviderSources }),
+				...(runtimeOptions.projectTrust === undefined
+					? {}
+					: { projectTrust: runtimeOptions.projectTrust }),
+			});
 		};
 	const exportSessionBundleOperation = createSessionBundleExportOperation(
 		manager,
-		storage
+		storage.lifecycle
 	);
-	const importSessionBundleOperation =
-		createSessionBundleImportOperation(storage);
+	const importSessionBundleOperation = createSessionBundleImportOperation(
+		storage.lifecycle
+	);
 	const withSessionRuntime = async <Result>(
 		operation: (sdk: SessionSdk) => Promise<Result>,
 		runtimeOptions?: SessionRuntimeOptions
@@ -1862,18 +1904,28 @@ export const createSessionSdkOperations = (
 			}),
 		getAgentCatalog: (catalogOptions) =>
 			withSessionRuntime((sdk) => sdk.getAgentCatalog(catalogOptions)),
-		listSessionsPage: (pageOptions) => storage.listSessionsPage(pageOptions),
+		listSessionsPage: (pageOptions) =>
+			storage.catalog.listSessionsPage(pageOptions),
 		readSessionHistoryPage: (sessionId, pageOptions) =>
-			storage.readSessionHistoryPage(toSessionId(sessionId), pageOptions),
+			storage.history.readSessionHistoryPage(
+				toSessionId(sessionId),
+				pageOptions
+			),
 		readSessionHistoryTreePage: (sessionId, pageOptions) =>
-			storage.readSessionHistoryTreePage(toSessionId(sessionId), pageOptions),
+			storage.history.readSessionHistoryTreePage(
+				toSessionId(sessionId),
+				pageOptions
+			),
 		navigateSessionHistory: (sessionId, request) =>
 			withSessionRuntime(
 				(sdk) => sdk.navigateSessionHistory(sessionId, request),
 				{ sessionId }
 			),
 		getSessionStatistics: (sessionId, statisticsOptions) =>
-			storage.getSessionStatistics(toSessionId(sessionId), statisticsOptions),
+			storage.catalog.getSessionStatistics(
+				toSessionId(sessionId),
+				statisticsOptions
+			),
 		forkSession: async (sourceSessionId, checkpoint, operationId) => {
 			const sessionId = toSessionId(sourceSessionId);
 			const sdk = await createSessionRuntime({ sessionId });

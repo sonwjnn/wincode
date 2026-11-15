@@ -276,11 +276,15 @@ and the ordering between quarantine durability and truncation. They validate
 application behavior at those I/O boundaries, not power-loss behavior, device
 or filesystem caches, a physically full disk, or network-filesystem semantics.
 
-`storage/` isolates local persistence behind six Session facets composed as
-`SessionStorage`; `SessionProjection` is the internal SQLite seam that no
-consumer sees. The local Drizzle store maintains the rebuildable SQLite projection for
-Session history, compactions, selection, and usage; content-addressed attachment
-blobs remain in separate storage.
+`storage/` isolates local persistence behind six Session facets. The
+`SessionStorage` aggregate is retained for storage and runtime assembly;
+ordinary Session consumers, including SDK operations and Host Manager helpers,
+receive only the facets they use. `SessionProjection` remains an internal
+SQLite seam, not a consumer contract. The local Drizzle store maintains the
+rebuildable SQLite projection for Session history, compactions, selection, and
+usage; content-addressed attachment blobs remain in separate storage. The
+static `scripts/session-storage-boundary-check.ts` check enforces these import
+and dependency boundaries across the Coding-Agent package.
 `session_record` rows contain one durable user message, a terminal assistant
 outcome, or a completed Tool Call. The Subagents Plugin persists task outcomes
 and pending report deliveries in its own database file; Session storage has no
@@ -321,8 +325,8 @@ replays them.
 - `session-lifecycle.ts` — create, update, delete, fork, bundle transport, projection rebuild, writer lock.
 - `session-attachments.ts` — blob leases, retention, references, and display annotation.
 - `plugin-session-state.ts` — durable per-Plugin state.
-- `session-storage.ts` — the six facets as one value, and the shape the factory returns.
-- `session-projection.ts` — internal SQLite seam, joined to the facets by the JSONL store.
+- `session-storage.ts` — the aggregate of six facets, used at storage and runtime assembly boundaries.
+- `session-projection.ts` — internal SQLite projection contract, used by local storage implementations and focused projection tests.
 - `session-log.ts` — authoritative JSONL write contract, canonical-root queue registry, intents, receipts, quarantine.
 - `projected-session.ts` — `ProjectedSession` handle, `atHead()`/`at(readPoint)` read modes, projection catch-up.
 - `prompt-history.ts` — workspace prompt history, which is not a Session facet.

@@ -1,7 +1,6 @@
 export * from "./attachments";
 export * from "./catalog";
 export * from "./history";
-export * from "./host";
 export * from "./lifecycle";
 export * from "./outcome";
 export * from "./plugin-session-state";
