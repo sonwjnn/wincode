@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { createLineReader } from "./peer-protocol";
 
 export type SessionWriterContenderResult =
 	| Readonly<{ kind: "acquired" }>
@@ -13,35 +14,28 @@ export type SessionWriterContenderOptions = Readonly<{
 	workspaceRoot: string;
 }>;
 
+export type SessionWriterPeerResult = Readonly<{
+	code?: string;
+	kind:
+		| "append-error"
+		| "append-result"
+		| "delete-error"
+		| "delete-result"
+		| "read-error"
+		| "read-result"
+		| "unknown-command";
+	outcome?: unknown;
+	recordCount?: number;
+	title?: string;
+}>;
+
 export type SessionWriterContenderProcess = Readonly<{
 	pid: number;
+	request: (command: string) => Promise<SessionWriterPeerResult>;
 	result: Promise<SessionWriterContenderResult>;
 	release: () => Promise<void>;
 	stop: () => Promise<void>;
 }>;
-
-const readLine = async (
-	stream: ReadableStream<Uint8Array>
-): Promise<string> => {
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	let text = "";
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) {
-				throw new Error("The writer contender exited before reporting.");
-			}
-			text += decoder.decode(value, { stream: true });
-			const newline = text.indexOf("\n");
-			if (newline >= 0) {
-				return text.slice(0, newline);
-			}
-		}
-	} finally {
-		reader.releaseLock();
-	}
-};
 
 export const startSessionWriterContender = (
 	options: SessionWriterContenderOptions
@@ -70,13 +64,20 @@ export const startSessionWriterContender = (
 			stdout: "pipe",
 		}
 	);
-	const result = readLine(contender.stdout).then(
-		(line) => JSON.parse(line) as SessionWriterContenderResult
+	const lines = createLineReader(
+		contender.stdout as ReadableStream<Uint8Array>
 	);
+	const result = lines
+		.next()
+		.then((line) => JSON.parse(line) as SessionWriterContenderResult);
 	let released = false;
 	return {
 		pid: contender.pid,
 		result,
+		request: async (command) => {
+			contender.stdin.write(`${command}\n`);
+			return JSON.parse(await lines.next()) as SessionWriterPeerResult;
+		},
 		release: async () => {
 			if (released) {
 				return;
@@ -85,6 +86,7 @@ export const startSessionWriterContender = (
 			contender.stdin.write("release\n");
 			contender.stdin.end();
 			const exitCode = await contender.exited;
+			lines.close();
 			if (exitCode !== 0) {
 				throw new Error(`The writer contender exited with code ${exitCode}.`);
 			}
@@ -96,6 +98,7 @@ export const startSessionWriterContender = (
 				// The contender may already have exited after refusing ownership.
 			}
 			await contender.exited;
+			lines.close();
 		},
 	};
 };

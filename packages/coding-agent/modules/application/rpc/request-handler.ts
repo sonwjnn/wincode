@@ -20,12 +20,10 @@ import {
 	forkSessionThroughIdleHost,
 	forkSessionThroughIdleHostAndThen,
 } from "@/modules/sessions/session-fork-routing";
+import { SessionWriteOutcomeError } from "@/modules/sessions/session-write-outcome";
 import type { SessionAttachments } from "@/modules/sessions/storage/session-attachments";
 import { SessionLogError } from "@/modules/sessions/storage/session-jsonl-codec";
-import {
-	SessionForkError,
-	SessionWriteOutcomeError,
-} from "@/modules/sessions/storage/session-jsonl-store";
+import { SessionForkError } from "@/modules/sessions/storage/session-log";
 import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import { createSkillSnapshot } from "@/modules/skills";
 import {

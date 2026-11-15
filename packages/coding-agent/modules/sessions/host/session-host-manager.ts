@@ -9,7 +9,7 @@ import type { SessionHistoryPath } from "@/modules/sessions/session-pagination-t
 import type { PluginSessionHistoryPersistence } from "@/modules/sessions/session-plugin-history";
 import type { PluginSessionStatePersistence } from "@/modules/sessions/session-plugin-state";
 import type { SessionWriteOutcome } from "@/modules/sessions/session-write-outcome";
-import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
+import { SessionWriteOutcomeError } from "@/modules/sessions/session-write-outcome";
 import type { SessionId } from "@/shared/identifiers";
 import type { SessionHistoryNavigationOutcome } from "../sdk-contract";
 import { nextChatSelection, restoreSelection } from "../selection";

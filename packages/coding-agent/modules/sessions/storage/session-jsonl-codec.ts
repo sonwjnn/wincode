@@ -270,6 +270,18 @@ export type SessionProjectionMaintenanceState = Readonly<{
 	status: "ready" | "rebuilding";
 }>;
 
+export const sessionProjectionMatchesState = (
+	cursor: SessionProjectionCursor | undefined,
+	state: SessionLogState,
+	generation: number
+): boolean =>
+	cursor !== undefined &&
+	cursor.generation === generation &&
+	cursor.logId === state.logId &&
+	cursor.nextSequence === state.nextSequence &&
+	cursor.nextByteOffset === state.nextOffset &&
+	cursor.lastHash === state.lastHash;
+
 export const sessionProjectionCursorsEqual = (
 	left: SessionProjectionCursor | undefined,
 	right: SessionProjectionCursor | undefined
@@ -311,6 +323,17 @@ export type SessionJsonlProjection = Readonly<{
 		mode?: "append" | "replace" | "maintenance"
 	) => void;
 }>;
+
+type SessionProjectionBlockedError = Error & {
+	code: "session_projection_blocked";
+};
+
+export const sessionProjectionBlocked = (
+	message: string
+): SessionProjectionBlockedError =>
+	Object.assign(new Error(message), {
+		code: "session_projection_blocked" as const,
+	});
 
 export class SessionLogError extends Error {
 	readonly code:

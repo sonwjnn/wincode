@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "../../modules/providers/provider-model-selection";
 import { createSessionSdkWithRuntime } from "../../modules/sessions/sdk";
 import {
@@ -11,10 +12,7 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
 } from "../../modules/sessions/storage/path";
-import {
-	createSessionJsonlStore,
-	type SessionLogFileIo,
-} from "../../modules/sessions/storage/session-jsonl-store";
+import { createSessionJsonlStore } from "../../modules/sessions/storage/session-jsonl-store";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,

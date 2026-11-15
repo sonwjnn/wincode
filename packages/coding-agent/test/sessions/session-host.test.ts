@@ -85,7 +85,7 @@ import { createDefaultSessionProviderCollection } from "@/modules/sessions/provi
 import { createSessionSdkOperations } from "@/modules/sessions/sdk";
 import type { SessionSdkOperations } from "@/modules/sessions/sdk-contract";
 import type { SessionSdkEvent } from "@/modules/sessions/session-events";
-import { SessionWriteOutcomeError } from "@/modules/sessions/storage/session-jsonl-store";
+import { SessionWriteOutcomeError } from "@/modules/sessions/session-write-outcome";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import {

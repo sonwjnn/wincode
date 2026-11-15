@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+	codeOf,
 	isArrayLike,
+	isCode,
 	isError,
 	isFiniteNonNegativeNumber,
 	isInteger,
@@ -52,6 +54,18 @@ describe("runtime scalar predicates", () => {
 		expect(isError(new TypeError("failure"))).toBe(true);
 		expect(isError({ name: "Error", message: "failure" })).toBe(false);
 		expect(isError("failure")).toBe(false);
+	});
+
+	test("reads a string code and narrows only matching code-bearing values", () => {
+		const coded = Object.assign(new Error("failure"), { code: "ENOENT" });
+		expect(isCode(coded, "ENOENT")).toBe(true);
+		expect(isCode(coded, "EEXIST")).toBe(false);
+		expect(isCode({ code: "EEXIST" }, "EEXIST")).toBe(true);
+		expect(isCode({ code: 1 }, "1")).toBe(false);
+		expect(isCode("ENOENT", "ENOENT")).toBe(false);
+		expect(codeOf(coded)).toBe("ENOENT");
+		expect(codeOf({ code: 1 })).toBeUndefined();
+		expect(codeOf(null)).toBeUndefined();
 	});
 	test("accepts non-empty strings without trimming", () => {
 		expect(isNonEmptyString("text")).toBe(true);

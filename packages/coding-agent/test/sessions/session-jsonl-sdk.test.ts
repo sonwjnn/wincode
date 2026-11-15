@@ -70,8 +70,8 @@ import {
 import {
 	createSessionJsonlStore,
 	type SessionJsonlStoreTestObserver,
-	type SessionLogFileIo,
 } from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import {
 	decodeSessionPageToken,
 	encodeSessionPageToken,

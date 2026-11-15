@@ -10,6 +10,7 @@ import type {
 	SessionBundleExportScope,
 	SessionBundleManifest,
 } from "./session-bundle-contract";
+import { SessionWriteOutcomeError } from "./session-write-outcome";
 import {
 	publishSessionBundleDirectory,
 	SessionBundleDestinationExistsError,
@@ -19,10 +20,7 @@ import {
 	SessionBundleValidationError,
 } from "./storage/session-bundle";
 import { SessionLogError } from "./storage/session-jsonl-codec";
-import {
-	SessionBundleExportCleanupError,
-	SessionWriteOutcomeError,
-} from "./storage/session-jsonl-store";
+import { SessionBundleExportCleanupError } from "./storage/session-jsonl-store";
 import type { SessionLifecycle } from "./storage/session-lifecycle";
 
 export type SessionBundleExportErrorCode =

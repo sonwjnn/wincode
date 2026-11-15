@@ -62,10 +62,8 @@ import {
 } from "../provider-collection";
 import { restoreSelection } from "../selection";
 import type { SessionSdkEvent } from "../session-events";
-import {
-	requireSessionWriteReady,
-	SessionWriteOutcomeError,
-} from "../storage/session-jsonl-store";
+import { SessionWriteOutcomeError } from "../session-write-outcome";
+import { requireSessionWriteReady } from "../storage/session-jsonl-store";
 import { projectSessionRecords } from "../transcript-projection";
 import {
 	createSessionUsageLedger,

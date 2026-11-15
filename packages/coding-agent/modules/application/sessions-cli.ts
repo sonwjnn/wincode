@@ -33,8 +33,6 @@ import { resolveLocalSessionLogRoot } from "@/modules/sessions/storage/path";
 import type { SessionCatalog } from "@/modules/sessions/storage/session-catalog";
 import type { SessionHistory } from "@/modules/sessions/storage/session-history";
 import { SessionLogError } from "@/modules/sessions/storage/session-jsonl-codec";
-import type { SessionLogVerification } from "@/modules/sessions/storage/session-jsonl-store";
-import { verifySessionJsonlLog } from "@/modules/sessions/storage/session-jsonl-store";
 import type {
 	SessionForkResult,
 	SessionLifecycle,
@@ -42,6 +40,10 @@ import type {
 	SessionProjectionRebuildResult,
 	SessionProjectionRebuildScope,
 } from "@/modules/sessions/storage/session-lifecycle";
+import {
+	type SessionLogVerification,
+	verifySessionJsonlLog,
+} from "@/modules/sessions/storage/session-log";
 import type {
 	SessionStatistics,
 	SessionStatisticsOptions,

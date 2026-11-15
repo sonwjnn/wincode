@@ -30,16 +30,14 @@ import {
 	encodeCanonicalSessionJson,
 	SESSION_LOG_FORMAT_VERSION,
 } from "@/modules/sessions/storage/session-jsonl-codec";
-import {
-	createSessionJsonlStore,
-	type SessionLogFileIo,
-} from "@/modules/sessions/storage/session-jsonl-store";
+import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type {
 	SessionForkResult,
 	SessionProjectionMaintenanceGate,
 	SessionProjectionRebuildResult,
 	SessionProjectionRebuildScope,
 } from "@/modules/sessions/storage/session-lifecycle";
+import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import { SessionPaginationError } from "@/modules/sessions/storage/session-pagination";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { SessionInUseError } from "@/modules/sessions/storage/session-writer-lock";

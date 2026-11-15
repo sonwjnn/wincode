@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isCode } from "@wincode/utils";
 import {
 	createAtomicPathPublisher,
 	moveWindowsPathDurably,
@@ -165,11 +166,6 @@ export const removeSessionFileDurably = async (
 		syncDirectory
 	);
 };
-
-const isCode = (error: unknown, code: string): boolean =>
-	typeof error === "object" &&
-	error !== null &&
-	Reflect.get(error, "code") === code;
 
 /** Publishes a staged file without replacing an existing destination. */
 export const publishSessionFileNoReplaceDurably = async (
