@@ -12,7 +12,10 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
-import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
+import {
+	createSessionJsonlStore,
+	type SessionJsonlStoreTestObserver,
+} from "@/modules/sessions/storage/session-jsonl-store";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import { type SessionId, toSessionId } from "@/shared/identifiers";
@@ -43,7 +46,11 @@ type Fixture = Readonly<{
 const fixtures: Fixture[] = [];
 const peers: SessionWriterContenderProcess[] = [];
 
-const createStore = (root: string, logRoot: string): StoreHandle => {
+const createStore = (
+	root: string,
+	logRoot: string,
+	testObserver?: SessionJsonlStoreTestObserver
+): StoreHandle => {
 	const connection = createDatabase(path.join(root, "sessions.sqlite"));
 	const projectionStore = createDrizzleSessionStore(connection.db, {
 		attachmentRoot: path.join(root, "attachments"),
@@ -52,11 +59,18 @@ const createStore = (root: string, logRoot: string): StoreHandle => {
 	});
 	return {
 		connection,
-		storage: createSessionJsonlStore(projectionStore, logRoot),
+		storage: createSessionJsonlStore(
+			projectionStore,
+			logRoot,
+			{},
+			testObserver
+		),
 	};
 };
 
-const createFixture = async (): Promise<Fixture> => {
+const createFixture = async (
+	testObserver?: SessionJsonlStoreTestObserver
+): Promise<Fixture> => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-session-freshness-")
 	);
@@ -67,7 +81,7 @@ const createFixture = async (): Promise<Fixture> => {
 	const fixture: Fixture = {
 		logRoot,
 		root,
-		store: createStore(root, logRoot),
+		store: createStore(root, logRoot, testObserver),
 	};
 	fixtures.push(fixture);
 	return fixture;
@@ -141,7 +155,7 @@ describe("Session projection freshness", () => {
 		await peer.release();
 	});
 
-	test("a read point keeps returning the same page after a peer append", async () => {
+	test("history and tree read points keep the same snapshot after a peer append", async () => {
 		const fixture = await createFixture();
 		const created = await createSession(fixture.store.storage);
 		for (const index of [1, 2]) {
@@ -159,6 +173,18 @@ describe("Session projection freshness", () => {
 		const firstReadPoint = firstPage.readPoint;
 		expect(firstPage.nextCursor).toBeDefined();
 		expect(firstPage.records).toHaveLength(1);
+		const firstTreePage =
+			await fixture.store.storage.readSessionHistoryTreePage(created.id, {
+				limit: 1,
+			});
+		if (firstTreePage.nextCursor === undefined) {
+			throw new Error("The history tree page omitted its continuation cursor.");
+		}
+		const expectedTreeContinuation =
+			await fixture.store.storage.readSessionHistoryTreePage(created.id, {
+				cursor: firstTreePage.nextCursor,
+				limit: 100,
+			});
 
 		const peer = startPeer(fixture, created.id);
 		expect(await peer.result).toEqual({ kind: "acquired" });
@@ -178,6 +204,12 @@ describe("Session projection freshness", () => {
 			"freshness-record-1",
 		]);
 		expect(secondPage.readPoint).toEqual(firstReadPoint);
+		const treeContinuation =
+			await fixture.store.storage.readSessionHistoryTreePage(created.id, {
+				cursor: firstTreePage.nextCursor,
+				limit: 100,
+			});
+		expect(treeContinuation).toEqual(expectedTreeContinuation);
 		await peer.release();
 	});
 
@@ -212,6 +244,230 @@ describe("Session projection freshness", () => {
 		expect((await fixture.store.storage.getSession(sessionId)).title).toBe(
 			"Committed while blocked"
 		);
+	});
+
+	test("a tree cursor expires after projection rebuild on a cache hit", async () => {
+		const fixture = await createFixture();
+		const created = await createSession(fixture.store.storage);
+		for (const index of [1, 2]) {
+			const outcome = await fixture.store.storage.commitSessionRecord({
+				record: buildRecord(index),
+				sessionId: created.id,
+			});
+			expect(outcome).toMatchObject({ kind: "committed" });
+		}
+		const firstPage = await fixture.store.storage.readSessionHistoryTreePage(
+			created.id,
+			{ limit: 1 }
+		);
+		if (firstPage.nextCursor === undefined) {
+			throw new Error("The history tree page omitted its continuation cursor.");
+		}
+		const logPath = resolveSessionLogFilePath(fixture.logRoot, created.id);
+		const snapshotBeforeRebuild = await Bun.file(logPath).bytes();
+
+		const rebuilt = await fixture.store.storage.rebuildProjection(
+			{ kind: "session", sessionId: created.id },
+			(operation) => operation()
+		);
+		expect(rebuilt.issues).toEqual([]);
+		expect(await Bun.file(logPath).bytes()).toEqual(snapshotBeforeRebuild);
+
+		await expect(
+			fixture.store.storage.readSessionHistoryTreePage(created.id, {
+				cursor: firstPage.nextCursor,
+				limit: 1,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+	});
+
+	test("projection reset expires prior history, tree, catalog, and statistics read points", async () => {
+		const fixture = await createFixture();
+		const created = await createSession(fixture.store.storage);
+		await fixture.store.storage.createEmptySession({
+			id: toSessionId("freshness-reset-catalog-peer"),
+		});
+		for (const index of [1, 2]) {
+			const outcome = await fixture.store.storage.commitSessionRecord({
+				record: buildRecord(index),
+				sessionId: created.id,
+			});
+			expect(outcome).toMatchObject({ kind: "committed" });
+		}
+		const history = await fixture.store.storage.readSessionHistoryPage(
+			created.id,
+			{ limit: 1 }
+		);
+		const tree = await fixture.store.storage.readSessionHistoryTreePage(
+			created.id,
+			{ limit: 1 }
+		);
+		const catalog = await fixture.store.storage.listSessionsPage({ limit: 1 });
+		const statistics = await fixture.store.storage.getSessionStatistics(
+			created.id
+		);
+		if (
+			history.nextCursor === undefined ||
+			tree.nextCursor === undefined ||
+			catalog.nextCursor === undefined
+		) {
+			throw new Error("A paged read omitted its continuation cursor.");
+		}
+		await fixture.store.storage.resetSessionData();
+
+		await expect(
+			fixture.store.storage.readSessionHistoryPage(created.id, {
+				cursor: history.nextCursor,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+		await expect(
+			fixture.store.storage.readSessionHistoryTreePage(created.id, {
+				cursor: tree.nextCursor,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+		await expect(
+			fixture.store.storage.listSessionsPage({ cursor: catalog.nextCursor })
+		).rejects.toMatchObject({ code: "cursor_expired" });
+		await expect(
+			fixture.store.storage.getSessionStatistics(created.id, {
+				readPoint: statistics.readPoint,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+	});
+
+	test("a peer rebuild expires a tree cursor when the reader has no cached snapshot", async () => {
+		const fixture = await createFixture();
+		const created = await createSession(fixture.store.storage);
+		for (const index of [1, 2]) {
+			const outcome = await fixture.store.storage.commitSessionRecord({
+				record: buildRecord(index),
+				sessionId: created.id,
+			});
+			expect(outcome).toMatchObject({ kind: "committed" });
+		}
+		const peer = startPeer(fixture, created.id);
+		expect(await peer.result).toEqual({ kind: "acquired" });
+		const page = await peer.request("tree-page");
+		if (page.kind !== "tree-page-result" || page.nextCursor === undefined) {
+			throw new Error("The peer tree page omitted its continuation cursor.");
+		}
+		const rebuilt = await peer.request("rebuild");
+		expect(rebuilt).toMatchObject({ kind: "rebuild-result", issues: [] });
+
+		await expect(
+			fixture.store.storage.readSessionHistoryTreePage(created.id, {
+				cursor: page.nextCursor,
+				limit: 1,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+		await peer.release();
+	});
+
+	test("a peer rebuild expires a cached cursor after validation while the page waits", async () => {
+		const readPointValidated = Promise.withResolvers<void>();
+		const releaseRead = Promise.withResolvers<void>();
+		const fixture = await createFixture({
+			onSessionHistoryTreeReadPointValidated: async () => {
+				readPointValidated.resolve();
+				await releaseRead.promise;
+			},
+		});
+		const created = await createSession(fixture.store.storage);
+		for (const index of [1, 2]) {
+			const outcome = await fixture.store.storage.commitSessionRecord({
+				record: buildRecord(index),
+				sessionId: created.id,
+			});
+			expect(outcome).toMatchObject({ kind: "committed" });
+		}
+		const page = await fixture.store.storage.readSessionHistoryTreePage(
+			created.id,
+			{ limit: 1 }
+		);
+		if (page.nextCursor === undefined) {
+			throw new Error("The history tree page omitted its continuation cursor.");
+		}
+		const continuation = fixture.store.storage.readSessionHistoryTreePage(
+			created.id,
+			{ cursor: page.nextCursor, limit: 1 }
+		);
+		await readPointValidated.promise;
+
+		const peer = startPeer(fixture, created.id);
+		expect(await peer.result).toEqual({ kind: "acquired" });
+		const rebuilt = await peer.request("rebuild");
+		expect(rebuilt).toMatchObject({ kind: "rebuild-result", issues: [] });
+		releaseRead.resolve();
+
+		await expect(continuation).rejects.toMatchObject({
+			code: "cursor_expired",
+		});
+		await peer.release();
+	});
+
+	test("a peer rebuild expires a cached tree cursor before serving another page", async () => {
+		const fixture = await createFixture();
+		const created = await createSession(fixture.store.storage);
+		for (const index of [1, 2]) {
+			const outcome = await fixture.store.storage.commitSessionRecord({
+				record: buildRecord(index),
+				sessionId: created.id,
+			});
+			expect(outcome).toMatchObject({ kind: "committed" });
+		}
+		const page = await fixture.store.storage.readSessionHistoryTreePage(
+			created.id,
+			{ limit: 1 }
+		);
+		if (page.nextCursor === undefined) {
+			throw new Error("The history tree page omitted its continuation cursor.");
+		}
+
+		const peer = startPeer(fixture, created.id);
+		expect(await peer.result).toEqual({ kind: "acquired" });
+		const rebuilt = await peer.request("rebuild");
+		expect(rebuilt).toMatchObject({ kind: "rebuild-result", issues: [] });
+
+		await expect(
+			fixture.store.storage.readSessionHistoryTreePage(created.id, {
+				cursor: page.nextCursor,
+				limit: 1,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+		await peer.release();
+	});
+
+	test("an invalid cross-Session cursor wins over a blocked projection", async () => {
+		const fixture = await createFixture();
+		const created = await createSession(fixture.store.storage);
+		const otherSessionId = toSessionId("freshness-wrong-scope-session");
+		await fixture.store.storage.createEmptySession({ id: otherSessionId });
+		const record = await fixture.store.storage.commitSessionRecord({
+			record: buildRecord(1),
+			sessionId: created.id,
+		});
+		expect(record).toMatchObject({ kind: "committed" });
+		const firstPage = await fixture.store.storage.readSessionHistoryPage(
+			created.id,
+			{ limit: 1 }
+		);
+		if (firstPage.nextCursor === undefined) {
+			throw new Error("The history page omitted its continuation cursor.");
+		}
+		fixture.store.connection.sqlite.exec(
+			"UPDATE session_projection_state SET status = 'rebuilding' WHERE id = 1"
+		);
+
+		await expect(
+			fixture.store.storage.readSessionHistoryPage(otherSessionId, {
+				cursor: firstPage.nextCursor,
+			})
+		).rejects.toMatchObject({ code: "cursor_invalid" });
+		await expect(
+			fixture.store.storage.readSessionHistoryPage(created.id, {
+				cursor: firstPage.nextCursor,
+			})
+		).rejects.toMatchObject({ code: "session_projection_blocked" });
 	});
 
 	test("a read point reports cursor_expired after its Session is deleted", async () => {
@@ -254,6 +510,16 @@ describe("Session projection freshness", () => {
 			{ limit: 1 }
 		);
 		expect(firstPage.nextCursor).toBeDefined();
+		const treePage = await fixture.store.storage.readSessionHistoryTreePage(
+			created.id,
+			{ limit: 1 }
+		);
+		if (treePage.nextCursor === undefined) {
+			throw new Error("The history tree page omitted its continuation cursor.");
+		}
+		const statistics = await fixture.store.storage.getSessionStatistics(
+			created.id
+		);
 
 		const peer = startPeer(fixture, created.id);
 		expect(await peer.result).toEqual({ kind: "acquired" });
@@ -271,6 +537,20 @@ describe("Session projection freshness", () => {
 		await expect(
 			fixture.store.storage.readSessionHistoryPage(created.id)
 		).rejects.toThrow();
+		await expect(
+			fixture.store.storage.readSessionHistoryTreePage(created.id, {
+				cursor: treePage.nextCursor,
+				limit: 1,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
+		await expect(
+			fixture.store.storage.readSessionHistoryTreePage(created.id)
+		).rejects.toThrow();
+		await expect(
+			fixture.store.storage.getSessionStatistics(created.id, {
+				readPoint: statistics.readPoint,
+			})
+		).rejects.toMatchObject({ code: "cursor_expired" });
 		await expect(
 			fixture.store.storage.getSession(created.id)
 		).rejects.toThrow();
