@@ -8,7 +8,8 @@ import {
 } from "@tanstack/react-router";
 import { useEffect } from "react";
 import * as sessionStoreModule from "@/modules/sessions/storage/get-session-storage";
-import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
+import type { SessionCatalog } from "@/modules/sessions/storage/session-catalog";
+import type { SessionLifecycle } from "@/modules/sessions/storage/session-lifecycle";
 import { SessionsDialogContent } from "@/modules/sessions/ui/dialogs/sessions-dialog";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
 import {
@@ -45,17 +46,32 @@ export const createSessionPickerRouter = () => {
 };
 
 /**
- * Renders the Session picker against a partial store and returns the renderer
- * plus the `getSessionStorage` spy the caller must restore.
+ * Renders the Session picker against its catalog and lifecycle facets and
+ * returns the renderer plus the getter spies the caller must restore.
  */
 export const renderSessionPicker = async ({
+	catalog,
 	kittyKeyboard,
-	storage,
-}: Readonly<{ kittyKeyboard: boolean; storage: SessionStorage }>) => {
-	const getSessionStorageSpy = spyOn(
+	lifecycle,
+}: Readonly<{
+	catalog: SessionCatalog;
+	kittyKeyboard: boolean;
+	lifecycle: SessionLifecycle;
+}>) => {
+	const getSessionCatalogSpy = spyOn(
 		sessionStoreModule,
-		"getSessionStorage"
-	).mockReturnValue(storage);
+		"getSessionCatalog"
+	).mockReturnValue(catalog);
+	const getSessionLifecycleSpy = spyOn(
+		sessionStoreModule,
+		"getSessionLifecycle"
+	).mockReturnValue(lifecycle);
+	const restoreStorageSpies = {
+		mockRestore: () => {
+			getSessionLifecycleSpy.mockRestore();
+			getSessionCatalogSpy.mockRestore();
+		},
+	};
 	const router = createSessionPickerRouter();
 	const setup = await testRenderWithClipboard(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
@@ -72,5 +88,9 @@ export const renderSessionPicker = async ({
 		</ThemeProvider>,
 		{ height: 24, kittyKeyboard, width: 100 }
 	);
-	return { getSessionStorageSpy, router, setup };
+	return {
+		restoreStorageSpies,
+		router,
+		setup,
+	};
 };

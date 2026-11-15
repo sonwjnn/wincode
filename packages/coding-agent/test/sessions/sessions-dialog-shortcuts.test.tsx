@@ -9,7 +9,8 @@ import type {
 	Session,
 	SessionCatalogPage,
 } from "@/modules/sessions/session-pagination-types";
-import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
+import type { SessionCatalog } from "@/modules/sessions/storage/session-catalog";
+import type { SessionLifecycle } from "@/modules/sessions/storage/session-lifecycle";
 import { sessionId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 import { renderSessionPicker } from "../support/session-picker-harness";
@@ -41,13 +42,12 @@ test("the Session picker deletes only after a second confirmation keypress", asy
 		kind: "committed" as const,
 		projection: "ready" as const,
 	}));
-	const store = fromPartial<SessionStorage>({
-		deleteSession,
-		listSessionsPage,
-	});
-	const { getSessionStorageSpy, setup } = await renderSessionPicker({
+	const catalog = fromPartial<SessionCatalog>({ listSessionsPage });
+	const lifecycle = fromPartial<SessionLifecycle>({ deleteSession });
+	const { restoreStorageSpies, setup } = await renderSessionPicker({
+		catalog,
 		kittyKeyboard: false,
-		storage: store,
+		lifecycle,
 	});
 
 	try {
@@ -68,7 +68,7 @@ test("the Session picker deletes only after a second confirmation keypress", asy
 		expect(deleteSession).toHaveBeenCalledTimes(1);
 		expect(setup.captureCharFrame()).toContain("No matching sessions");
 	} finally {
-		getSessionStorageSpy.mockRestore();
+		restoreStorageSpies.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });
@@ -102,13 +102,12 @@ test("the Session picker opens an imported identity after refreshing the catalog
 		sessionId: importedSessionId,
 		status: "imported" as const,
 	}));
-	const store = fromPartial<SessionStorage>({
-		listSessionsPage,
-		withSessionBundleImport,
-	});
-	const { getSessionStorageSpy, router, setup } = await renderSessionPicker({
+	const catalog = fromPartial<SessionCatalog>({ listSessionsPage });
+	const lifecycle = fromPartial<SessionLifecycle>({ withSessionBundleImport });
+	const { restoreStorageSpies, router, setup } = await renderSessionPicker({
+		catalog,
 		kittyKeyboard: false,
-		storage: store,
+		lifecycle,
 	});
 
 	try {
@@ -145,7 +144,7 @@ test("the Session picker opens an imported identity after refreshing the catalog
 			"Import a validated local Session bundle"
 		);
 	} finally {
-		getSessionStorageSpy.mockRestore();
+		restoreStorageSpies.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });
@@ -165,10 +164,12 @@ test("the Session picker shows both export scopes before writing a bundle", asyn
 	};
 	const pageResult = Promise.withResolvers<SessionCatalogPage>();
 	const listSessionsPage = mock(async () => await pageResult.promise);
-	const store = fromPartial<SessionStorage>({ listSessionsPage });
-	const { getSessionStorageSpy, setup } = await renderSessionPicker({
+	const catalog = fromPartial<SessionCatalog>({ listSessionsPage });
+	const lifecycle = fromPartial<SessionLifecycle>({});
+	const { restoreStorageSpies, setup } = await renderSessionPicker({
+		catalog,
 		kittyKeyboard: false,
-		storage: store,
+		lifecycle,
 	});
 
 	try {
@@ -188,7 +189,7 @@ test("the Session picker shows both export scopes before writing a bundle", asyn
 		expect(frame).toContain("Selected Path");
 		expect(frame).toContain("default: Whole tree");
 	} finally {
-		getSessionStorageSpy.mockRestore();
+		restoreStorageSpies.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });
@@ -209,7 +210,8 @@ test("the export scope selection reaches bundle creation and defaults to whole t
 	};
 	const pageResult = Promise.withResolvers<SessionCatalogPage>();
 	const listSessionsPage = mock(async () => await pageResult.promise);
-	const store = fromPartial<SessionStorage>({ listSessionsPage });
+	const catalog = fromPartial<SessionCatalog>({ listSessionsPage });
+	const lifecycle = fromPartial<SessionLifecycle>({});
 	const exportOperation = mock(async (input: SessionBundleExportInput) => {
 		const scope = input.scope ?? "tree";
 		return {
@@ -239,9 +241,10 @@ test("the export scope selection reaches bundle creation and defaults to whole t
 		sessionHostManagerModule,
 		"getInteractiveSessionHostManager"
 	).mockReturnValue(fromPartial<SessionHostManager>({}));
-	const { getSessionStorageSpy, setup } = await renderSessionPicker({
+	const { restoreStorageSpies, setup } = await renderSessionPicker({
+		catalog,
 		kittyKeyboard: false,
-		storage: store,
+		lifecycle,
 	});
 
 	try {
@@ -281,7 +284,7 @@ test("the export scope selection reaches bundle creation and defaults to whole t
 	} finally {
 		createExportSpy.mockRestore();
 		hostManagerSpy.mockRestore();
-		getSessionStorageSpy.mockRestore();
+		restoreStorageSpies.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });
@@ -301,10 +304,12 @@ test("the Session picker opens bundle import from a key legacy terminals can tra
 	};
 	const pageResult = Promise.withResolvers<SessionCatalogPage>();
 	const listSessionsPage = mock(async () => await pageResult.promise);
-	const store = fromPartial<SessionStorage>({ listSessionsPage });
-	const { getSessionStorageSpy, setup } = await renderSessionPicker({
+	const catalog = fromPartial<SessionCatalog>({ listSessionsPage });
+	const lifecycle = fromPartial<SessionLifecycle>({});
+	const { restoreStorageSpies, setup } = await renderSessionPicker({
+		catalog,
 		kittyKeyboard: false,
-		storage: store,
+		lifecycle,
 	});
 
 	try {
@@ -320,7 +325,7 @@ test("the Session picker opens bundle import from a key legacy terminals can tra
 		expect(frame).toContain("Import a validated local Session bundle");
 		expect(frame).toContain("./session-bundle");
 	} finally {
-		getSessionStorageSpy.mockRestore();
+		restoreStorageSpies.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });

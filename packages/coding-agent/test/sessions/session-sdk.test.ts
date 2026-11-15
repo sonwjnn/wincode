@@ -44,6 +44,7 @@ import {
 import {
 	createSessionSdkWithRuntime as createSessionSdk,
 	createSessionSdkOperations,
+	createSessionSdkRuntimeFactory,
 } from "@/modules/sessions/sdk";
 import type {
 	SessionSdk,
@@ -964,10 +965,16 @@ test("Session SDK forwards opaque page cursors without opening a Host", async ()
 			return statistics;
 		},
 	});
+	const manager = createSessionHostManager();
 	const sdk = createSessionSdkOperations(
-		{ cwd: workspace, getRegistry: () => null, storage: sdkStore, workspace },
-		createSessionHostManager(),
-		sdkStore
+		{ cwd: workspace, getRegistry: () => null, workspace },
+		manager,
+		{
+			catalog: sdkStore,
+			history: sdkStore,
+			lifecycle: sdkStore,
+		},
+		createSessionSdkRuntimeFactory(manager, sdkStore)
 	);
 
 	expect(
@@ -1044,11 +1051,15 @@ test("Session SDK holds a reload-blocking lease through Provider availability an
 			},
 			cwd: workspace,
 			getRegistry: () => null,
-			storage: store,
 			workspace,
 		},
 		manager,
-		store
+		{
+			catalog: store,
+			history: store,
+			lifecycle: store,
+		},
+		createSessionSdkRuntimeFactory(manager, store)
 	);
 	let handle: SessionSdkHandle | undefined;
 	try {
