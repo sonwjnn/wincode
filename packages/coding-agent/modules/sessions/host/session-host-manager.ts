@@ -13,8 +13,10 @@ import { SessionWriteOutcomeError } from "@/modules/sessions/session-write-outco
 import type { SessionId } from "@/shared/identifiers";
 import type { SessionHistoryNavigationOutcome } from "../sdk-contract";
 import { nextChatSelection, restoreSelection } from "../selection";
+import type { PluginSessionState } from "../storage/plugin-session-state";
+import type { SessionCatalog } from "../storage/session-catalog";
 import type { SessionHistory } from "../storage/session-history";
-import type { SessionStorage } from "../storage/session-storage";
+import type { SessionLifecycle } from "../storage/session-lifecycle";
 import { projectSessionMessageRecords } from "../transcript-projection";
 import { assertImportedSessionAgentIsAvailable } from "./imported-session-agent";
 import { createSessionHost } from "./session-host";
@@ -47,7 +49,7 @@ type ManagedHostEntry = {
 	pluginSessionStatePersistence: PluginSessionStatePersistence;
 	pluginSessionHistoryPersistence: PluginSessionHistoryPersistence;
 	pendingPluginSessionStorageError: Error | undefined;
-	storage: SessionStorage;
+	sessionHistory: SessionHistory;
 	unloadCheck: Promise<void> | undefined;
 };
 
@@ -285,7 +287,11 @@ export const createSessionHostManager = (
 		providerCollection: SessionHostOptions["providerCollection"],
 		autoContinue: boolean,
 		historyGeneration: number,
-		storage: SessionStorage
+		sessionHistory: SessionHistory,
+		pluginSessionState: PluginSessionState,
+		createHost: (
+			options: Omit<SessionHostOptions, "storage">
+		) => Promise<SessionHost>
 	): ManagedHostEntry => {
 		const opened = Promise.withResolvers<SessionHost>();
 		const sessionSdk = capabilities.getSessionSdk?.();
@@ -312,7 +318,7 @@ export const createSessionHostManager = (
 		const entry: ManagedHostEntry = {
 			capabilities,
 			closing: undefined,
-			storage,
+			sessionHistory,
 			executionMode,
 			host: undefined,
 			opening: opened.promise,
@@ -334,16 +340,28 @@ export const createSessionHostManager = (
 			pluginSessionStatePersistence: {
 				getHistoryGeneration: () => entry.historyGeneration,
 				read: (pluginId, key) =>
-					storage.getPluginSessionState(sessionId, pluginId, key),
+					pluginSessionState.getPluginSessionState(sessionId, pluginId, key),
 				mutate: (pluginId, mutation) =>
-					storage.mutatePluginSessionState(sessionId, pluginId, mutation),
+					pluginSessionState.mutatePluginSessionState(
+						sessionId,
+						pluginId,
+						mutation
+					),
 				reportWriteOutcome: reportPluginWriteOutcome,
 			},
 			pluginSessionHistoryPersistence: {
 				append: (pluginId, input) =>
-					storage.appendPluginSessionHistoryEntry(sessionId, pluginId, input),
+					sessionHistory.appendPluginSessionHistoryEntry(
+						sessionId,
+						pluginId,
+						input
+					),
 				read: (pluginId, options) =>
-					storage.readPluginSessionHistoryPage(sessionId, pluginId, options),
+					sessionHistory.readPluginSessionHistoryPage(
+						sessionId,
+						pluginId,
+						options
+					),
 				reportWriteOutcome: reportPluginWriteOutcome,
 			},
 			unloadCheck: undefined,
@@ -363,7 +381,7 @@ export const createSessionHostManager = (
 				.catch(() => undefined) ?? Promise.resolve();
 		void sessionStart
 			.then(() =>
-				createSessionHost({
+				createHost({
 					autoContinue:
 						autoContinue &&
 						entry.pendingPluginSessionStorageError === undefined,
@@ -372,8 +390,7 @@ export const createSessionHostManager = (
 					...(providerModel === undefined ? {} : { providerModel }),
 					...(providerCollection === undefined ? {} : { providerCollection }),
 					sessionId,
-					storage: entry.storage,
-				} satisfies SessionHostOptions)
+				})
 			)
 			.then(
 				(host) => {
@@ -434,7 +451,11 @@ export const createSessionHostManager = (
 	};
 	const createOpenEntry = async (
 		capabilities: SessionCapabilities,
-		storage: SessionStorage,
+		sessionHistory: SessionHistory,
+		pluginSessionState: PluginSessionState,
+		createHost: (
+			options: Omit<SessionHostOptions, "storage">
+		) => Promise<SessionHost>,
 		sessionId: SessionId,
 		executionMode: SessionHostOptions["executionMode"],
 		providerModel: SessionHostOptions["providerModel"],
@@ -442,7 +463,7 @@ export const createSessionHostManager = (
 		view: boolean,
 		autoContinue: boolean
 	): Promise<ManagedHostEntry> => {
-		const historyPath = await storage.readSessionHistoryPath(sessionId);
+		const historyPath = await sessionHistory.readSessionHistoryPath(sessionId);
 		const entry = createEntry(
 			capabilities,
 			sessionId,
@@ -451,7 +472,9 @@ export const createSessionHostManager = (
 			providerCollection,
 			autoContinue,
 			historyPath.historyGeneration,
-			storage
+			sessionHistory,
+			pluginSessionState,
+			createHost
 		);
 		if (view) {
 			entry.views += 1;
@@ -495,14 +518,16 @@ export const createSessionHostManager = (
 	};
 	const assertProviderModelSelectionBeforeHost = async (
 		capabilities: HostManagerSelectionCapabilities,
-		storage: SessionStorage,
+		sessionCatalog: SessionCatalog,
+		sessionHistory: SessionHistory,
+		sessionLifecycle: SessionLifecycle,
 		sessionId: SessionId,
 		providerModel: SessionHostOptions["providerModel"],
 		agentPinSelection: SessionHostOptions["providerModel"]
 	): Promise<void> => {
 		const [session, historyPath] = await Promise.all([
-			storage.getSession(sessionId),
-			storage.readSessionHistoryPath(sessionId),
+			sessionCatalog.getSession(sessionId),
+			sessionHistory.readSessionHistoryPath(sessionId),
 		]);
 		const selectedPathRecords = historyPath.records;
 		const messages = selectedPathRecords.flatMap((record) =>
@@ -513,7 +538,8 @@ export const createSessionHostManager = (
 		const latestSelection = nextChatSelection({ messages });
 		const restored = restoreSelection({ messages, row: session });
 		const lastMessageModel = latestSelection?.model;
-		const isImportedSession = await storage.isSessionImported(sessionId);
+		const isImportedSession =
+			await sessionLifecycle.isSessionImported(sessionId);
 		assertImportedSessionAgentIsAvailable(
 			capabilities.getRegistry(),
 			latestSelection?.persistedAgent ?? selectedPathRecords.at(-1)?.agentId,
@@ -538,7 +564,11 @@ export const createSessionHostManager = (
 	};
 	const getOpenEntry = async (
 		capabilities: SessionCapabilities,
-		storage: SessionStorage,
+		sessionHistory: SessionHistory,
+		pluginSessionState: PluginSessionState,
+		createHost: (
+			options: Omit<SessionHostOptions, "storage">
+		) => Promise<SessionHost>,
 		sessionId: SessionId,
 		executionMode: SessionHostOptions["executionMode"],
 		providerModel: SessionHostOptions["providerModel"],
@@ -551,7 +581,9 @@ export const createSessionHostManager = (
 			if (entry === undefined) {
 				return createOpenEntry(
 					capabilities,
-					storage,
+					sessionHistory,
+					pluginSessionState,
+					createHost,
 					sessionId,
 					executionMode,
 					providerModel,
@@ -598,6 +630,13 @@ export const createSessionHostManager = (
 		storage,
 		view = false,
 	}) => {
+		const sessionCatalog: SessionCatalog = storage;
+		const sessionHistory: SessionHistory = storage;
+		const sessionLifecycle: SessionLifecycle = storage;
+		const pluginSessionState: PluginSessionState = storage;
+		const createHost = (
+			hostOptions: Omit<SessionHostOptions, "storage">
+		): Promise<SessionHost> => createSessionHost({ ...hostOptions, storage });
 		let providerCollectionTransferred = false;
 		let openRequestStarted = false;
 		try {
@@ -612,7 +651,9 @@ export const createSessionHostManager = (
 			) {
 				await assertProviderModelSelectionBeforeHost(
 					capabilities,
-					storage,
+					sessionCatalog,
+					sessionHistory,
+					sessionLifecycle,
 					sessionId,
 					providerModel,
 					agentPinSelection
@@ -626,7 +667,9 @@ export const createSessionHostManager = (
 			providerCollectionTransferred = providerCollection !== undefined;
 			const entry = await getOpenEntry(
 				capabilities,
-				storage,
+				sessionHistory,
+				pluginSessionState,
+				createHost,
 				sessionId,
 				executionMode,
 				providerModel ?? agentPinSelection,
@@ -1269,8 +1312,9 @@ export const createSessionHostManager = (
 				if (host === undefined || entry === undefined) {
 					return action(host);
 				}
-				const storage = entry.storage;
-				const previousPath = await storage.readSessionHistoryPath(sessionId);
+				const sessionHistory = entry.sessionHistory;
+				const previousPath =
+					await sessionHistory.readSessionHistoryPath(sessionId);
 				const navigationContext: PluginSessionHistoryNavigationContext = {
 					...entry.pluginSessionContext,
 					fromEntryId: previousPath.activeLeafId,
@@ -1280,7 +1324,10 @@ export const createSessionHostManager = (
 				};
 				const selectedTargetExists =
 					targetEntryId === null ||
-					(await storage.hasSessionHistoryEntry(sessionId, targetEntryId));
+					(await sessionHistory.hasSessionHistoryEntry(
+						sessionId,
+						targetEntryId
+					));
 				if (selectedTargetExists) {
 					const rejection = await runBeforeHistoryNavigationHook(
 						entry,
@@ -1294,7 +1341,7 @@ export const createSessionHostManager = (
 				return completeHistoryNavigation(
 					entry,
 					host,
-					storage,
+					sessionHistory,
 					previousPath,
 					operationId,
 					outcome

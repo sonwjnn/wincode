@@ -6,7 +6,8 @@ import type {
 	SessionCatalogPage,
 	SessionPageOptions,
 } from "@/modules/sessions/session-pagination-types";
-import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
+import type { SessionCatalog } from "@/modules/sessions/storage/session-catalog";
+import type { SessionLifecycle } from "@/modules/sessions/storage/session-lifecycle";
 import { sessionId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 import { renderSessionPicker } from "../support/session-picker-harness";
@@ -26,10 +27,11 @@ test("the Session picker asks for a destination before exporting the selected Se
 	};
 	const pageResult = Promise.withResolvers<SessionCatalogPage>();
 	const listSessionsPage = mock(async () => await pageResult.promise);
-	const store = fromPartial<SessionStorage>({ listSessionsPage });
-	const { getSessionStorageSpy, setup } = await renderSessionPicker({
+	const store = fromPartial<SessionCatalog>({ listSessionsPage });
+	const { restoreStorageSpies, setup } = await renderSessionPicker({
+		catalog: store,
 		kittyKeyboard: true,
-		storage: store,
+		lifecycle: fromPartial<SessionLifecycle>({}),
 	});
 
 	try {
@@ -48,7 +50,7 @@ test("the Session picker asks for a destination before exporting the selected Se
 		expect(frame).toContain("./session-bundle");
 		expect(frame).toContain("export");
 	} finally {
-		getSessionStorageSpy.mockRestore();
+		restoreStorageSpies.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });
@@ -82,10 +84,11 @@ test("the stored Session list loads from its cursor and refreshes to a new snaps
 				: refreshedPageResult.promise;
 		}
 	);
-	const store = fromPartial<SessionStorage>({ listSessionsPage });
-	const { getSessionStorageSpy, setup } = await renderSessionPicker({
+	const store = fromPartial<SessionCatalog>({ listSessionsPage });
+	const { restoreStorageSpies, setup } = await renderSessionPicker({
+		catalog: store,
 		kittyKeyboard: true,
-		storage: store,
+		lifecycle: fromPartial<SessionLifecycle>({}),
 	});
 
 	try {
@@ -120,7 +123,7 @@ test("the stored Session list loads from its cursor and refreshes to a new snaps
 		expect(setup.captureCharFrame()).toContain("Refreshed session");
 		expect(setup.captureCharFrame()).not.toContain("Second session");
 	} finally {
-		getSessionStorageSpy.mockRestore();
+		restoreStorageSpies.mockRestore();
 		act(() => setup.renderer.destroy());
 	}
 });

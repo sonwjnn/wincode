@@ -39,10 +39,14 @@ import type {
 } from "./session-writer-lock";
 
 /**
- * Write and maintenance capabilities for the rebuildable SQLite projection.
- * Projection rows are deliberately absent from this interface: session reads
- * go through ProjectedSession, which binds each operation to head or a Read
- * Point before exposing the result to facet orchestration.
+ * The internal write and maintenance seam between Session facets and the
+ * rebuildable SQLite projection. It is not a Session facet; only the storage
+ * implementation and focused projection tests depend on it.
+ *
+ * Raw projection row readers are deliberately absent: Session reads go through
+ * ProjectedSession, which binds each operation to head or a Read Point before
+ * returning data to facet orchestration. The JSONL store composes this seam
+ * with authoritative logs and exposes the asynchronous Session facets.
  */
 export type SessionProjection = {
 	acquireSessionWriter: (
