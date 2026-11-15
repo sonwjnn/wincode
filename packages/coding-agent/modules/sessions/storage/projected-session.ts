@@ -624,9 +624,14 @@ export const createProjectedSessionStore = (
 		}
 	};
 
-	const assertCurrentGeneration = (generation: number): void => {
+	const assertCurrentGeneration = (
+		sessionId: SessionId,
+		generation: number
+	): void => {
 		if (projection.getMaintenanceState().generation !== generation) {
-			throw sessionProjectionBlocked(
+			throw new SessionLogError(
+				"session_projection_blocked",
+				sessionId,
 				"Session projection changed while the read was in progress; retry after projection maintenance."
 			);
 		}
@@ -687,7 +692,7 @@ export const createProjectedSessionStore = (
 				await ensureProjectionCaughtUp(sessionId);
 				const current = assertProjectionReady(sessionId);
 				return createReadView(sessionId, current, () =>
-					assertCurrentGeneration(current)
+					assertCurrentGeneration(sessionId, current)
 				);
 			},
 			assertAtHead: (cursor, state) =>
@@ -699,7 +704,7 @@ export const createProjectedSessionStore = (
 				const current = assertProjectionReady(sessionId);
 				return {
 					...createReadView(sessionId, current, () =>
-						assertCurrentGeneration(current)
+						assertCurrentGeneration(sessionId, current)
 					),
 					state,
 				};
