@@ -21,6 +21,8 @@ import { estimateCompactionTokens } from "@/modules/sessions/compaction/config";
 import type { SessionCompactionError } from "@/modules/sessions/compaction/error";
 import { createProviderSummaryGenerator } from "@/modules/sessions/compaction/summary-generator";
 import {
+	type AppendSessionCompactionInput,
+	type CompactionLifecycle,
 	type CompactionSummaryTarget,
 	DEFAULT_COMPACTION_SUMMARY_OUTPUT_TOKENS,
 	type SessionCompaction,
@@ -35,12 +37,15 @@ import {
 	type SessionMessage,
 	sanitizeSessionSkillToolPart,
 } from "@/modules/sessions/message";
+import { SessionWriteOutcomeError } from "@/modules/sessions/session-write-outcome";
 import {
 	type AttachmentMetadataRecord,
 	type AttachmentMetadataRepository,
 	createSessionAttachmentStore,
 	getAttachmentReference,
 } from "@/modules/sessions/storage/attachment-store";
+import type { SessionAttachments } from "@/modules/sessions/storage/session-attachments";
+import type { SessionCompactionWriteResult } from "@/modules/sessions/storage/session-records";
 import { createHangingSummary } from "../support/hanging-summary";
 import {
 	agentTurnId,
@@ -50,8 +55,8 @@ import {
 	sessionMessageId,
 	toolCallId,
 } from "../support/identifiers";
-
 import { attachmentsOver } from "../support/session-facets";
+import { makeSessionMessage as message } from "../support/session-message";
 
 const model: ProviderModelSelection = {
 	modelId: modelId("gpt-5.6-luna"),
@@ -85,17 +90,6 @@ test("rejects a skill tool part without a Tool Call Identifier", () => {
 		})
 	).toThrow("invalid Tool Call Identifier");
 });
-
-const message = (
-	id: string,
-	role: SessionMessage["role"],
-	text: string
-): SessionMessage =>
-	fromPartial<SessionMessage>({
-		id: sessionMessageId(id),
-		parts: [{ text, type: "text" }],
-		role,
-	});
 
 const makeStore = (initial: SessionCompaction | null = null) => {
 	let latest = initial;
@@ -145,6 +139,54 @@ const settings = {
 	modelContextLimit: 65_536,
 	thresholdTokens: null,
 } as const;
+
+const makeLeaseTrackingAttachments = (releaseError?: Error) => {
+	const release = mock(async () => {
+		if (releaseError !== undefined) {
+			throw releaseError;
+		}
+	});
+	const attachments = fromPartial<SessionAttachments>({
+		externalizeAttachments: async (messages: readonly SessionMessage[]) => ({
+			messages: [...messages],
+			release,
+		}),
+		getCompactionMetadata: async () => [],
+	});
+	return { attachments, release };
+};
+
+const makeLeaseTrackingCompaction = (lifecycle?: CompactionLifecycle) => {
+	const { attachments, release } = makeLeaseTrackingAttachments();
+	const store = makeStore();
+	const summaryGenerator = mock(async () => ({ text: "summary" }));
+	const compaction = createSessionCompaction({
+		attachments,
+		...(lifecycle === undefined ? {} : { lifecycle }),
+		store,
+		summaryGenerator,
+		estimateTokens: (messages) => messages.length,
+	});
+	return { compaction, release, store, summaryGenerator };
+};
+
+const makeLeaseCompactionInput = (
+	protectedMessageIds?: readonly SessionMessage["id"][]
+): Omit<CompactSessionInput, "summaryTarget"> => ({
+	session: {
+		messages: [
+			message("lease-old-user", "user", "older request"),
+			message("lease-old-assistant", "assistant", "older response"),
+			message("lease-recent-user", "user", "recent request"),
+			message("lease-recent-assistant", "assistant", "recent answer"),
+		],
+		sessionId: sessionId("session-lease-release"),
+	},
+	...(protectedMessageIds === undefined ? {} : { protectedMessageIds }),
+	model,
+	settings,
+	trigger: "manual",
+});
 
 test("compacts complete turns into a durable summary and recent tail", async () => {
 	const store = makeStore();
@@ -2238,6 +2280,137 @@ test("summarizes split-turn history and unfinished prefix in separate requests",
 	});
 });
 
+test("split history uses the prior summary while the turn-prefix request omits it", async () => {
+	const store = makeStore();
+	const summaryInputs: SummaryGeneratorInput[] = [];
+	let generated = 0;
+	const compaction = createSessionCompaction({
+		store,
+		summaryGenerator: mock(async (input: SummaryGeneratorInput) => {
+			summaryInputs.push(input);
+			generated += 1;
+			let text: string;
+			if (generated === 1) {
+				text = "prior durable handoff";
+			} else if (generated === 2) {
+				text = "new history handoff";
+			} else {
+				text = "turn prefix handoff";
+			}
+			return { text };
+		}),
+		estimateTokens: (messages) =>
+			messages.reduce((total, current) => total + current.parts.length, 0),
+	});
+	const firstMessages = [
+		message("split-prior-user", "user", "first request"),
+		message("split-prior-assistant", "assistant", "first answer"),
+		message("split-second-user", "user", "second request"),
+		message("split-second-assistant", "assistant", "second answer"),
+	];
+	const sessionIdValue = sessionId("session-split-prior-summary");
+
+	await compaction.compact({
+		session: { messages: firstMessages, sessionId: sessionIdValue },
+		model,
+		settings: { ...settings, keepRecentTokens: 2 },
+		trigger: "manual",
+	});
+	summaryInputs.length = 0;
+
+	const assistant = fromPartial<SessionMessage>({
+		id: sessionMessageId("split-third-assistant"),
+		parts: [
+			{ text: "prefix one", type: "text" },
+			{ text: "prefix two", type: "text" },
+			{ text: "retained suffix", type: "text" },
+		],
+		role: "assistant",
+	});
+	const result = await compaction.compact({
+		focus: "preserve the new design decision",
+		session: {
+			messages: [
+				...firstMessages,
+				message("split-third-user", "user", "third request"),
+				assistant,
+			],
+			sessionId: sessionIdValue,
+		},
+		model,
+		settings: { ...settings, keepRecentTokens: 2 },
+		trigger: "manual",
+	});
+
+	expect(summaryInputs).toHaveLength(2);
+	expect(summaryInputs[0]?.serializedMessages).toContain("second request");
+	expect(summaryInputs[0]?.serializedMessages).not.toContain("third request");
+	expect(summaryInputs[0]?.previousSummary?.text).toBe("prior durable handoff");
+	expect(summaryInputs[0]?.focus).toBe("preserve the new design decision");
+	expect(summaryInputs[1]?.serializedMessages).toContain("third request");
+	expect(summaryInputs[1]?.serializedMessages).not.toContain("second request");
+	expect(summaryInputs[1]?.previousSummary).toBeUndefined();
+	expect(summaryInputs[1]?.focus).toBe("preserve the new design decision");
+	expect(result.entry.summary.text).toContain("new history handoff");
+	expect(result.entry.summary.text).toContain("turn prefix handoff");
+});
+
+test("the history handoff can finish before an oversized turn prefix is rejected", async () => {
+	const store = makeStore();
+	const summaryInputs: SummaryGeneratorInput[] = [];
+	const summaryGenerator = mock(async (input: SummaryGeneratorInput) => {
+		summaryInputs.push(input);
+		return { text: "history handoff" };
+	});
+	const compaction = createSessionCompaction(
+		{
+			store,
+			summaryGenerator,
+			estimateTokens: (messages) =>
+				messages.reduce((total, current) => total + current.parts.length, 0),
+		},
+		{
+			...engineTestTarget,
+			contextWindowTokens: 2048,
+			outputCeilingTokens: 4096,
+		}
+	);
+	const assistant = fromPartial<SessionMessage>({
+		id: sessionMessageId("split-budget-assistant"),
+		parts: [
+			{ text: "prefix one", type: "text" },
+			{ text: "prefix two", type: "text" },
+			{ text: "recent suffix", type: "text" },
+		],
+		role: "assistant",
+	});
+
+	await expect(
+		compaction.compact({
+			session: {
+				messages: [
+					message("split-budget-history-user", "user", "older request"),
+					message(
+						"split-budget-history-assistant",
+						"assistant",
+						"older answer"
+					),
+					message("split-budget-current-user", "user", "x".repeat(12_000)),
+					assistant,
+				],
+				sessionId: sessionId("session-split-turn-second-budget"),
+			},
+			model,
+			settings: { ...settings, keepRecentTokens: 2 },
+			trigger: "manual",
+		})
+	).rejects.toMatchObject({ code: "context-still-too-large" });
+
+	expect(summaryGenerator).toHaveBeenCalledTimes(1);
+	expect(summaryInputs[0]?.serializedMessages).toContain("older request");
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
 test("a failed split-turn prefix request never commits the completed history handoff", async () => {
 	const store = makeStore();
 	const reportedUsage: { inputTokens: number; outputTokens: number }[] = [];
@@ -2563,7 +2736,7 @@ test("does not split a paired tool result beyond the recent budget", async () =>
 	expect(store.appendCompaction).not.toHaveBeenCalled();
 });
 
-test("passes the externalization lease to the store for indeterminate compaction reconciliation", async () => {
+test("passes an externalization lease to the store when appending a compaction entry", async () => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-compaction-lease-")
 	);
@@ -2618,6 +2791,116 @@ test("passes the externalization lease to the store for indeterminate compaction
 	expect(
 		store.appendCompaction.mock.calls[0]?.[0].externalizationLease
 	).toBeDefined();
+});
+
+test("retains the externalization lease and preserves an indeterminate write cause", async () => {
+	const writeResult: SessionCompactionWriteResult = {
+		writeOutcome: {
+			error: {
+				code: "session_log_write_indeterminate",
+				message: "The compaction write requires reconciliation.",
+			},
+			kind: "indeterminate",
+			operationId: "compaction-lease-reconciliation",
+			requiresReconciliation: true,
+		},
+	};
+	const appendCompaction = mock(
+		async (_input: AppendSessionCompactionInput) => writeResult
+	);
+	const store = {
+		appendCompaction,
+		getLatestCompaction: mock(async () => null),
+	};
+	const { attachments, release } = makeLeaseTrackingAttachments();
+	const compaction = createSessionCompaction({
+		attachments,
+		store,
+		summaryGenerator: mock(async () => ({ text: "summary" })),
+		estimateTokens: (messages) => messages.length,
+	});
+	const failure = await compaction
+		.compact(makeLeaseCompactionInput())
+		.catch((error: unknown) => error);
+
+	expect(failure).toMatchObject({ code: "persistence-failed" });
+	const cause = failure instanceof Error ? failure.cause : undefined;
+	expect(cause).toBeInstanceOf(SessionWriteOutcomeError);
+	expect(cause).toMatchObject({
+		code: "session_log_write_indeterminate",
+		outcome: writeResult.writeOutcome,
+	});
+	expect(release).not.toHaveBeenCalled();
+	expect(
+		appendCompaction.mock.calls[0]?.[0].externalizationLease
+	).toBeDefined();
+});
+
+test("releases the externalization lease when structural planning rejects a protected message", async () => {
+	const { compaction, release, store, summaryGenerator } =
+		makeLeaseTrackingCompaction();
+
+	await expect(
+		compaction.compact(
+			makeLeaseCompactionInput([sessionMessageId("missing-protected-message")])
+		)
+	).rejects.toMatchObject({ code: "invalid-boundary" });
+
+	expect(release).toHaveBeenCalledTimes(1);
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("a lease-release failure does not mask a planning error or its cause", async () => {
+	const originalCause = new Error("token input is unavailable");
+	const planningError = new Error("token estimation failed", {
+		cause: originalCause,
+	});
+	const releaseError = new Error("lease release failed");
+	const { attachments, release } = makeLeaseTrackingAttachments(releaseError);
+	const store = makeStore();
+	const compaction = createSessionCompaction({
+		attachments,
+		store,
+		summaryGenerator: mock(async () => ({ text: "unused summary" })),
+		estimateTokens: () => {
+			throw planningError;
+		},
+	});
+	const failure = await compaction
+		.compact(makeLeaseCompactionInput())
+		.catch((error: unknown) => error);
+
+	expect(failure).toBe(planningError);
+	expect(failure instanceof Error ? failure.cause : undefined).toBe(
+		originalCause
+	);
+	expect(release).toHaveBeenCalledTimes(1);
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("releases the externalization lease when the Plugin cancels compaction", async () => {
+	const before = mock(async () => ({ cancel: "cancelled by Plugin" }));
+	const lifecycle = fromPartial<CompactionLifecycle>({ before });
+	const { compaction, release, store, summaryGenerator } =
+		makeLeaseTrackingCompaction(lifecycle);
+
+	await expect(
+		compaction.compact(makeLeaseCompactionInput())
+	).rejects.toMatchObject({ code: "cancelled" });
+
+	expect(release).toHaveBeenCalledTimes(1);
+	expect(summaryGenerator).not.toHaveBeenCalled();
+	expect(store.appendCompaction).not.toHaveBeenCalled();
+});
+
+test("releases the externalization lease after compaction commits", async () => {
+	const { compaction, release, store } = makeLeaseTrackingCompaction();
+
+	await compaction.compact(makeLeaseCompactionInput());
+
+	expect(store.appendCompaction).toHaveBeenCalledTimes(1);
+	expect(release).toHaveBeenCalledTimes(1);
 });
 
 test("projects the newest attachment against the media budget for estimatedTokensAfter", async () => {
@@ -2848,19 +3131,22 @@ const lifecycleMessages = [
 	message("a2", "assistant", "current answer"),
 ];
 
-test("a Plugin cancellation refuses compaction before any summary call", async () => {
+test("a Plugin cancellation takes precedence over an unusable summary target", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "generated" }));
 	const failed = mock(async () => undefined);
-	const compaction = createSessionCompaction({
-		lifecycle: {
-			before: async () => ({ cancel: "Compaction is paused." }),
-			failed,
+	const compaction = createSessionCompaction(
+		{
+			lifecycle: {
+				before: async () => ({ cancel: "Compaction is paused." }),
+				failed,
+			},
+			store,
+			summaryGenerator,
+			estimateTokens: (messages) => messages.length,
 		},
-		store,
-		summaryGenerator,
-		estimateTokens: (messages) => messages.length,
-	});
+		{ ...engineTestTarget, contextWindowTokens: 1 }
+	);
 
 	await expect(
 		compaction.compact({
@@ -3085,16 +3371,19 @@ test("a Plugin summary avoids invoking a summary generator", async () => {
 test("a Plugin summary needs no conversation context-window limit", async () => {
 	const store = makeStore();
 	const summaryGenerator = mock(async () => ({ text: "generated" }));
-	const compaction = createSessionCompaction({
-		lifecycle: {
-			before: async () => ({
-				summary: "Plugin handoff with an unknown window.",
-			}),
+	const compaction = createSessionCompaction(
+		{
+			lifecycle: {
+				before: async () => ({
+					summary: "Plugin handoff with an unknown window.",
+				}),
+			},
+			store,
+			summaryGenerator,
+			estimateTokens: (messages) => messages.length,
 		},
-		store,
-		summaryGenerator,
-		estimateTokens: (messages) => messages.length,
-	});
+		{ ...engineTestTarget, contextWindowTokens: 1 }
+	);
 
 	const result = await compaction.compact({
 		session: {

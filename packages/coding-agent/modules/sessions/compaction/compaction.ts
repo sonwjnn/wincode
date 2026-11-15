@@ -260,6 +260,48 @@ export type CompactSessionResult = {
 	entry: SessionCompaction;
 };
 
+export type CompactionSummaryRecipe =
+	| Readonly<{ kind: "ordinary" }>
+	| Readonly<{
+			kind: "split-with-history";
+			history: readonly SessionMessage[];
+			turnPrefix: readonly SessionMessage[];
+	  }>
+	| Readonly<{
+			kind: "split-without-history";
+			historyFallback:
+				| Readonly<{ kind: "previous-summary"; text: string }>
+				| Readonly<{ kind: "no-prior-history" }>;
+			turnPrefix: readonly SessionMessage[];
+	  }>;
+
+export type CompactionPlanInput = Readonly<{
+	messages: readonly SessionMessage[];
+	previousCompaction: SessionCompaction | null;
+	keepRecentTokens: number;
+	estimateTokens: (messages: readonly SessionMessage[]) => number;
+	protectedMessageIds?: readonly SessionMessage["id"][];
+	/** The normalized focus that generation and lifecycle callbacks observe. */
+	focus?: string;
+}>;
+
+export type CompactionPlan = Readonly<{
+	boundary: Readonly<{
+		firstKeptIndex: number;
+		firstKeptUiMessageId: SessionMessage["id"];
+		firstKeptAssistantPartIndex?: number;
+		throughIndex: number;
+		throughMessageUiId: SessionMessage["id"];
+	}>;
+	coveredMessageIds: readonly SessionMessage["id"][];
+	fileOperations?: CompactionFileOperations;
+	focus?: string;
+	previousCompaction: SessionCompaction | null;
+	retainedMessages: readonly SessionMessage[];
+	summaryMessages: readonly SessionMessage[];
+	summaryRecipe: CompactionSummaryRecipe;
+}>;
+
 export type SessionCompactionModule = {
 	/**
 	 * Runs a compaction intent. A request whose intent is already in flight
@@ -1058,7 +1100,7 @@ const resolveLifecycleSummaryBudget = (
 	);
 
 const resolveSummaryOutputBudget = (
-	cutPoint: CutPoint,
+	plan: CompactionPlan,
 	settings: CompactSessionInput["settings"],
 	target: CompactionSummaryTarget,
 	estimateTokens: (messages: readonly SessionMessage[]) => number,
@@ -1073,9 +1115,7 @@ const resolveSummaryOutputBudget = (
 		SUMMARY_REQUEST_SAFETY_MARGIN_TOKENS;
 	const retainedTokens = Math.max(
 		0,
-		estimateTokens(
-			projectMessagesForEstimate(cutPoint.activeMessages, settings)
-		)
+		estimateTokens(projectMessagesForEstimate(plan.retainedMessages, settings))
 	);
 	const requestOverheadTokens = Math.max(
 		0,
@@ -1098,13 +1138,9 @@ const resolveSummaryOutputBudget = (
 const appendInputFor = ({
 	attachmentMetadata,
 	session,
-	cutPoint,
-	fileOperations,
-	focus,
+	plan,
 	model,
-	previous,
 	settings,
-	summarySpan,
 	trigger,
 	estimateTokens,
 	entryId,
@@ -1115,14 +1151,10 @@ const appendInputFor = ({
 }: {
 	attachmentMetadata?: readonly CompactionAttachmentMetadata[];
 	session: CompactionSession;
-	cutPoint: CutPoint;
-	fileOperations?: CompactionFileOperations;
-	focus?: string;
+	plan: CompactionPlan;
 	thinkingLevel?: ThinkingLevel;
 	model: ProviderModelSelection;
-	previous: SessionCompaction | null;
 	settings: CompactSessionInput["settings"];
-	summarySpan: readonly SessionMessage[];
 	trigger: CompactionTriggerReason;
 	turnId?: AgentTurnId;
 	estimateTokens: (messages: readonly SessionMessage[]) => number;
@@ -1133,55 +1165,55 @@ const appendInputFor = ({
 		usage?: SessionCompaction["summarizationUsage"];
 	};
 }): AppendSessionCompactionInput => {
-	const firstKept = session.messages[cutPoint.firstKeptIndex];
-	const through = session.messages[cutPoint.throughIndex];
+	const firstKept = session.messages[plan.boundary.firstKeptIndex];
+	const through = session.messages[plan.boundary.throughIndex];
 	if (!(firstKept && through)) {
 		throw new SessionCompactionError(
 			"history-too-short",
 			"There is not enough complete history to compact."
 		);
 	}
-	const normalizedFocus = normalizeFocus(focus);
 	const summary: CompactionSummary = {
 		...(attachmentMetadata && attachmentMetadata.length > 0
 			? { attachments: [...attachmentMetadata] }
 			: {}),
-		coveredMessageIds: summarySpan.map((message) => message.id),
-		...omitUndefined({ fileOperations }),
+		coveredMessageIds: [...plan.coveredMessageIds],
+		...omitUndefined({ fileOperations: plan.fileOperations }),
 		formatVersion: 1,
 		...omitUndefined({
 			overflowSourceTurnId: trigger === "overflow" ? turnId : undefined,
 		}),
 		text: sanitizeSummaryText(
-			withFileOperationsSection(summarization.text, fileOperations)
+			withFileOperationsSection(summarization.text, plan.fileOperations)
 		),
-		...omitUndefined({ focus: normalizedFocus }),
+		...omitUndefined({ focus: plan.focus }),
 	};
 	const nowValue = now();
 	return {
 		completedAt: nowValue,
 		createdAt: nowValue,
-		firstKeptUiMessageId: firstKept.id,
-		throughMessageUiId: through.id,
+		firstKeptUiMessageId: plan.boundary.firstKeptUiMessageId,
+		throughMessageUiId: plan.boundary.throughMessageUiId,
 		...omitUndefined({
-			firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
-			focus: normalizedFocus,
+			firstKeptAssistantPartIndex: plan.boundary.firstKeptAssistantPartIndex,
+			focus: plan.focus,
 			summarizationThinkingLevel: thinkingLevel,
 		}),
 		estimatedTokensAfter: estimateTokens([
 			createCompactionSummaryMessage({ id: entryId, summary }),
-			...projectMessagesForEstimate(cutPoint.activeMessages, settings),
+			...projectMessagesForEstimate(plan.retainedMessages, settings),
 		]),
 		tokensBefore: estimateSessionContextTokens(
-			previous && !session.messages.some(isCompactionSummaryMessage)
-				? rebuildActiveMessages(session.messages, previous)
+			plan.previousCompaction &&
+				!session.messages.some(isCompactionSummaryMessage)
+				? rebuildActiveMessages(session.messages, plan.previousCompaction)
 				: session.messages,
 			estimateTokens,
 			model
 		).tokens,
 		trigger,
 		id: entryId,
-		priorCompactionId: previous?.id,
+		priorCompactionId: plan.previousCompaction?.id,
 		sessionId: session.sessionId,
 		summarizationModel: model,
 		...pickTruthy({ summarizationUsage: summarization.usage }),
@@ -1221,6 +1253,27 @@ const externalizeForCompaction = async (
 			"persistence-failed",
 			"Attachments could not be stored before compaction.",
 			{ cause: error }
+		);
+	}
+};
+
+const releaseExternalizationAfterFailure = async (
+	externalization: AttachmentExternalizationLease,
+	failure: unknown
+): Promise<void> => {
+	if (isSessionWriteIndeterminate(failure)) {
+		return;
+	}
+	try {
+		await externalization.release();
+	} catch (releaseError) {
+		void logger.warn(
+			"Compaction attachment lease release failed after compaction failure",
+			{
+				cause: getErrorMessage(releaseError, String(releaseError)),
+				operation: "session.compaction",
+				phase: "externalization-release",
+			}
 		);
 	}
 };
@@ -1476,24 +1529,38 @@ const aggregateSummaryUsage = (
 	};
 };
 
+type SummaryGenerationContext = Omit<
+	SummaryGeneratorInput,
+	"maxOutputTokens" | "previousSummary" | "serializedMessages"
+>;
+
 const generateSummaryRequest = async ({
-	cutPoint,
+	plan,
+	messages,
+	previousSummary,
 	estimateTokens,
 	input,
 	entryId,
 	summaryGenerator,
 	summaryInput,
 }: {
-	cutPoint: CutPoint;
+	plan: CompactionPlan;
+	messages: readonly SessionMessage[];
+	previousSummary?: CompactionSummary;
 	estimateTokens: (messages: readonly SessionMessage[]) => number;
 	input: CompactSessionInput;
 	entryId: CompactionId;
 	summaryGenerator: SummaryGenerator;
-	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
+	summaryInput: SummaryGenerationContext;
 }): Promise<SummaryGeneratorResult> => {
-	const preparedRequest = prepareSummaryRequest(summaryInput);
+	const requestInput = {
+		...summaryInput,
+		...omitUndefined({ previousSummary }),
+		serializedMessages: serializeMessagesForCompaction(messages),
+	};
+	const preparedRequest = prepareSummaryRequest(requestInput);
 	const maxOutputTokens = resolveSummaryOutputBudget(
-		cutPoint,
+		plan,
 		input.settings,
 		input.summaryTarget,
 		estimateTokens,
@@ -1512,7 +1579,7 @@ const generateSummaryRequest = async ({
 		new Date()
 	);
 	return generateCompactionSummary(summaryGenerator, {
-		...summaryInput,
+		...requestInput,
 		maxOutputTokens,
 		preparedRequest,
 		...omitUndefined({ reportUsage: attemptReportUsage }),
@@ -1548,24 +1615,110 @@ const splitTurnSummarySpan = (
 	};
 };
 
+const createSummaryRecipe = (
+	summaryMessages: readonly SessionMessage[],
+	firstKeptAssistantPartIndex: number | undefined,
+	previousCompaction: SessionCompaction | null
+): CompactionSummaryRecipe => {
+	if (firstKeptAssistantPartIndex === undefined) {
+		return { kind: "ordinary" };
+	}
+	const split = splitTurnSummarySpan(summaryMessages);
+	if (split === undefined) {
+		return { kind: "ordinary" };
+	}
+	if (split.history.length > 0) {
+		return {
+			kind: "split-with-history",
+			history: split.history,
+			turnPrefix: split.turnPrefix,
+		};
+	}
+	return {
+		kind: "split-without-history",
+		turnPrefix: split.turnPrefix,
+		historyFallback:
+			previousCompaction === null
+				? { kind: "no-prior-history" }
+				: {
+						kind: "previous-summary",
+						text: previousCompaction.summary.text,
+					},
+	};
+};
+
+/**
+ * Selects compaction's durable boundary, covered messages, retained context,
+ * prior lineage, cumulative file operations, and summary request recipe without
+ * consulting storage or invoking runtime dependencies.
+ */
+export const planCompaction = ({
+	messages,
+	previousCompaction,
+	keepRecentTokens,
+	estimateTokens,
+	protectedMessageIds,
+	focus,
+}: CompactionPlanInput): CompactionPlan => {
+	const { cutPoint, summarySpan } = chooseCompactionSpan(
+		[...messages],
+		previousCompaction,
+		keepRecentTokens,
+		estimateTokens,
+		protectedMessageIds
+	);
+	const firstKept = messages[cutPoint.firstKeptIndex];
+	const through = messages[cutPoint.throughIndex];
+	if (!(firstKept && through)) {
+		throw new SessionCompactionError(
+			"history-too-short",
+			"There is not enough complete history to compact."
+		);
+	}
+	const fileOperations = collectCumulativeFileOperations({
+		messages: summarySpan,
+		previous: previousCompaction?.summary.fileOperations,
+	});
+	return {
+		boundary: {
+			firstKeptIndex: cutPoint.firstKeptIndex,
+			firstKeptUiMessageId: firstKept.id,
+			...omitUndefined({
+				firstKeptAssistantPartIndex: cutPoint.firstKeptAssistantPartIndex,
+			}),
+			throughIndex: cutPoint.throughIndex,
+			throughMessageUiId: through.id,
+		},
+		coveredMessageIds: summarySpan.map(({ id }) => id),
+		...omitUndefined({ fileOperations }),
+		...omitUndefined({ focus }),
+		previousCompaction,
+		retainedMessages: cutPoint.activeMessages,
+		summaryMessages: summarySpan,
+		summaryRecipe: createSummaryRecipe(
+			summarySpan,
+			cutPoint.firstKeptAssistantPartIndex,
+			previousCompaction
+		),
+	};
+};
+
 const produceCompactionSummary = async ({
-	cutPoint,
+	plan,
 	estimateTokens,
 	input,
 	entryId,
 	lifecycleSummary,
 	summaryGenerator,
 	summaryInput,
-	summarySpan,
 }: {
-	cutPoint: CutPoint;
+	plan: CompactionPlan;
 	estimateTokens: (messages: readonly SessionMessage[]) => number;
 	input: CompactSessionInput;
 	entryId: CompactionId;
 	lifecycleSummary: string | undefined;
 	summaryGenerator: SummaryGenerator | undefined;
-	summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens">;
-	summarySpan: readonly SessionMessage[];
+	summaryInput: SummaryGenerationContext;
 }): Promise<SummaryGeneratorResult> => {
 	if (isNonEmptyString(lifecycleSummary)) {
 		return validateLifecycleSummary(lifecycleSummary, {
@@ -1582,64 +1735,53 @@ const produceCompactionSummary = async ({
 			"Compaction requires an invocable Provider Model. Choose a Provider Model and retry."
 		);
 	}
-	if (cutPoint.firstKeptAssistantPartIndex !== undefined) {
-		const split = splitTurnSummarySpan(summarySpan);
-		if (split !== undefined) {
-			const historyResult =
-				split.history.length > 0
-					? await generateSummaryRequest({
-							cutPoint,
-							estimateTokens,
-							input,
-							entryId,
-							summaryGenerator: selectedSummaryGenerator,
-							summaryInput: {
-								...summaryInput,
-								serializedMessages: serializeMessagesForCompaction(
-									split.history
-								),
-							},
-						})
-					: undefined;
-			const turnPrefixResult = await generateSummaryRequest({
-				cutPoint,
-				estimateTokens,
-				input,
-				entryId,
-				summaryGenerator: selectedSummaryGenerator,
-				summaryInput: omitUndefined({
-					...summaryInput,
-					previousSummary: undefined,
-					serializedMessages: serializeMessagesForCompaction(split.turnPrefix),
-				}),
-			});
-			const historyText =
-				historyResult?.text ??
-				summaryInput.previousSummary?.text ??
-				"No prior history.";
-			const requestResults =
-				historyResult === undefined
-					? [turnPrefixResult]
-					: [historyResult, turnPrefixResult];
+	const generate = (
+		messages: readonly SessionMessage[],
+		previousSummary?: CompactionSummary
+	): Promise<SummaryGeneratorResult> =>
+		generateSummaryRequest({
+			plan,
+			messages,
+			previousSummary,
+			estimateTokens,
+			input,
+			entryId,
+			summaryGenerator: selectedSummaryGenerator,
+			summaryInput,
+		});
+
+	switch (plan.summaryRecipe.kind) {
+		case "ordinary":
+			return generate(plan.summaryMessages, plan.previousCompaction?.summary);
+		case "split-with-history": {
+			const historyResult = await generate(
+				plan.summaryRecipe.history,
+				plan.previousCompaction?.summary
+			);
+			const turnPrefixResult = await generate(plan.summaryRecipe.turnPrefix);
 			return {
-				text: `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`,
+				text: `${historyResult.text}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`,
 				...omitUndefined({
-					usage: aggregateSummaryUsage(requestResults),
+					usage: aggregateSummaryUsage([historyResult, turnPrefixResult]),
 				}),
 			};
 		}
+		case "split-without-history": {
+			const turnPrefixResult = await generate(plan.summaryRecipe.turnPrefix);
+			const historyText =
+				plan.summaryRecipe.historyFallback.kind === "previous-summary"
+					? plan.summaryRecipe.historyFallback.text
+					: "No prior history.";
+			return {
+				text: `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`,
+				...omitUndefined({
+					usage: aggregateSummaryUsage([turnPrefixResult]),
+				}),
+			};
+		}
+		default:
+			throw new Error("Unknown compaction summary recipe.");
 	}
-	return generateSummaryRequest({
-		cutPoint,
-		estimateTokens,
-		input,
-		entryId,
-		summaryGenerator: selectedSummaryGenerator,
-		summaryInput: {
-			...summaryInput,
-			serializedMessages: serializeMessagesForCompaction(summarySpan),
-		},
-	});
 };
 
 export const createSessionCompaction = ({
@@ -1661,16 +1803,12 @@ export const createSessionCompaction = ({
 		externalizationLease,
 		messages,
 		sessionId,
-		cutPoint,
+		plan,
 		entryId,
 		estimateTokens: estimate,
-		fileOperations,
-		focus,
 		model,
 		now: nowFn,
-		previous,
 		settings,
-		summarySpan,
 		summarization,
 		trigger,
 		thinkingLevel,
@@ -1681,16 +1819,12 @@ export const createSessionCompaction = ({
 		externalizationLease: AttachmentExternalizationLease;
 		messages: readonly SessionMessage[];
 		sessionId: SessionId;
-		cutPoint: CutPoint;
+		plan: CompactionPlan;
 		entryId: CompactionId;
 		estimateTokens: (messages: readonly SessionMessage[]) => number;
-		fileOperations?: CompactionFileOperations;
-		focus?: string;
 		model: ProviderModelSelection;
 		now: () => Date;
-		previous: SessionCompaction | null;
 		settings: CompactSessionInput["settings"];
-		summarySpan: readonly SessionMessage[];
 		summarization: {
 			text: string;
 			usage?: SessionCompaction["summarizationUsage"];
@@ -1706,16 +1840,12 @@ export const createSessionCompaction = ({
 			...appendInputFor({
 				attachmentMetadata,
 				session: { messages, sessionId },
-				cutPoint,
+				plan,
 				entryId,
 				estimateTokens: estimate,
-				fileOperations,
-				focus,
 				model,
 				now: nowFn,
-				previous,
 				settings,
-				summarySpan,
 				summarization,
 				trigger,
 				thinkingLevel,
@@ -1724,8 +1854,8 @@ export const createSessionCompaction = ({
 			externalizationLease,
 		};
 		const currentMessages =
-			previous && !messages.some(isCompactionSummaryMessage)
-				? rebuildActiveMessages(messages, previous)
+			plan.previousCompaction && !messages.some(isCompactionSummaryMessage)
+				? rebuildActiveMessages(messages, plan.previousCompaction)
 				: messages;
 		const estimatedTokensBefore = estimate(
 			projectMessagesForEstimate(currentMessages, settings)
@@ -1763,7 +1893,7 @@ export const createSessionCompaction = ({
 		}
 		const activeMessages = [
 			createCompactionSummaryMessage(entry),
-			...cutPoint.activeMessages,
+			...plan.retainedMessages,
 		];
 		return { activeMessages, entry };
 	};
@@ -1789,23 +1919,22 @@ export const createSessionCompaction = ({
 			input.signal
 		);
 		const externalizedMessages = externalization.messages;
-		let keepLeaseForReconciliation = false;
+		let result: CompactSessionResult;
 		try {
 			const previous = await store.getLatestCompaction(input.session.sessionId);
-			const { cutPoint, summarySpan } = chooseCompactionSpan(
-				externalizedMessages,
-				previous,
-				input.settings.keepRecentTokens,
-				estimateTokens,
-				input.protectedMessageIds
-			);
 			const focus = normalizeFocus(input.focus);
+			const plan = planCompaction({
+				messages: externalizedMessages,
+				previousCompaction: previous,
+				keepRecentTokens: input.settings.keepRecentTokens,
+				estimateTokens,
+				protectedMessageIds: input.protectedMessageIds,
+				focus,
+			});
 			const entryId = createId();
-			const summaryInput: Omit<SummaryGeneratorInput, "maxOutputTokens"> = {
+			const summaryInput: SummaryGenerationContext = {
 				target: input.summaryTarget,
-				...omitUndefined({ focus }),
-				previousSummary: previous?.summary,
-				serializedMessages: serializeMessagesForCompaction(summarySpan),
+				...omitUndefined({ focus: plan.focus }),
 				signal: input.signal,
 				...omitUndefined({
 					retryPolicy: input.modelRetryPolicy,
@@ -1820,17 +1949,16 @@ export const createSessionCompaction = ({
 				}),
 			};
 			const attachmentMetadata = attachments
-				? await attachments.getCompactionMetadata(summarySpan, input.signal)
+				? await attachments.getCompactionMetadata(
+						plan.summaryMessages,
+						input.signal
+					)
 				: undefined;
-			const fileOperations = collectCumulativeFileOperations({
-				messages: summarySpan,
-				previous: previous?.summary.fileOperations,
-			});
 			const lifecycleContext: CompactionLifecycleContext = {
 				trigger: input.trigger,
 				sessionId: input.session.sessionId,
 				...omitUndefined({
-					focus,
+					focus: plan.focus,
 					signal: input.signal,
 					turnId: input.turnId,
 				}),
@@ -1844,14 +1972,13 @@ export const createSessionCompaction = ({
 			assertNotAborted(input.signal);
 			const summaryWasSuppliedByPlugin = isNonEmptyString(decision?.summary);
 			const generated = await produceCompactionSummary({
-				cutPoint,
+				plan,
 				estimateTokens,
 				input,
 				entryId,
 				lifecycleSummary: decision?.summary,
 				summaryGenerator,
 				summaryInput,
-				summarySpan,
 			});
 			assertNotAborted(input.signal);
 			const { activeMessages, entry } = await persistCompactionEntry({
@@ -1860,16 +1987,12 @@ export const createSessionCompaction = ({
 				externalizationLease: externalization,
 				messages: externalizedMessages,
 				sessionId: input.session.sessionId,
-				cutPoint,
+				plan,
 				entryId,
 				estimateTokens,
-				fileOperations,
-				focus,
 				model: input.summaryTarget.model,
 				now,
-				previous,
 				settings: input.settings,
-				summarySpan,
 				summarization: generated,
 				trigger: input.trigger,
 				thinkingLevel: summaryWasSuppliedByPlugin
@@ -1888,15 +2011,13 @@ export const createSessionCompaction = ({
 					trigger: input.trigger,
 				});
 			}
-			return { activeMessages, entry };
+			result = { activeMessages, entry };
 		} catch (error) {
-			keepLeaseForReconciliation = isSessionWriteIndeterminate(error);
+			await releaseExternalizationAfterFailure(externalization, error);
 			throw error;
-		} finally {
-			if (!keepLeaseForReconciliation) {
-				await externalization.release();
-			}
 		}
+		await externalization.release();
+		return result;
 	};
 
 	const compact = (

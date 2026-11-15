@@ -128,6 +128,9 @@ A request to change a Session, including prompting, steering, interruption, comp
 **Compaction Intent**:
 What one compaction request asks for: its trigger and its focus, as distinct from the messages it runs over and the Provider Model selection used to generate its summary. The Session Compaction module admits a request that carries the intent already in flight and refuses one that carries another, so no caller is answered with another caller's entry while two threshold passes, which share an intent, still meet in one operation. _Avoid_: compaction request, compaction options
 
+**Compaction Plan**:
+The deterministic structural decision for one compaction: its durable boundary, newly covered content, retained Session Context, and summary recipe. It is distinct from Compaction Intent (what the caller asks for) and Compaction Summary (the resulting handoff text). _Avoid_: Compaction Intent, Compaction Summary
+
 **Overflow Recovery**:
 The one recovery a context-overflow refusal buys for the Agent Turn it ended: the Agent Session compacts eligible history through that turn's original user message, sanitizes the interrupted turn, then continues the resulting Session Context without appending another user message. The attempt stays keyed to the original message, so its continuation cannot chain another recovery and no new send can reset it. _Avoid_: retry, resend
 
