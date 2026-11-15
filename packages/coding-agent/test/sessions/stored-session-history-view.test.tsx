@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import { ScrollBoxRenderable } from "@opentui/core";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { act } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
@@ -257,6 +258,15 @@ test("stored history places the divider after its anchor before later turns", as
 	);
 
 	try {
+		await flushTestRendererUntilStable(setup);
+		const scrollbox = setup.renderer.root.findDescendantById(
+			"stored-session-history-scrollbox"
+		);
+		expect(scrollbox).toBeInstanceOf(ScrollBoxRenderable);
+		if (!(scrollbox instanceof ScrollBoxRenderable)) {
+			throw new Error("Stored Session History is not scrollable.");
+		}
+		scrollbox.scrollTo(0);
 		await flushTestRendererUntilStable(setup);
 		const lines = setup.captureCharFrame().split("\n");
 		const anchorLine = lines.findIndex((line) =>
