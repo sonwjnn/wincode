@@ -13,10 +13,7 @@ import {
 	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
 import { decodeSessionLog } from "@/modules/sessions/storage/session-jsonl-codec";
-import {
-	createSessionJsonlStore,
-	type SessionJsonlStoreTestObserver,
-} from "@/modules/sessions/storage/session-jsonl-store";
+import type { SessionJsonlStoreTestObserver } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
@@ -28,6 +25,7 @@ import {
 	sessionMessageId,
 	sessionRecordId,
 } from "../support/identifiers";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 import {
 	type SessionWriterContenderProcess,
 	startSessionWriterContender,
@@ -60,7 +58,6 @@ const createStore = (
 ): StoreHandle => {
 	const connection = createDatabase(path.join(root, "sessions.sqlite"));
 	const projectionStore = createDrizzleSessionStore(connection.db, {
-		attachmentRoot: path.join(root, "attachments"),
 		snapshotRoot: path.join(root, "snapshots"),
 		workspaceRoot: path.join(root, "workspace"),
 	});

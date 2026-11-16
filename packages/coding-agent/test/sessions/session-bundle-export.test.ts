@@ -17,6 +17,7 @@ import {
 import type { SessionAttachmentStore } from "@/modules/sessions/storage/attachment-store";
 import {
 	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
 	createSessionAttachmentStore,
 } from "@/modules/sessions/storage/attachment-store";
 import { createDatabase } from "@/modules/sessions/storage/client";
@@ -38,7 +39,6 @@ import {
 	encodeSessionLogLine,
 	SessionLogError,
 } from "@/modules/sessions/storage/session-jsonl-codec";
-import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionLifecycle } from "@/modules/sessions/storage/session-lifecycle";
 import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
@@ -50,6 +50,7 @@ import {
 	compactionId,
 	sessionMessageId,
 } from "../support/identifiers";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const PNG_PREFIX = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
@@ -95,8 +96,10 @@ const createFixture = async (
 	const logRoot = resolveLocalSessionLogRoot(databasePath);
 	const attachmentRoot = path.join(root, "attachments");
 	const baseAttachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
 		lifecycleRoot: logRoot,
-		repository: createDrizzleAttachmentMetadataRepository(projection.db),
+		repository: createDrizzleAttachmentMetadataRepository(operational.db),
 		root: attachmentRoot,
 	});
 	let beforeResolve: (() => Promise<void>) | undefined;
@@ -108,7 +111,6 @@ const createFixture = async (
 		},
 	};
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot,
 		attachmentStore,
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
@@ -120,7 +122,8 @@ const createFixture = async (
 		fileIo,
 		onSessionDeletionWriterOperationEnqueued === undefined
 			? undefined
-			: { onSessionDeletionWriterOperationEnqueued }
+			: { onSessionDeletionWriterOperationEnqueued },
+		attachmentStore
 	);
 	const manager = createSessionHostManager();
 	return {

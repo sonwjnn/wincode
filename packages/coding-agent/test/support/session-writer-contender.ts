@@ -6,6 +6,11 @@ import {
 } from "@wincode/agent-core";
 import { codeOf } from "@wincode/utils";
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "../../modules/providers/provider-model-selection";
+import {
+	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
+	createSessionAttachmentStore,
+} from "../../modules/sessions/storage/attachment-store";
 import { createDatabase } from "../../modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "../../modules/sessions/storage/drizzle-session-store";
 import { resolveLocalSessionLogRoot } from "../../modules/sessions/storage/path";
@@ -22,16 +27,21 @@ const payload = JSON.parse(process.argv[2] ?? "") as Readonly<{
 	workspaceRoot: string;
 }>;
 const connection = createDatabase(payload.databasePath);
+const logRoot = resolveLocalSessionLogRoot(payload.databasePath);
+const attachmentStore = createSessionAttachmentStore({
+	additionalLiveAttachmentIds:
+		createDrizzlePromptHistoryAttachmentLivenessSource(connection.db),
+	lifecycleRoot: logRoot,
+	repository: createDrizzleAttachmentMetadataRepository(connection.db),
+	root: payload.attachmentRoot,
+});
 const store = createDrizzleSessionStore(connection.db, {
-	attachmentRoot: payload.attachmentRoot,
+	attachmentStore,
 	snapshotRoot: payload.snapshotRoot,
 	workspaceRoot: payload.workspaceRoot,
 });
 const sessionId = toSessionId(payload.sessionId);
-const storage = createSessionJsonlStore(
-	store,
-	resolveLocalSessionLogRoot(payload.databasePath)
-);
+const storage = createSessionJsonlStore(store, logRoot, attachmentStore);
 const report = (value: unknown): void => {
 	process.stdout.write(`${JSON.stringify(value)}\n`);
 };

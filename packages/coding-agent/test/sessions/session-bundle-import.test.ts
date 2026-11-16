@@ -26,6 +26,7 @@ import type { Session } from "@/modules/sessions/session-pagination-types";
 import {
 	type AttachmentMaintenanceReport,
 	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
 	createSessionAttachmentStore,
 	digestBytes,
 	type SessionAttachmentStore,
@@ -45,7 +46,6 @@ import {
 	type SessionLogEnvelope,
 	sessionHistoryEntryIdForOperation,
 } from "@/modules/sessions/storage/session-jsonl-codec";
-import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import { buildUserSessionRecord } from "@/modules/sessions/storage/session-record";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
@@ -61,6 +61,7 @@ import {
 	providerModelSelectionFixture,
 	sessionMessageId,
 } from "../support/identifiers";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const PNG_PREFIX = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
@@ -102,18 +103,25 @@ const createFixture = async (
 	const logRoot = resolveLocalSessionLogRoot(databasePath);
 	const attachmentRoot = path.join(root, "attachments");
 	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
 		lifecycleRoot: logRoot,
-		repository: createDrizzleAttachmentMetadataRepository(projection.db),
+		repository: createDrizzleAttachmentMetadataRepository(operational.db),
 		root: attachmentRoot,
 	});
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot,
 		attachmentStore,
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
 		workspaceRoot: workspace,
 	});
-	const store = createSessionJsonlStore(projectionStore, logRoot, fileIo);
+	const store = createSessionJsonlStore(
+		projectionStore,
+		logRoot,
+		fileIo,
+		undefined,
+		attachmentStore
+	);
 	const manager = createSessionHostManager();
 	return {
 		attachmentRoot,

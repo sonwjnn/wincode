@@ -1,3 +1,8 @@
+import {
+	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
+	createSessionAttachmentStore,
+} from "./attachment-store";
 import { createDatabaseForSessionReset } from "./client";
 import { createDrizzleSessionStore } from "./drizzle-session-store";
 import {
@@ -29,14 +34,25 @@ export const resetLocalSessionData = async ({
 		);
 		try {
 			const logRoot = resolveLocalSessionLogRoot(databasePath);
+			const attachmentStore = createSessionAttachmentStore({
+				additionalLiveAttachmentIds:
+					createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
+				lifecycleRoot: logRoot,
+				repository: createDrizzleAttachmentMetadataRepository(operational.db),
+				root: attachmentRoot,
+			});
 			const projectionStore = createDrizzleSessionStore(projection.db, {
-				attachmentRoot,
+				attachmentStore,
 				operationalDatabase: operational.db,
 				sessionLogRoot: logRoot,
 				snapshotRoot,
 				...(workspaceRoot === undefined ? {} : { workspaceRoot }),
 			});
-			const store = createSessionJsonlStore(projectionStore, logRoot);
+			const store = createSessionJsonlStore(
+				projectionStore,
+				logRoot,
+				attachmentStore
+			);
 			await store.resetSessionData();
 			const obsoleteSelectionColumns = [
 				["session", "variant"],

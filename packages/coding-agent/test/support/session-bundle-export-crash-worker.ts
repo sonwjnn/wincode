@@ -5,6 +5,7 @@ import { createSessionHostManager } from "@/modules/sessions/host/session-host-m
 import { createSessionBundleExportOperation } from "@/modules/sessions/session-bundle-export";
 import {
 	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
 	createSessionAttachmentStore,
 } from "@/modules/sessions/storage/attachment-store";
 import { createDatabase } from "@/modules/sessions/storage/client";
@@ -31,18 +32,23 @@ const projection = createDatabase(
 const logRoot = resolveLocalSessionLogRoot(databasePath);
 const attachmentRoot = path.join(root, "attachments");
 const attachmentStore = createSessionAttachmentStore({
+	additionalLiveAttachmentIds:
+		createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
 	lifecycleRoot: logRoot,
-	repository: createDrizzleAttachmentMetadataRepository(projection.db),
+	repository: createDrizzleAttachmentMetadataRepository(operational.db),
 	root: attachmentRoot,
 });
 const projectionStore = createDrizzleSessionStore(projection.db, {
-	attachmentRoot,
 	attachmentStore,
 	operationalDatabase: operational.db,
 	sessionLogRoot: logRoot,
 	workspaceRoot: workspace,
 });
-const store = createSessionJsonlStore(projectionStore, logRoot);
+const store = createSessionJsonlStore(
+	projectionStore,
+	logRoot,
+	attachmentStore
+);
 const created = await store.createEmptySession({
 	id: toSessionId("bundle-export-crash-source"),
 	model: DEFAULT_PROVIDER_MODEL_SELECTION,

@@ -32,7 +32,6 @@ import {
 	isSessionRecord,
 	SessionLogError,
 } from "@/modules/sessions/storage/session-jsonl-codec";
-import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type {
 	SessionForkCheckpoint,
 	SessionForkResult,
@@ -55,6 +54,7 @@ import {
 	sessionUsageEntryId,
 	toolCallId,
 } from "../support/identifiers";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const temporaryRoot = await fs.mkdtemp(
@@ -83,7 +83,6 @@ const createPersistence = (
 	);
 	const logRoot = resolveLocalSessionLogRoot(databasePath);
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot: path.join(temporaryRoot, "attachments"),
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
 		workspaceRoot: workspace,
@@ -260,13 +259,18 @@ test("forked attachment references remain live after source deletion and attachm
 		root: path.join(temporaryRoot, "attachment-fork-blobs"),
 	});
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot: path.join(temporaryRoot, "attachment-fork-blobs"),
 		attachmentStore,
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
 		workspaceRoot: workspace,
 	});
-	const store = createSessionJsonlStore(projectionStore, logRoot);
+	const store = createSessionJsonlStore(
+		projectionStore,
+		logRoot,
+		{},
+		undefined,
+		attachmentStore
+	);
 	const imageBytes = new Uint8Array([
 		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01,
 	]);

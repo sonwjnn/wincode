@@ -62,7 +62,6 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
 } from "@/modules/sessions/storage/path";
-import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import type {
 	SessionStatistics,
@@ -87,6 +86,7 @@ import {
 	sessionId,
 } from "../support/identifiers";
 import { createInMemoryCredentialStore } from "../support/provider-stores";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-sdk-"));
 const workspace = path.join(root, "workspace");

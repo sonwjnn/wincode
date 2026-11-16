@@ -51,12 +51,10 @@ const createFixture = (): Fixture => {
 	const first = createDatabase(databasePath);
 	const second = createDatabase(databasePath);
 	const firstStore = createDrizzleSessionStore(first.db, {
-		attachmentRoot: path.join(root, "attachments-a"),
 		snapshotRoot: path.join(root, "snapshots-a"),
 		workspaceRoot: root,
 	});
 	const secondStore = createDrizzleSessionStore(second.db, {
-		attachmentRoot: path.join(root, "attachments-b"),
 		snapshotRoot: path.join(root, "snapshots-b"),
 		workspaceRoot: root,
 	});

@@ -40,6 +40,7 @@ import {
 	type AttachmentMaintenanceReport,
 	type AttachmentMetadataRepository,
 	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
 	createMemoryAttachmentMetadataRepository,
 	createSessionAttachmentStore,
 	getAttachmentReference,
@@ -68,7 +69,7 @@ import {
 	sessionLogOperationDigest,
 } from "@/modules/sessions/storage/session-jsonl-codec";
 import {
-	createSessionJsonlStore,
+	createSessionJsonlStore as buildSessionJsonlStore,
 	type SessionJsonlStoreTestObserver,
 } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
@@ -103,6 +104,7 @@ import {
 	sessionUsageEntryId,
 	toolCallId,
 } from "../support/identifiers";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-session-jsonl-"));
@@ -154,23 +156,25 @@ const createSessionJsonlTestPersistence = (
 	const logRoot = resolveLocalSessionLogRoot(databasePath);
 	const attachmentRepository =
 		attachmentRepositoryOverride ??
-		createDrizzleAttachmentMetadataRepository(projection.db);
+		createDrizzleAttachmentMetadataRepository(operational.db);
 	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
 		lifecycleRoot: logRoot,
 		repository: attachmentRepository,
 		root: attachmentRoot,
 		...(syncBlob === undefined ? {} : { syncBlob }),
 	});
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot,
 		attachmentStore,
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
 		workspaceRoot,
 	});
-	const store = createSessionJsonlStore(
+	const store = buildSessionJsonlStore(
 		projectionStore,
 		logRoot,
+		attachmentStore,
 		fileIo,
 		testObserver
 	);
@@ -4788,17 +4792,17 @@ describe("Attachments, creation identity, and collection", () => {
 		const childSource = `
 import { createDrizzleAttachmentMetadataRepository, createSessionAttachmentStore } from "./packages/coding-agent/modules/sessions/storage/attachment-store.ts";
 import { createDatabase } from "./packages/coding-agent/modules/sessions/storage/client.ts";
-const projection = createDatabase(process.env.TEST_PROJECTION_PATH);
+const operational = createDatabase(process.env.TEST_DATABASE_PATH);
 const attachments = createSessionAttachmentStore({
   lifecycleRoot: process.env.TEST_LOG_ROOT,
-  repository: createDrizzleAttachmentMetadataRepository(projection.db),
+  repository: createDrizzleAttachmentMetadataRepository(operational.db),
   root: process.env.TEST_ATTACHMENT_ROOT,
 });
 try {
   const result = await attachments.collect({ liveAttachmentIds: [], safetyWindowMs: 0 });
   process.stdout.write(JSON.stringify(result));
 } finally {
-  projection.sqlite.close();
+  operational.sqlite.close();
 }
 `;
 		const collectInAnotherProcess =
@@ -4814,8 +4818,7 @@ try {
 							XDG_DATA_HOME: path.join(testRoot, "data"),
 							TEST_ATTACHMENT_ROOT: path.join(testRoot, "attachments"),
 							TEST_LOG_ROOT: resolveLocalSessionLogRoot(databasePath),
-							TEST_PROJECTION_PATH:
-								resolveLocalSessionProjectionPath(databasePath),
+							TEST_DATABASE_PATH: databasePath,
 							WINCODE_TEST_SESSION_INDEX_DIR:
 								process.env.WINCODE_TEST_SESSION_INDEX_DIR ??
 								path.join(testRoot, "session-index"),
@@ -6077,6 +6080,8 @@ try {
 			resolveLocalSessionProjectionPath(databasePath)
 		);
 		const underlyingAttachments = createSessionAttachmentStore({
+			additionalLiveAttachmentIds:
+				createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
 			lifecycleRoot: logRoot,
 			repository: createMemoryAttachmentMetadataRepository(),
 			root: attachmentRoot,
@@ -6087,7 +6092,7 @@ try {
 		const attachments: SessionAttachmentStore = {
 			...underlyingAttachments,
 			collect: async (input) => {
-				// Pause after Drizzle supplies liveness but before collection enters its lifecycle gate.
+				// Pause after Session storage supplies liveness but before collection enters its lifecycle gate.
 				if (blockFirstCollection) {
 					blockFirstCollection = false;
 					collectionStarted.resolve();
@@ -6097,13 +6102,18 @@ try {
 			},
 		};
 		const projectionStore = createDrizzleSessionStore(projection.db, {
-			attachmentRoot,
 			attachmentStore: attachments,
 			operationalDatabase: operational.db,
 			sessionLogRoot: logRoot,
 			workspaceRoot: workspace,
 		});
-		const store = createSessionJsonlStore(projectionStore, logRoot);
+		const store = createSessionJsonlStore(
+			projectionStore,
+			logRoot,
+			{},
+			undefined,
+			attachments
+		);
 		let collection: Promise<AttachmentMaintenanceReport> | undefined;
 
 		try {
@@ -6162,6 +6172,8 @@ try {
 			resolveLocalSessionProjectionPath(databasePath)
 		);
 		const underlyingAttachments = createSessionAttachmentStore({
+			additionalLiveAttachmentIds:
+				createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
 			lifecycleRoot: logRoot,
 			repository: createMemoryAttachmentMetadataRepository(),
 			root: attachmentRoot,
@@ -6199,13 +6211,18 @@ try {
 			},
 		};
 		const projectionStore = createDrizzleSessionStore(projection.db, {
-			attachmentRoot,
 			attachmentStore: attachments,
 			operationalDatabase: operational.db,
 			sessionLogRoot: logRoot,
 			workspaceRoot: workspace,
 		});
-		const store = createSessionJsonlStore(projectionStore, logRoot);
+		const store = createSessionJsonlStore(
+			projectionStore,
+			logRoot,
+			{},
+			undefined,
+			attachments
+		);
 		const inlineFile = {
 			filename: "migrated.png",
 			mediaType: "image/png",
@@ -6285,15 +6302,18 @@ try {
 			repository: createMemoryAttachmentMetadataRepository(),
 			root: attachmentRoot,
 		});
+		const projectionStore = createDrizzleSessionStore(projection.db, {
+			attachmentStore: attachments,
+			operationalDatabase: operational.db,
+			sessionLogRoot: logRoot,
+			workspaceRoot: workspace,
+		});
 		const store = createSessionJsonlStore(
-			createDrizzleSessionStore(projection.db, {
-				attachmentRoot,
-				attachmentStore: attachments,
-				operationalDatabase: operational.db,
-				sessionLogRoot: logRoot,
-				workspaceRoot: workspace,
-			}),
-			logRoot
+			projectionStore,
+			logRoot,
+			{},
+			undefined,
+			attachments
 		);
 		const sessionId = toSessionId("attachment-gc-session");
 		const referenceLease = await attachments.ingest({
@@ -6438,12 +6458,9 @@ try {
 					projectionNow
 				);
 
-			const gcStore = createDrizzleSessionStore(persistence.projection.db, {
-				attachmentStore: persistence.attachmentStore,
-				sessionLogRoot: logRoot,
-				workspaceRoot: workspace,
-			});
-			await expect(gcStore.collectAttachments(0)).resolves.toMatchObject({
+			await expect(
+				persistence.storage.collectAttachments(0)
+			).resolves.toMatchObject({
 				reclaimedCount: 1,
 			});
 			expect(persistence.attachmentRepository.get(reference.attachmentId)).toBe(

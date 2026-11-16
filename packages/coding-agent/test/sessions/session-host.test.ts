@@ -145,6 +145,7 @@ import {
 	failedSessionWriteOutcome,
 	sessionStorageWithSuccessfulWrites,
 } from "../support/session-facets";
+import { createTestSessionAttachmentStore } from "../support/session-facets/attachments";
 
 const createSessionHostManager = () => createSessionHostManagerWithRuntime();
 const sessionHostManager = createSessionHostManager();
@@ -266,11 +267,9 @@ const COMPACTION_SUMMARY_TEXT = "the first turn, summarized";
 const store = sessionStorageWithSuccessfulWrites(
 	createDrizzleSessionStore(
 		createDatabase(path.join(testDirectory, "sessions.db")).db,
-		{
-			attachmentRoot: path.join(testDirectory, "attachments"),
-			workspaceRoot: process.cwd(),
-		}
-	)
+		{ workspaceRoot: process.cwd() }
+	),
+	createTestSessionAttachmentStore(path.join(testDirectory, "session-logs"))
 );
 
 const message = (
@@ -3138,10 +3137,12 @@ describe("Session Host opening", () => {
 		);
 		const secondStore = sessionStorageWithSuccessfulWrites(
 			createDrizzleSessionStore(secondDatabase.db, {
-				attachmentRoot: path.join(testDirectory, "second-attachments"),
 				snapshotRoot: path.join(testDirectory, "second-snapshots"),
 				workspaceRoot: process.cwd(),
-			})
+			}),
+			createTestSessionAttachmentStore(
+				path.join(testDirectory, "second-session-logs")
+			)
 		);
 		const firstHost = await createSessionHost({
 			capabilities: createCapabilities(),
@@ -4495,7 +4496,6 @@ describe("Session Host lifetime", () => {
 			path.join(testDirectory, "sessions.db")
 		);
 		const competingStore = createDrizzleSessionStore(competingDatabase.db, {
-			attachmentRoot: path.join(testDirectory, "competing-attachments"),
 			workspaceRoot: process.cwd(),
 		});
 		const host = await createSessionHost({

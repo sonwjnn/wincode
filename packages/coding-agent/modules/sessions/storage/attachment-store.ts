@@ -35,7 +35,7 @@ import {
 } from "../attachment-reference";
 import type { SessionDatabase } from "./client";
 import { parseSessionLogFileName, resolveSessionLogFilePath } from "./path";
-import { sessionAttachment } from "./schema";
+import { promptHistory, sessionAttachment } from "./schema";
 import { decodeSessionLog } from "./session-jsonl-codec";
 import {
 	ensureSessionDirectoryTreeDurably,
@@ -285,6 +285,7 @@ export type SessionAttachmentStore = {
 	retain: (attachmentIds: Iterable<string>) => Promise<void>;
 	/** Releases blobs a composition no longer holds; an unknown id is a no-op. */
 	release: (attachmentIds: Iterable<string>) => Promise<void>;
+	readAdditionalLiveAttachmentIds: () => Promise<Iterable<string>>;
 	resolve: (
 		reference: AttachmentReference,
 		signal?: AbortSignal
@@ -292,6 +293,7 @@ export type SessionAttachmentStore = {
 };
 
 export type SessionAttachmentStoreOptions = {
+	additionalLiveAttachmentIds?: AttachmentLivenessSource;
 	lifecycleRoot?: string;
 	maxBytes?: number;
 	now?: () => Date;
@@ -565,6 +567,25 @@ export const getAttachmentReference = (
 	}
 	return parsed.data;
 };
+
+export const createDrizzlePromptHistoryAttachmentLivenessSource =
+	(database: SessionDatabase): AttachmentLivenessSource =>
+	() => {
+		const liveAttachmentIds = new Set<string>();
+		const historyRows = database
+			.select({ entry: promptHistory.entryJson })
+			.from(promptHistory)
+			.all();
+		for (const row of historyRows) {
+			for (const file of row.entry?.files ?? []) {
+				const reference = getAttachmentReference(file);
+				if (reference !== null) {
+					liveAttachmentIds.add(reference.attachmentId);
+				}
+			}
+		}
+		return liveAttachmentIds;
+	};
 
 export const stripAttachmentDisplayMetadata = (
 	part: SessionMessage["parts"][number]
@@ -1462,6 +1483,7 @@ export const createSessionAttachmentStore = (
 	options: SessionAttachmentStoreOptions
 ): SessionAttachmentStore => {
 	const {
+		additionalLiveAttachmentIds = [],
 		lifecycleRoot: configuredLifecycleRoot,
 		maxBytes = MAX_ATTACHMENT_BYTES,
 		now = () => new Date(),
@@ -2266,6 +2288,10 @@ export const createSessionAttachmentStore = (
 		hydrateMessages,
 		hydrateMessagesWithStats,
 		ingest,
+		readAdditionalLiveAttachmentIds: async () =>
+			typeof additionalLiveAttachmentIds === "function"
+				? await additionalLiveAttachmentIds()
+				: additionalLiveAttachmentIds,
 		release,
 		resolve: resolveAttachment,
 		retain,

@@ -12,7 +12,6 @@ import {
 	resolveLocalSessionProjectionPath,
 	resolveSessionLogFilePath,
 } from "@/modules/sessions/storage/path";
-import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionLogFileIo } from "@/modules/sessions/storage/session-log";
 import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import {
@@ -20,6 +19,7 @@ import {
 	createFakeProviderRecorder,
 } from "../support/e2e-fake-runtime";
 import { agentId } from "../support/identifiers";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 
 const root = await fs.mkdtemp(
 	path.join(os.tmpdir(), "wincode-session-steering-")

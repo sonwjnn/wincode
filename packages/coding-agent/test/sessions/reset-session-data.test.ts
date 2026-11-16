@@ -6,6 +6,11 @@ import type { ProviderModelSelection } from "@/modules/providers/provider-model-
 import { attachmentReferenceToFilePart } from "@/modules/sessions/attachment-reference";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import {
+	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
+	createSessionAttachmentStore,
+} from "@/modules/sessions/storage/attachment-store";
+import {
 	createDatabase,
 	SessionDatabaseResetRequiredError,
 } from "@/modules/sessions/storage/client";
@@ -44,15 +49,23 @@ const createResetPersistence = (
 		resolveLocalSessionProjectionPath(databasePath)
 	);
 	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
+		lifecycleRoot: logRoot,
+		repository: createDrizzleAttachmentMetadataRepository(operational.db),
+		root: path.join(path.dirname(databasePath), "attachments"),
+	});
 	const store = createSessionJsonlStore(
 		createDrizzleSessionStore(projection.db, {
-			attachmentRoot: path.join(path.dirname(databasePath), "attachments"),
+			attachmentStore,
 			operationalDatabase: operational.db,
 			sessionLogRoot: logRoot,
 			snapshotRoot: path.join(path.dirname(databasePath), "file-snapshots"),
 			workspaceRoot,
 		}),
-		logRoot
+		logRoot,
+		attachmentStore
 	);
 	return {
 		close: () => {
@@ -71,7 +84,14 @@ test("resets session data without conflating repeated pasted markers in prompt h
 	const databasePath = path.join(directory, "session.sqlite");
 	const attachmentRoot = path.join(directory, "attachments");
 	const { db } = createDatabase(databasePath);
-	const store = createDrizzleSessionStore(db, { attachmentRoot });
+	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(db),
+		lifecycleRoot: resolveLocalSessionLogRoot(databasePath),
+		repository: createDrizzleAttachmentMetadataRepository(db),
+		root: attachmentRoot,
+	});
+	const store = createDrizzleSessionStore(db, { attachmentStore });
 
 	const { id: sessionId } = await store.createSession({
 		agent: agentId("build"),
@@ -101,7 +121,7 @@ test("resets session data without conflating repeated pasted markers in prompt h
 			{ start: 0, text: "red\ngreen\nblue", token: "[Pasted ~3 lines]" },
 		],
 	});
-	const attachmentLease = await store.attachmentStore.ingest({
+	const attachmentLease = await attachmentStore.ingest({
 		bytes: PNG_BYTES,
 		filename: "reset.png",
 		mediaType: "image/png",
@@ -124,7 +144,7 @@ test("resets session data without conflating repeated pasted markers in prompt h
 	});
 
 	await store.resetSessionData();
-	await store.collectAttachments(0);
+	await attachmentStore.collect({ liveAttachmentIds: [], safetyWindowMs: 0 });
 
 	expect(await store.listSessions()).toEqual([]);
 	expect(await store.promptHistory.getPromptHistory()).toEqual([
@@ -138,7 +158,7 @@ test("resets session data without conflating repeated pasted markers in prompt h
 		{ files: [], text: "preserve this prompt" },
 	]);
 	expect(await store.getCompactions(sessionId)).toEqual([]);
-	expect(await store.attachmentStore.resolve(reference)).toMatchObject({
+	expect(await attachmentStore.resolve(reference)).toMatchObject({
 		availability: "missing",
 	});
 	expect(await fs.readdir(attachmentRoot)).toEqual(["v1"]);
@@ -156,21 +176,32 @@ test("reset preserves prompt-history attachment owners and collects unowned Sess
 	const projection = createDatabase(
 		resolveLocalSessionProjectionPath(databasePath)
 	);
+	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
+		lifecycleRoot: logRoot,
+		repository: createDrizzleAttachmentMetadataRepository(operational.db),
+		root: attachmentRoot,
+	});
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot,
+		attachmentStore,
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
 		snapshotRoot,
 		workspaceRoot: directory,
 	});
-	const store = createSessionJsonlStore(projectionStore, logRoot);
+	const store = createSessionJsonlStore(
+		projectionStore,
+		logRoot,
+		attachmentStore
+	);
 	try {
-		const promptHistoryLease = await projectionStore.attachmentStore.ingest({
+		const promptHistoryLease = await attachmentStore.ingest({
 			bytes: PNG_BYTES,
 			filename: "prompt-history-owner.png",
 			mediaType: "image/png",
 		});
-		const sessionOnlyLease = await projectionStore.attachmentStore.ingest({
+		const sessionOnlyLease = await attachmentStore.ingest({
 			bytes: new Uint8Array([...PNG_BYTES, 0x01]),
 			filename: "session-only-owner.png",
 			mediaType: "image/png",
@@ -212,12 +243,10 @@ test("reset preserves prompt-history attachment owners and collects unowned Sess
 			},
 		]);
 		expect(
-			await projectionStore.attachmentStore.resolve(
-				promptHistoryLease.reference
-			)
+			await attachmentStore.resolve(promptHistoryLease.reference)
 		).toMatchObject({ availability: "available" });
 		expect(
-			await projectionStore.attachmentStore.resolve(sessionOnlyLease.reference)
+			await attachmentStore.resolve(sessionOnlyLease.reference)
 		).toMatchObject({ availability: "missing" });
 		expect(
 			JSON.parse(
@@ -377,22 +406,34 @@ test("reset reports committed cleanup pending and retries the same deletion iden
 	const projection = createDatabase(
 		resolveLocalSessionProjectionPath(databasePath)
 	);
+	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
+		lifecycleRoot: logRoot,
+		repository: createDrizzleAttachmentMetadataRepository(operational.db),
+		root: path.join(directory, "attachments"),
+	});
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot: path.join(directory, "attachments"),
+		attachmentStore,
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
 		snapshotRoot: path.join(directory, "file-snapshots"),
 		workspaceRoot: directory,
 	});
-	const store = createSessionJsonlStore(projectionStore, logRoot, {
-		remove: async (filePath, options) => {
-			if (failRemoval && filePath.endsWith(`${sessionId}.jsonl`)) {
-				failRemoval = false;
-				throw new Error("Injected reset log removal failure.");
-			}
-			await fs.rm(filePath, options);
-		},
-	});
+	const store = createSessionJsonlStore(
+		projectionStore,
+		logRoot,
+		attachmentStore,
+		{
+			remove: async (filePath, options) => {
+				if (failRemoval && filePath.endsWith(`${sessionId}.jsonl`)) {
+					failRemoval = false;
+					throw new Error("Injected reset log removal failure.");
+				}
+				await fs.rm(filePath, options);
+			},
+		}
+	);
 	const markerPath = path.join(
 		directory,
 		"session-control",
@@ -438,14 +479,25 @@ test("manual reset removes authoritative logs before clearing their projection",
 	const projection = createDatabase(
 		resolveLocalSessionProjectionPath(databasePath)
 	);
+	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
+		lifecycleRoot: logRoot,
+		repository: createDrizzleAttachmentMetadataRepository(operational.db),
+		root: attachmentRoot,
+	});
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot,
+		attachmentStore,
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
 		snapshotRoot,
 		workspaceRoot: directory,
 	});
-	const store = createSessionJsonlStore(projectionStore, logRoot);
+	const store = createSessionJsonlStore(
+		projectionStore,
+		logRoot,
+		attachmentStore
+	);
 	try {
 		await store.createEmptySession({ id: sessionId });
 	} finally {
@@ -464,15 +516,23 @@ test("manual reset removes authoritative logs before clearing their projection",
 	const resetProjection = createDatabase(
 		resolveLocalSessionProjectionPath(databasePath)
 	);
+	const resetAttachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(resetOperational.db),
+		lifecycleRoot: logRoot,
+		repository: createDrizzleAttachmentMetadataRepository(resetOperational.db),
+		root: attachmentRoot,
+	});
 	const reopened = createSessionJsonlStore(
 		createDrizzleSessionStore(resetProjection.db, {
-			attachmentRoot,
+			attachmentStore: resetAttachmentStore,
 			operationalDatabase: resetOperational.db,
 			sessionLogRoot: logRoot,
 			snapshotRoot,
 			workspaceRoot: directory,
 		}),
-		logRoot
+		logRoot,
+		resetAttachmentStore
 	);
 	try {
 		expect(await reopened.listSessionCatalog()).toEqual({
@@ -498,8 +558,16 @@ test("incompatible local Session schema is refused without deleting user data", 
 	try {
 		const initial = createDatabase(databasePath);
 		sqlite = initial.sqlite;
+		const logRoot = resolveLocalSessionLogRoot(databasePath);
+		const attachmentStore = createSessionAttachmentStore({
+			additionalLiveAttachmentIds:
+				createDrizzlePromptHistoryAttachmentLivenessSource(initial.db),
+			lifecycleRoot: logRoot,
+			repository: createDrizzleAttachmentMetadataRepository(initial.db),
+			root: attachmentRoot,
+		});
 		const store = createDrizzleSessionStore(initial.db, {
-			attachmentRoot,
+			attachmentStore,
 			snapshotRoot,
 			workspaceRoot: directory,
 		});
@@ -532,7 +600,7 @@ test("incompatible local Session schema is refused without deleting user data", 
 			trigger: "manual",
 		});
 		// Held but never released: a live lease must survive the reset.
-		await store.attachmentStore.ingest({
+		await attachmentStore.ingest({
 			bytes: PNG_BYTES,
 			filename: "unsafe-reset.png",
 			mediaType: "image/png",

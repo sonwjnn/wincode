@@ -97,7 +97,9 @@ import {
 import {
 	type AttachmentExternalizationLease,
 	type AttachmentIngestLease,
+	type AttachmentMaintenanceReport,
 	digestBytes,
+	type SessionAttachmentStore,
 } from "./attachment-store";
 import type { SessionJsonlProjectionStore } from "./drizzle-session-store";
 import { parseSessionLogFileName, resolveSessionLogFilePath } from "./path";
@@ -2658,6 +2660,7 @@ const requirePublishedForkEntries = (
 export const createSessionJsonlStore = (
 	projectionStore: SessionJsonlProjectionStore,
 	logRoot: string,
+	attachmentStore: SessionAttachmentStore,
 	fileIo: SessionLogFileIo = {},
 	testObserver?: SessionJsonlStoreTestObserver
 ): SessionStorage => {
@@ -3820,12 +3823,6 @@ export const createSessionJsonlStore = (
 				: validateSessionBundleLog(exportSessionId, exportBytes, "source");
 		const exportState = exportChecked.state;
 		const exportAttachments = exportChecked.attachments;
-		const attachmentStore = projectionStore.attachmentStore;
-		if (exportAttachments.length > 0 && attachmentStore === undefined) {
-			throw new SessionBundleValidationError(
-				"Session attachment storage is unavailable for bundle export."
-			);
-		}
 		return {
 			attachments: exportAttachments,
 			cut: {
@@ -3834,7 +3831,7 @@ export const createSessionJsonlStore = (
 			},
 			scope,
 			...omitUndefined({
-				resolveAttachment: attachmentStore?.resolve,
+				resolveAttachment: attachmentStore.resolve,
 				source: branchLog?.source,
 			}),
 			logBytes: exportBytes,
@@ -3861,7 +3858,6 @@ export const createSessionJsonlStore = (
 					options.scope,
 					options.signal
 				);
-				const attachmentStore = projectionStore.attachmentStore;
 				const attachmentIds = [
 					...new Set(
 						source.attachments.map(({ attachmentId }) => attachmentId)
@@ -3869,10 +3865,7 @@ export const createSessionJsonlStore = (
 				];
 				let retainedAttachmentIds: string[] = [];
 				const releasePins = async (): Promise<void> => {
-					if (
-						retainedAttachmentIds.length === 0 ||
-						attachmentStore === undefined
-					) {
+					if (retainedAttachmentIds.length === 0) {
 						return;
 					}
 					let firstError: unknown;
@@ -3887,7 +3880,7 @@ export const createSessionJsonlStore = (
 						throw firstError;
 					}
 				};
-				if (attachmentIds.length > 0 && attachmentStore !== undefined) {
+				if (attachmentIds.length > 0) {
 					await attachmentStore.retain(attachmentIds);
 					retainedAttachmentIds = attachmentIds;
 				}
@@ -3973,12 +3966,6 @@ export const createSessionJsonlStore = (
 	): Promise<void> => {
 		if (prepared.attachments.length === 0) {
 			return;
-		}
-		const attachmentStore = projectionStore.attachmentStore;
-		if (attachmentStore === undefined) {
-			throw new SessionBundleImportConflictError(
-				"The existing Session attachment store is unavailable."
-			);
 		}
 		const checkedIds = new Set<string>();
 		for (const reference of prepared.attachments) {
@@ -4148,12 +4135,6 @@ export const createSessionJsonlStore = (
 		prepared: PreparedSessionBundleImport,
 		options: Readonly<{ signal?: AbortSignal }>
 	): Promise<AttachmentIngestLease[]> => {
-		const attachmentStore = projectionStore.attachmentStore;
-		if (prepared.attachments.length > 0 && attachmentStore === undefined) {
-			throw new SessionBundleValidationError(
-				"Session attachment storage is unavailable for bundle import."
-			);
-		}
 		const attachmentEntries = new Map(
 			prepared.bundle.manifest.attachments.map((attachment) => [
 				attachment.attachmentId,
@@ -4170,7 +4151,7 @@ export const createSessionJsonlStore = (
 				}
 				ingestedIds.add(reference.attachmentId);
 				const entry = attachmentEntries.get(reference.attachmentId);
-				if (entry === undefined || attachmentStore === undefined) {
+				if (entry === undefined) {
 					throw new SessionBundleValidationError(
 						"Session bundle is missing a referenced attachment."
 					);
@@ -4636,16 +4617,12 @@ export const createSessionJsonlStore = (
 				await projected.open(sessionId);
 				await assertSessionWritable(sessionId);
 				let lease = pendingCreationAttachmentLeases.get(sessionId);
-				if (
-					lease === undefined &&
-					projectionStore.attachmentStore !== undefined
-				) {
-					lease =
-						await projectionStore.attachmentStore.externalizeMessagesWithLease(
-							[input.message],
-							undefined,
-							{ rejectInvalid: true }
-						);
+				if (lease === undefined) {
+					lease = await attachmentStore.externalizeMessagesWithLease(
+						[input.message],
+						undefined,
+						{ rejectInvalid: true }
+					);
 				}
 				message = lease?.messages[0] ?? input.message;
 				const externalization = lease ?? {
@@ -5476,6 +5453,7 @@ export const createSessionJsonlStore = (
 		}
 		try {
 			await projectionStore.deleteSession(sessionId);
+			await collectAttachments();
 			return { ...receipt, projection: "ready" };
 		} catch {
 			return deletionCleanupPending(receipt);
@@ -5819,7 +5797,7 @@ export const createSessionJsonlStore = (
 				);
 				if (resetCompleted) {
 					try {
-						await projectionStore.collectAttachments(0);
+						await collectAttachments(0);
 					} catch (error) {
 						throw new SessionCleanupPendingError(
 							sessionIds.map(sessionDeletionOperationId),
@@ -7967,23 +7945,28 @@ export const createSessionJsonlStore = (
 		});
 	};
 
-	projectionStore.setAttachmentCollectionBarrier(async () => {
+	const collectAttachments = async (
+		safetyWindowMs = 60_000
+	): Promise<AttachmentMaintenanceReport> => {
 		const catalog = await listSessionCatalog(false);
 		if (catalog.issues.length > 0) {
 			throw new Error(
 				"Attachment collection is blocked while authoritative Session logs are unavailable."
 			);
 		}
-	});
+		return await attachmentStore.collect({
+			liveAttachmentIds: attachmentStore.readAdditionalLiveAttachmentIds,
+			safetyWindowMs,
+		});
+	};
 
 	return {
 		acquireSessionWriter: acquireWriter,
-		annotateMessagesForDisplay:
-			projectionStore.attachmentStore.annotateMessagesForDisplay,
+		annotateMessagesForDisplay: attachmentStore.annotateMessagesForDisplay,
 		appendCompaction,
 		appendContextEdit,
 		appendPluginSessionHistoryEntry,
-		collectAttachments: projectionStore.collectAttachments,
+		collectAttachments,
 		commitSessionRecord,
 		completeSessionForkAction,
 		confirmSessionImportActivation,
@@ -7992,15 +7975,14 @@ export const createSessionJsonlStore = (
 		createSessionUsageEntry,
 		createSessionWithExternalizedMessage,
 		deleteSession,
-		externalizeAttachments: projectionStore.externalizeAttachments,
+		externalizeAttachments: attachmentStore.externalizeMessagesWithLease,
 		...(projectionStore.fileObservationStore === undefined
 			? {}
 			: { fileObservationStore: projectionStore.fileObservationStore }),
 		findSessionRecordBySubmissionId,
 		forkSession,
 		forkSessionWithHeldWriter,
-		getCompactionMetadata:
-			projectionStore.attachmentStore.getCompactionMetadata,
+		getCompactionMetadata: attachmentStore.getCompactionMetadata,
 		getCompactions: async (sessionId) =>
 			await readThroughHandle(
 				sessionId,
@@ -8043,7 +8025,7 @@ export const createSessionJsonlStore = (
 		getSessionForkProvenance,
 		getSessionStatistics,
 		hasSessionHistoryEntry,
-		hydrateAttachments: projectionStore.hydrateAttachments,
+		hydrateAttachments: attachmentStore.hydrateMessages,
 		isSessionImportActivationPending,
 		isSessionImported,
 		listRecentModelSelections,
@@ -8070,13 +8052,13 @@ export const createSessionJsonlStore = (
 		readSessionHistoryTreePage,
 		rebuildProjection,
 		releaseAttachments: async (attachmentIds) => {
-			await projectionStore.attachmentStore.release(attachmentIds);
+			await attachmentStore.release(attachmentIds);
 		},
 		resetSessionData,
 		resolveAttachmentReference: async (reference, signal) =>
-			await projectionStore.attachmentStore.resolve(reference, signal),
+			await attachmentStore.resolve(reference, signal),
 		retainAttachments: async (attachmentIds) => {
-			await projectionStore.attachmentStore.retain(attachmentIds);
+			await attachmentStore.retain(attachmentIds);
 		},
 		setEditMode,
 		updateSession,

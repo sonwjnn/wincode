@@ -30,7 +30,6 @@ import {
 	encodeCanonicalSessionJson,
 	SESSION_LOG_FORMAT_VERSION,
 } from "@/modules/sessions/storage/session-jsonl-codec";
-import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type {
 	SessionForkResult,
 	SessionProjectionMaintenanceGate,
@@ -50,6 +49,7 @@ import {
 	agentTurnId,
 	providerModelSelectionFixture,
 } from "../support/identifiers";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-sessions-cli-"));
 

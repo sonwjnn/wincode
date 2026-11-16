@@ -30,6 +30,11 @@ import {
 	createInteractiveSessionProviderCollection,
 	pluginProvidersFromRuntime,
 } from "@/modules/sessions/provider-collection";
+import {
+	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
+	createSessionAttachmentStore,
+} from "@/modules/sessions/storage/attachment-store";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import { getSessionStorage } from "@/modules/sessions/storage/get-session-storage";
@@ -39,7 +44,6 @@ import {
 	resolveLocalSessionProjectionPath,
 	resolveLocalSnapshotRoot,
 } from "@/modules/sessions/storage/path";
-import { createSessionJsonlStore } from "@/modules/sessions/storage/session-jsonl-store";
 import type { SessionStorage } from "@/modules/sessions/storage/session-storage";
 import {
 	SessionInUseError,
@@ -64,6 +68,7 @@ import {
 	sessionRecordId,
 } from "../support/identifiers";
 import { requireTestFrame } from "../support/opentui";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "../support/session-jsonl-storage";
 import { startSessionWriterContender } from "../support/session-writer-process";
 
 const testDirectory = await fs.mkdtemp(
@@ -1204,15 +1209,25 @@ test("shows committed Session history while another process owns a hard-linked d
 		resolveLocalSessionProjectionPath(aliasDatabasePath)
 	);
 	const logRoot = resolveLocalSessionLogRoot(aliasDatabasePath);
+	const aliasAttachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(aliasOperational.db),
+		lifecycleRoot: logRoot,
+		repository: createDrizzleAttachmentMetadataRepository(aliasOperational.db),
+		root: resolveLocalAttachmentRoot(aliasDatabasePath),
+	});
 	const aliasStore = createSessionJsonlStore(
 		createDrizzleSessionStore(aliasProjection.db, {
-			attachmentRoot: resolveLocalAttachmentRoot(aliasDatabasePath),
+			attachmentStore: aliasAttachmentStore,
 			operationalDatabase: aliasOperational.db,
 			sessionLogRoot: logRoot,
 			snapshotRoot: resolveLocalSnapshotRoot(aliasDatabasePath),
 			workspaceRoot: process.cwd(),
 		}),
-		logRoot
+		logRoot,
+		{},
+		undefined,
+		aliasAttachmentStore
 	);
 	try {
 		const committedMessage = "committed through the owner's WAL alias";

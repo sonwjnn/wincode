@@ -106,6 +106,34 @@ export const composeRuntime = (storage: SessionStorage): SessionStorage => stora
 	expect(findings).toEqual([]);
 });
 
+test("attachment storage is available only at named Session composition roots", () => {
+	const findings = findingsFor({
+		"modules/sessions/storage/attachment-store.ts": `export type SessionAttachmentStore = Readonly<{ collect: () => void }>;
+`,
+		"modules/sessions/storage/session-storage.ts": aggregateDefinition,
+		"scripts/session-jsonl-benchmark.ts": `import type { SessionAttachmentStore } from "@/modules/sessions/storage/attachment-store";
+export const benchmark = (attachments: SessionAttachmentStore) => attachments.collect();
+`,
+		"test/support/session-jsonl-storage.ts": `import type { SessionStorage } from "../../modules/sessions/storage/session-storage";
+import type { SessionAttachmentStore } from "../../modules/sessions/storage/attachment-store";
+export const fixture = (storage: SessionStorage, attachments: SessionAttachmentStore) => [storage, attachments];
+`,
+		"modules/sessions/ui/session-picker.ts": `import type { SessionAttachmentStore } from "@/modules/sessions/storage/attachment-store";
+export const collect = (attachments: SessionAttachmentStore) => attachments.collect();
+`,
+	});
+
+	expect(findings.length).toBeGreaterThan(0);
+	expect(
+		findings.every(
+			({ file, restrictedSymbol }) =>
+				file ===
+					"packages/coding-agent/modules/sessions/ui/session-picker.ts" &&
+				restrictedSymbol === "SessionAttachmentStore"
+		)
+	).toBe(true);
+});
+
 test("rejects an ordinary aggregate consumer even when it aliases the import", () => {
 	const findings = findingsFor({
 		"modules/sessions/storage/session-storage.ts": aggregateDefinition,

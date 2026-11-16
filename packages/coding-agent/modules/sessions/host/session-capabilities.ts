@@ -32,12 +32,18 @@ import type {
 	SessionSdkCapabilityCeiling,
 	SessionSdkOperations,
 } from "../sdk-contract";
+import {
+	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
+	createSessionAttachmentStore,
+} from "../storage/attachment-store";
 import { createDatabase, type SessionDatabase } from "../storage/client";
 import {
 	createDrizzleSessionStore,
 	type DrizzleSessionStoreOptions,
 } from "../storage/drizzle-session-store";
 import {
+	resolveLocalAttachmentRoot,
 	resolveLocalDatabasePath,
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
@@ -285,22 +291,36 @@ export const createSessionCapabilities = async ({
 		const database = providedDatabase ?? ownedDatabase?.db;
 		let storage: SessionStorage;
 		if (providedStorage === undefined) {
+			const activeDatabase = database;
+			if (activeDatabase === undefined) {
+				throw new Error("Session storage database is unavailable.");
+			}
+			const sessionLogRoot = resolveLocalSessionLogRoot(
+				activeDatabase.$client.filename
+			);
+			const attachmentStore = createSessionAttachmentStore({
+				additionalLiveAttachmentIds:
+					createDrizzlePromptHistoryAttachmentLivenessSource(activeDatabase),
+				lifecycleRoot: sessionLogRoot,
+				repository: createDrizzleAttachmentMetadataRepository(activeDatabase),
+				root: resolveLocalAttachmentRoot(activeDatabase.$client.filename),
+			});
 			ownedProjectionDatabase = createDatabase(
-				resolveLocalSessionProjectionPath(database?.$client.filename)
+				resolveLocalSessionProjectionPath(activeDatabase.$client.filename)
 			);
 			const drizzleStore = createDrizzleSessionStore(
 				ownedProjectionDatabase.db,
 				{
-					operationalDatabase: database,
-					sessionLogRoot: resolveLocalSessionLogRoot(
-						database?.$client.filename
-					),
+					attachmentStore,
+					operationalDatabase: activeDatabase,
+					sessionLogRoot,
 					workspaceRoot: workspace,
 				} satisfies DrizzleSessionStoreOptions
 			);
 			storage = createSessionJsonlStore(
 				drizzleStore,
-				resolveLocalSessionLogRoot(database?.$client.filename)
+				sessionLogRoot,
+				attachmentStore
 			);
 		} else {
 			storage = providedStorage;

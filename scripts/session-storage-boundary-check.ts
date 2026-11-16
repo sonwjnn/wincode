@@ -95,6 +95,7 @@ const AGGREGATE_ASSEMBLY_FILES: Record<string, true> = {
 	"modules/sessions/sdk.ts": true,
 	"modules/sessions/storage/get-session-storage.ts": true,
 	"modules/sessions/storage/session-jsonl-store.ts": true,
+	"scripts/session-jsonl-benchmark.ts": true,
 };
 // These test files explicitly compose a complete store or exercise its runtime assembly.
 const AGGREGATE_TEST_FILES: Record<string, true> = {
@@ -111,6 +112,7 @@ const AGGREGATE_TEST_FILES: Record<string, true> = {
 	"test/sessions/session-sdk.test.ts": true,
 	"test/support/e2e-fixture.tsx": true,
 	"test/support/session-facets/storage.ts": true,
+	"test/support/session-jsonl-storage.ts": true,
 };
 const SESSION_PROJECTION_TEST_FILES: Record<string, true> = {
 	"test/sessions/recovery.test.ts": true,
@@ -124,6 +126,8 @@ const RAW_ATTACHMENT_TEST_FILES: Record<string, true> = {
 	"test/sessions/session-bundle-import.test.ts": true,
 	"test/sessions/session-jsonl-sdk.test.ts": true,
 	"test/support/session-facets/attachments.ts": true,
+	"test/support/session-facets/storage.ts": true,
+	"test/support/session-jsonl-storage.ts": true,
 };
 const RESTRICTED_SYMBOLS: readonly SessionStorageBoundarySymbol[] = [
 	"SessionStorage",
@@ -280,6 +284,7 @@ const isAllowedRestrictedImport = (
 	}
 	return (
 		isStorageImplementationFile(relativePath) ||
+		Object.hasOwn(AGGREGATE_ASSEMBLY_FILES, relativePath) ||
 		Object.hasOwn(RAW_ATTACHMENT_TEST_FILES, relativePath)
 	);
 };
