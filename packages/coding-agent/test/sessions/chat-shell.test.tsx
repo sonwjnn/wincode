@@ -37,7 +37,10 @@ import type { InteractiveProviderController } from "@/modules/providers/interact
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type { SessionQueuedSubmission } from "@/modules/sessions/agent-session/types";
 import { CommittedAssistantError } from "@/modules/sessions/committed-assistant-error";
-import type { SessionCompaction } from "@/modules/sessions/compaction";
+import {
+	createCompactionSummaryMessage,
+	type SessionCompaction,
+} from "@/modules/sessions/compaction";
 import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/draft-store";
 import type {
 	SessionFilePart,
@@ -47,6 +50,7 @@ import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session
 import type { SessionUsageEntry } from "@/modules/sessions/storage/session-catalog";
 import { ChatMessage } from "@/modules/sessions/ui/components/chat-message";
 import { ChatShell } from "@/modules/sessions/ui/components/chat-shell";
+import { buildSessionTranscriptProjection } from "@/modules/sessions/ui/components/chat-timeline";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";
 import { SettingsRegistryProvider } from "@/modules/settings";
 import { getClipboardTextTransform } from "@/shared/clipboard";
@@ -256,6 +260,7 @@ function ChatShellProbe({
 			holder.current = null;
 		};
 	}, [holder, pop, push]);
+	const transcript = buildSessionTranscriptProjection(messages, compactions);
 	return (
 		<>
 			<PromptConfigProbe
@@ -264,14 +269,12 @@ function ChatShellProbe({
 			/>
 			<ChatShell
 				activeMessages={activeMessages}
-				compactions={compactions}
 				draftKey="draft-test-key"
 				error={error}
 				errorSource="turn"
 				isBusy={isBusy || isCompacting}
 				isCompacting={isCompacting}
 				key={composerRevision}
-				messages={messages}
 				onRetry={onRetry}
 				onSubmit={() => true}
 				promptHistory={[]}
@@ -279,6 +282,7 @@ function ChatShellProbe({
 				queuedSubmissions={queuedSubmissions}
 				retryStatus={retryStatus}
 				sessionUsageEntries={sessionUsageEntries}
+				transcript={transcript}
 				transcriptNotice={transcriptNotice}
 				viewId="test"
 			/>
@@ -766,8 +770,8 @@ describe("ChatShell notifications", () => {
 			expect(firstEntryLine).toBeGreaterThan(-1);
 			expect(firstStatusLine).toBeGreaterThan(firstEntryLine);
 			expect(assistantLine).toBeGreaterThan(firstStatusLine);
-			expect(compactionLine).toBeGreaterThan(secondEntryLine);
-			expect(secondStatusLine).toBeGreaterThan(assistantLine);
+			expect(compactionLine).toBeGreaterThan(assistantLine);
+			expect(secondStatusLine).toBeGreaterThan(compactionLine);
 			expect(secondEntryLine).toBeGreaterThan(secondStatusLine);
 		} finally {
 			await act(async () => {
@@ -2295,6 +2299,30 @@ describe("ChatShell activity footer", () => {
 		}
 	});
 
+	test("excludes compaction summary messages from the rendered transcript", async () => {
+		const compaction = completedCompaction();
+		const summaryMessage = createCompactionSummaryMessage({
+			...compaction,
+			summary: {
+				...compaction.summary,
+				text: "summary-only context marker",
+			},
+		});
+		const { setup } = await renderChatShell(
+			[userMessage("visible transcript message"), summaryMessage],
+			{ height: 20, width: 100 }
+		);
+
+		try {
+			await flushUi(setup);
+			const frame = requireTestFrame(setup);
+			expect(frame).toContain("visible transcript message");
+			expect(frame).not.toContain("summary-only context marker");
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test("reveals the persisted file snapshot once and activates the divider from the keyboard", async () => {
 		const base = completedCompaction();
 		const compaction: SessionCompaction = {
@@ -2352,31 +2380,222 @@ describe("ChatShell activity footer", () => {
 		}
 	});
 
-	test("keeps a newly completed divider at the bottom of a long transcript", async () => {
+	test("places the newest divider after its anchor and before later turns", async () => {
 		const messages: SessionMessage[] = [
 			userMessage("user-1"),
-			assistantMessage([{ text: "assistant-1", type: "text" }], "assistant-1"),
+			assistantMessage([{ text: "First answer", type: "text" }], "assistant-1"),
+			userMessage("user-2"),
+			assistantMessage(
+				[{ text: "Second answer", type: "text" }],
+				"assistant-2"
+			),
 		];
-		for (let index = 2; index <= 20; index += 1) {
-			messages.push(
-				userMessage(`user-${index}`),
-				assistantMessage(
-					[{ text: `assistant-${index}`, type: "text" }],
-					`assistant-${index}`
-				)
-			);
-		}
 		const { setup } = await renderChatShell(messages, {
-			height: 12,
+			height: 30,
 			initialCompactions: [completedCompaction()],
 			width: 100,
 		});
 
 		try {
 			await flushUi(setup);
-			expect(requireTestFrame(setup)).toContain(
-				"Compacted (manual) · 7.3K→4.9K tokens"
+			const lines = requireTestFrame(setup).split("\n");
+			const firstAnswerLine = lines.findIndex((line) =>
+				line.includes("First answer")
 			);
+			const dividerLine = lines.findIndex((line) =>
+				line.includes("Compacted (manual)")
+			);
+			const secondUserLine = lines.findIndex((line) => line.includes("user-2"));
+			expect(firstAnswerLine).toBeGreaterThan(-1);
+			expect(dividerLine).toBeGreaterThan(firstAnswerLine);
+			expect(secondUserLine).toBeGreaterThan(dividerLine);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("keeps an anchored divider above turns added to a mounted transcript", async () => {
+		const firstTurn = [
+			userMessage("user-1"),
+			assistantMessage([{ text: "First answer", type: "text" }], "assistant-1"),
+		];
+		const { holder, setup } = await renderChatShell(firstTurn, {
+			height: 60,
+			initialCompactions: [completedCompaction()],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			await act(async () => {
+				holder.current?.setMessages([
+					...firstTurn,
+					userMessage("user-2"),
+					assistantMessage(
+						[{ text: "Second answer", type: "text" }],
+						"assistant-2"
+					),
+				]);
+				await setup.renderOnce();
+			});
+			await flushUi(setup);
+			const lines = requireTestFrame(setup).split("\n");
+			const dividerLine = lines.findIndex((line) =>
+				line.includes("Compacted (manual)")
+			);
+			const secondUserLine = lines.findIndex((line) => line.includes("user-2"));
+			expect(dividerLine).toBeGreaterThan(-1);
+			expect(secondUserLine).toBeGreaterThan(dividerLine);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("orders same-anchor dividers by durable sequence before later turns", async () => {
+		const firstCompaction = completedCompaction();
+		const secondCompaction: SessionCompaction = {
+			...firstCompaction,
+			id: compactionId("compaction-2"),
+			sequence: 2,
+			trigger: "overflow",
+		};
+		const messages = [
+			userMessage("user-1"),
+			assistantMessage([{ text: "First answer", type: "text" }], "assistant-1"),
+			userMessage("user-2"),
+		];
+		const { setup } = await renderChatShell(messages, {
+			height: 30,
+			initialCompactions: [secondCompaction, firstCompaction],
+			width: 100,
+		});
+
+		try {
+			await flushUi(setup);
+			const lines = requireTestFrame(setup).split("\n");
+			const manualDividerLine = lines.findIndex((line) =>
+				line.includes("Compacted (manual)")
+			);
+			const overflowDividerLine = lines.findIndex((line) =>
+				line.includes("Compacted (overflow recovery)")
+			);
+			const secondUserLine = lines.findIndex((line) => line.includes("user-2"));
+			expect(manualDividerLine).toBeGreaterThan(-1);
+			expect(overflowDividerLine).toBeGreaterThan(manualDividerLine);
+			expect(secondUserLine).toBeGreaterThan(overflowDividerLine);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("anchors a divider after a joined Steering Message's full displayed turn", async () => {
+		const initialUser = userMessage("user-1");
+		const steeringMessage: SessionMessage = {
+			...userMessage("steering-message"),
+			metadata: { joinedTurnId: agentTurnId("running-turn") },
+		};
+		const lateResponse: SessionMessage = {
+			...assistantMessage(
+				[{ text: "Response associated with earlier input", type: "text" }],
+				"late-response"
+			),
+			metadata: { sourceUserMessageId: initialUser.id },
+		};
+		const compaction: SessionCompaction = {
+			...completedCompaction(),
+			throughMessageUiId: steeringMessage.id,
+		};
+		const { setup } = await renderChatShell(
+			[
+				initialUser,
+				assistantMessage(
+					[{ text: "Initial answer", type: "text" }],
+					"assistant-1"
+				),
+				steeringMessage,
+				lateResponse,
+				userMessage("user-2"),
+			],
+			{
+				height: 30,
+				initialCompactions: [compaction],
+				width: 100,
+			}
+		);
+
+		try {
+			await flushUi(setup);
+			const lines = requireTestFrame(setup).split("\n");
+			const steeringLine = lines.findIndex((line) =>
+				line.includes("steering-message")
+			);
+			const lateResponseLine = lines.findIndex((line) =>
+				line.includes("Response associated with earlier input")
+			);
+			const dividerLine = lines.findIndex((line) =>
+				line.includes("Compacted (manual)")
+			);
+			const nextTurnLine = lines.findIndex((line) => line.includes("user-2"));
+			expect(steeringLine).toBeGreaterThan(-1);
+			expect(lateResponseLine).toBeGreaterThan(steeringLine);
+			expect(dividerLine).toBeGreaterThan(lateResponseLine);
+			expect(nextTurnLine).toBeGreaterThan(dividerLine);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test("moves a visible unmatched divider to its anchor when older history loads", async () => {
+		const compaction: SessionCompaction = {
+			...completedCompaction(),
+			throughMessageUiId: sessionMessageId("older-assistant"),
+		};
+		const { holder, setup } = await renderChatShell(
+			[
+				userMessage("later-user"),
+				assistantMessage(
+					[{ text: "Later answer", type: "text" }],
+					"later-assistant"
+				),
+			],
+			{
+				height: 60,
+				initialCompactions: [compaction],
+				width: 100,
+			}
+		);
+
+		try {
+			await flushUi(setup);
+			await act(async () => {
+				holder.current?.setMessages([
+					userMessage("older-user"),
+					assistantMessage(
+						[{ text: "Older answer", type: "text" }],
+						"older-assistant"
+					),
+					userMessage("later-user"),
+					assistantMessage(
+						[{ text: "Later answer", type: "text" }],
+						"later-assistant"
+					),
+				]);
+				await setup.renderOnce();
+			});
+			await flushUi(setup);
+			const lines = requireTestFrame(setup).split("\n");
+			const olderAnswerLine = lines.findIndex((line) =>
+				line.includes("Older answer")
+			);
+			const dividerLine = lines.findIndex((line) =>
+				line.includes("Compacted (manual)")
+			);
+			const laterUserLine = lines.findIndex((line) =>
+				line.includes("later-user")
+			);
+			expect(olderAnswerLine).toBeGreaterThan(-1);
+			expect(dividerLine).toBeGreaterThan(olderAnswerLine);
+			expect(laterUserLine).toBeGreaterThan(dividerLine);
 		} finally {
 			setup.renderer.destroy();
 		}

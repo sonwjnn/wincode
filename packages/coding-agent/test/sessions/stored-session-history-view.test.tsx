@@ -1,6 +1,9 @@
 import { expect, mock, test } from "bun:test";
+import { ScrollBoxRenderable } from "@opentui/core";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { act } from "react";
+import type { SessionCompaction } from "@/modules/sessions/compaction";
+import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionForkProvenance } from "@/modules/sessions/storage/session-lifecycle";
 import { StoredSessionHistoryView } from "@/modules/sessions/ui/views/stored-session-history-view";
 import type { SessionStatistics } from "@/modules/sessions/usage/session-statistics";
@@ -8,7 +11,10 @@ import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { testRenderWithClipboard } from "../support/clipboard";
 import { providerModelSelectionFixture } from "../support/identifiers";
-import { flushTestRenderer } from "../support/opentui";
+import {
+	flushTestRenderer,
+	flushTestRendererUntilStable,
+} from "../support/opentui";
 
 const emptyUsage = {
 	byModel: [],
@@ -201,6 +207,80 @@ test("an expired stored-history cursor offers refresh instead of continuation", 
 		});
 		expect(onRefresh).toHaveBeenCalledTimes(1);
 		expect(onLoadMore).not.toHaveBeenCalled();
+	} finally {
+		act(() => setup.renderer.destroy());
+	}
+});
+
+test("stored history places the divider after its anchor before later turns", async () => {
+	const message = (id: string, role: SessionMessage["role"]): SessionMessage =>
+		fromPartial<SessionMessage>({
+			id,
+			parts: [{ text: id, type: "text" }],
+			role,
+		});
+	const messages = [
+		message("history-user-1", "user"),
+		message("history-assistant-1", "assistant"),
+		message("history-user-2", "user"),
+		message("history-assistant-2", "assistant"),
+	];
+	const compaction = fromPartial<SessionCompaction>({
+		estimatedTokensAfter: 20,
+		id: "history-compaction",
+		sequence: 1,
+		summary: { coveredMessageIds: [], formatVersion: 1, text: "" },
+		throughMessageUiId: "history-assistant-1",
+		tokensBefore: 40,
+		trigger: "manual",
+	});
+	const setup = await testRenderWithClipboard(
+		<ThemeProvider themeName={DEFAULT_THEME.name}>
+			<StoredSessionHistoryView
+				compactions={[compaction]}
+				hasMoreHistory={false}
+				isLoadingMore={false}
+				isRefreshing={false}
+				isRetrying={false}
+				isSelectingModel={false}
+				messages={messages}
+				onLoadMore={() => true}
+				onRefresh={() => true}
+				onReselectModel={() => true}
+				onRetry={() => true}
+				owner={undefined}
+				sessionId={statistics.sessionId}
+				sessionTitle="History title"
+				statistics={statistics}
+			/>
+		</ThemeProvider>,
+		{ height: 80, kittyKeyboard: true, width: 100 }
+	);
+
+	try {
+		await flushTestRendererUntilStable(setup);
+		const scrollbox = setup.renderer.root.findDescendantById(
+			"stored-session-history-scrollbox"
+		);
+		expect(scrollbox).toBeInstanceOf(ScrollBoxRenderable);
+		if (!(scrollbox instanceof ScrollBoxRenderable)) {
+			throw new Error("Stored Session History is not scrollable.");
+		}
+		scrollbox.scrollTo(0);
+		await flushTestRendererUntilStable(setup);
+		const lines = setup.captureCharFrame().split("\n");
+		const anchorLine = lines.findIndex((line) =>
+			line.includes("history-assistant-1")
+		);
+		const dividerLine = lines.findIndex((line) =>
+			line.includes("Compacted (manual)")
+		);
+		const laterTurnLine = lines.findIndex((line) =>
+			line.includes("history-user-2")
+		);
+		expect(anchorLine).toBeGreaterThan(-1);
+		expect(dividerLine).toBeGreaterThan(anchorLine);
+		expect(laterTurnLine).toBeGreaterThan(dividerLine);
 	} finally {
 		act(() => setup.renderer.destroy());
 	}

@@ -90,11 +90,11 @@ test("compacts automatically before sending and uses the rebuilt context", async
 			activeSetup.mockInput.pressEnter();
 		});
 
+		// The anchored divider may be outside the viewport; storage and rebuilt
+		// request assertions below verify automatic compaction without assuming it
+		// stays at the transcript tail.
 		await waitForSessionCondition(
 			async () => (await store.getCompactions(sessionId)).length > 0
-		);
-		await waitForSessionFrame(activeSetup, (frame) =>
-			frame.includes("Compacted (automatic)")
 		);
 
 		await waitForSessionCondition(() =>

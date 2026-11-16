@@ -72,7 +72,7 @@ import type {
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
 import { ChatShell } from "../components/chat-shell";
 import {
-	getSessionTimelineAnchor,
+	buildSessionTranscriptProjection,
 	type SessionTimelineAnchor,
 } from "../components/chat-timeline";
 import { RenameSessionDialog } from "../dialogs/rename-session-dialog";
@@ -378,8 +378,18 @@ export function SessionView({
 		undefined
 	);
 	const show = useCallback(
-		({ message, variant }: Pick<ToastOptions, "message" | "variant">): void => {
-			notifySession(message, variant ?? "info", notificationAnchorRef.current);
+		({
+			message,
+			variant,
+			anchor,
+		}: Pick<ToastOptions, "message" | "variant"> & {
+			anchor?: SessionTimelineAnchor;
+		}): void => {
+			notifySession(
+				message,
+				variant ?? "info",
+				anchor ?? notificationAnchorRef.current
+			);
 		},
 		[notifySession]
 	);
@@ -568,10 +578,11 @@ export function SessionView({
 			...optimisticMessages.filter(({ id }) => !committedIds.has(id)),
 		];
 	}, [displayAnnotationsByMessage, optimisticMessages, snapshot.transcript]);
-	const notificationAnchor = useMemo(
-		() => getSessionTimelineAnchor(messages, snapshot.compactions),
+	const transcriptProjection = useMemo(
+		() => buildSessionTranscriptProjection(messages, snapshot.compactions),
 		[messages, snapshot.compactions]
 	);
+	const notificationAnchor = transcriptProjection.notificationAnchor;
 	useLayoutEffect(() => {
 		notificationAnchorRef.current = notificationAnchor;
 	}, [notificationAnchor]);
@@ -1111,9 +1122,15 @@ export function SessionView({
 			show({
 				message: `Automatic compaction (${entry.trigger}): ${entry.tokensBefore} → ${entry.estimatedTokensAfter} tokens.`,
 				variant: "success",
+				anchor: {
+					messageCount: transcriptProjection.notificationAnchor.messageCount,
+					timelineItemCount:
+						transcriptProjection.notificationAnchor.timelineItemCount,
+					afterCompactionId: entry.id,
+				},
 			});
 		}
-	}, [snapshot.compactions, show]);
+	}, [snapshot.compactions, show, transcriptProjection]);
 
 	useEffect(() => {
 		if (!isNull(snapshot.catalogDiagnostic)) {
@@ -1209,7 +1226,6 @@ export function SessionView({
 				<ChatShell
 					activeMessages={activeMessages}
 					cacheWarmingStatus={cacheWarmingStatus}
-					compactions={snapshot.compactions}
 					contextSnapshot={configSnapshot}
 					draftKey={sessionId}
 					error={error}
@@ -1219,7 +1235,6 @@ export function SessionView({
 					isCompacting={snapshot.isCompacting}
 					isSelectionReady={isPromptConfigRestored}
 					key={sessionId}
-					messages={messages}
 					onCompact={executeCompactionCommand}
 					onEmptySubmit={steerQueuedHead}
 					onOpenSessionHistory={
@@ -1243,6 +1258,7 @@ export function SessionView({
 					retryStatus={retryStatus}
 					rewindingCheckpointId={rewindingCheckpointId}
 					sessionUsageEntries={sessionUsageEntries}
+					transcript={transcriptProjection}
 					transcriptNotice={<ProjectTrustNotice />}
 					viewId={sessionId}
 				/>
