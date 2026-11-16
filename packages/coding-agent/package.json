@@ -48,6 +48,7 @@
     "@wincode/ai": "workspace:*",
     "@wincode/mcp": "workspace:*",
     "@wincode/subagents": "workspace:*",
+    "@wincode/tui": "workspace:*",
     "@wincode/utils": "workspace:*",
     "diff": "catalog:",
     "drizzle-orm": "^0.45.2",

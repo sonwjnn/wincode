@@ -1,5 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+	ThemeProvider as TuiThemeProvider,
+	useTheme as useTuiTheme,
+} from "@wincode/tui";
 import { isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
 import {
@@ -68,11 +72,12 @@ type ThemeContextValue = {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function useTheme(): ThemeContextValue {
+	const { colors } = useTuiTheme();
 	const value = useContext(ThemeContext);
 	if (!value) {
 		throw new Error("useTheme must be used within a ThemeProvider");
 	}
-	return value;
+	return { ...value, colors: colors as ThemeColors };
 }
 
 type ThemeProviderProps = {
@@ -110,15 +115,17 @@ export function ThemeProvider({ children, themeName }: ThemeProviderProps) {
 	}, [themeName]);
 
 	return (
-		<ThemeContext.Provider
-			value={{
-				colors: currentTheme.colors,
-				currentTheme,
-				reloadTheme,
-				setTheme,
-			}}
-		>
-			{children}
-		</ThemeContext.Provider>
+		<TuiThemeProvider theme={currentTheme}>
+			<ThemeContext.Provider
+				value={{
+					colors: currentTheme.colors,
+					currentTheme,
+					reloadTheme,
+					setTheme,
+				}}
+			>
+				{children}
+			</ThemeContext.Provider>
+		</TuiThemeProvider>
 	);
 }
