@@ -4,14 +4,12 @@ import type { ReactNode } from "react";
 import { requestSelectionCopy } from "@/shared/clipboard";
 import { clickedLink } from "@/shared/links/clicked-link";
 import { openExternalLink } from "@/shared/links/open-external-link";
-import { useTheme } from "@/shared/providers/theme/theme-provider";
 
 type Props = {
 	children: ReactNode;
 };
 
 export function ThemedRoot({ children }: Props) {
-	const { colors } = useTheme();
 	const renderer = useRenderer();
 	const handleMouseDown = (event: MouseEvent): void => {
 		if (event.button !== MouseButton.RIGHT) {
@@ -32,7 +30,7 @@ export function ThemedRoot({ children }: Props) {
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
 		<box
-			backgroundColor={colors.background}
+			backgroundColor="transparent"
 			flexGrow={1}
 			height="100%"
 			onMouseDown={handleMouseDown}
