@@ -10,6 +10,12 @@ import {
 import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import { createSessionUserMessage } from "@/modules/sessions/message";
 import {
+	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
+	createSessionAttachmentStore,
+	type SessionAttachmentStore,
+} from "@/modules/sessions/storage/attachment-store";
+import {
 	createDatabase,
 	type SessionDatabase,
 } from "@/modules/sessions/storage/client";
@@ -142,11 +148,12 @@ const sampleLatency = async (
 const openStore = (
 	projectionPath: string,
 	operationalDatabase: SessionDatabase,
+	attachmentStore: SessionAttachmentStore,
 	options: Readonly<{ fileIo?: SessionLogFileIo }> = {}
 ) => {
 	const database = createDatabase(projectionPath);
 	const projectionStore = createDrizzleSessionStore(database.db, {
-		attachmentRoot,
+		attachmentStore,
 		operationalDatabase,
 		sessionLogRoot: logRoot,
 		workspaceRoot,
@@ -154,6 +161,7 @@ const openStore = (
 	const store = createSessionJsonlStore(
 		projectionStore,
 		logRoot,
+		attachmentStore,
 		options.fileIo
 	);
 	return { database, projectionStore, store };
@@ -365,6 +373,13 @@ try {
 	await fs.mkdir(workspaceRoot, { recursive: true });
 	const operational = createDatabase(databasePath);
 	databaseConnections.push({ close: () => operational.sqlite.close() });
+	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
+		lifecycleRoot: logRoot,
+		repository: createDrizzleAttachmentMetadataRepository(operational.db),
+		root: attachmentRoot,
+	});
 	const fixtureProjectionDatabase = createDatabase(
 		path.join(root, "fixture-projection.sqlite")
 	);
@@ -374,7 +389,7 @@ try {
 	const fixtureProjectionStore = createDrizzleSessionStore(
 		fixtureProjectionDatabase.db,
 		{
-			attachmentRoot,
+			attachmentStore,
 			operationalDatabase: operational.db,
 			sessionLogRoot: logRoot,
 			workspaceRoot,
@@ -435,7 +450,8 @@ try {
 	} else {
 		const coldDiscovery = openStore(
 			path.join(root, "cold-discovery.sqlite"),
-			operational.db
+			operational.db,
+			attachmentStore
 		);
 		databaseConnections.push({
 			close: () => coldDiscovery.database.sqlite.close(),
@@ -461,7 +477,8 @@ try {
 	}
 	const rebuild = openStore(
 		path.join(root, "cold-rebuild.sqlite"),
-		operational.db
+		operational.db,
+		attachmentStore
 	);
 	databaseConnections.push({ close: () => rebuild.database.sqlite.close() });
 	const coldRebuild = await measure(async () => {

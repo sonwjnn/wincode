@@ -1,38 +1,30 @@
-import type { SessionAttachmentStore } from "../../../modules/sessions/storage/attachment-store";
-import type { DrizzleSessionStore } from "../../../modules/sessions/storage/drizzle-session-store";
+import * as path from "node:path";
+import {
+	createMemoryAttachmentMetadataRepository,
+	createSessionAttachmentStore,
+	type SessionAttachmentStore,
+} from "../../../modules/sessions/storage/attachment-store";
 import type { SessionAttachments } from "../../../modules/sessions/storage/session-attachments";
 
-/** A Session Attachments stub over projection-only storage. */
-export const attachmentsFacet = (
-	projectionStore: DrizzleSessionStore
-): SessionAttachments => ({
-	annotateMessagesForDisplay: async (messages, signal) =>
-		await projectionStore.attachmentStore.annotateMessagesForDisplay(
-			messages,
-			signal
-		),
-	collectAttachments: async (safetyWindowMs) =>
-		await projectionStore.collectAttachments(safetyWindowMs),
-	externalizeAttachments: async (messages, signal, options) =>
-		await projectionStore.externalizeAttachments(messages, signal, options),
-	getCompactionMetadata: async (messages, signal) =>
-		await projectionStore.attachmentStore.getCompactionMetadata(
-			messages,
-			signal
-		),
-	hydrateAttachments: async (messages, options) =>
-		await projectionStore.hydrateAttachments(messages, options),
-	releaseAttachments: async (attachmentIds) => {
-		await projectionStore.attachmentStore.release(attachmentIds);
-	},
-	resolveAttachmentReference: async (reference, signal) =>
-		await projectionStore.attachmentStore.resolve(reference, signal),
-	retainAttachments: async (attachmentIds) => {
-		await projectionStore.attachmentStore.retain(attachmentIds);
-	},
-});
+const attachmentStores = new Map<string, SessionAttachmentStore>();
 
-/** A Session Attachments facet over a raw attachment sub-store, for tests that build only that. */
+export const createTestSessionAttachmentStore = (
+	lifecycleRoot: string,
+	root = path.join(path.dirname(lifecycleRoot), "attachments")
+): SessionAttachmentStore => {
+	const existing = attachmentStores.get(lifecycleRoot);
+	if (existing !== undefined) {
+		return existing;
+	}
+	const attachmentStore = createSessionAttachmentStore({
+		lifecycleRoot,
+		repository: createMemoryAttachmentMetadataRepository(),
+		root,
+	});
+	attachmentStores.set(lifecycleRoot, attachmentStore);
+	return attachmentStore;
+};
+
 export const attachmentsOver = (
 	attachmentStore: SessionAttachmentStore
 ): SessionAttachments => ({
@@ -40,7 +32,7 @@ export const attachmentsOver = (
 		attachmentStore.annotateMessagesForDisplay(messages, signal),
 	collectAttachments: async (safetyWindowMs) =>
 		await attachmentStore.collect({
-			liveAttachmentIds: async () => [],
+			liveAttachmentIds: attachmentStore.readAdditionalLiveAttachmentIds,
 			...(safetyWindowMs === undefined ? {} : { safetyWindowMs }),
 		}),
 	externalizeAttachments: (messages, signal, options) =>

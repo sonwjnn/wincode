@@ -63,25 +63,10 @@ import type {
 	SessionStatisticsRecord,
 	SessionStatisticsRecordSummary,
 } from "../usage/session-statistics";
-import type {
-	AttachmentExternalizationLease,
-	AttachmentExternalizationOptions,
-	AttachmentHydrationOptions,
-	AttachmentMaintenanceReport,
-	SessionAttachmentStore,
-} from "./attachment-store";
-import {
-	createDrizzleAttachmentMetadataRepository,
-	createSessionAttachmentStore,
-	getAttachmentReference,
-	isLegacyImagePart,
-} from "./attachment-store";
+import type { SessionAttachmentStore } from "./attachment-store";
+import { isLegacyImagePart } from "./attachment-store";
 import { createDatabase, type SessionDatabase } from "./client";
-import {
-	resolveLocalAttachmentRoot,
-	resolveLocalSessionLogRoot,
-	resolveLocalSnapshotRoot,
-} from "./path";
+import { resolveLocalSessionLogRoot, resolveLocalSnapshotRoot } from "./path";
 import {
 	createProjectedSessionStore as buildProjectedSessionStore,
 	type ProjectedSessionDependencies,
@@ -487,7 +472,6 @@ const toSessionCompaction = (row: CompactionRow): SessionCompaction => {
 };
 
 export type DrizzleSessionStoreOptions = {
-	attachmentRoot?: string;
 	attachmentStore?: SessionAttachmentStore;
 	clock?: FileObservationClock;
 	operationalDatabase?: SessionDatabase;
@@ -632,25 +616,6 @@ const toSessionRecord = (row: SessionRecordRow): SessionRecord => {
 	}
 	return record as unknown as SessionRecord;
 };
-const collectLiveAttachmentIds = (
-	operationalDb: SessionDatabase
-): Set<string> => {
-	const live = new Set<string>();
-	const historyRows = operationalDb
-		.select({ entry: promptHistory.entryJson })
-		.from(promptHistory)
-		.all();
-	for (const row of historyRows) {
-		for (const file of row.entry?.files ?? []) {
-			const reference = getAttachmentReference(file);
-			if (reference) {
-				live.add(reference.attachmentId);
-			}
-		}
-	}
-	return live;
-};
-
 const appendCompaction = (
 	db: SessionDatabase,
 	operationalDb: SessionDatabase,
@@ -1965,7 +1930,6 @@ export type DrizzleSessionStore = SessionProjection &
 			readPoint?: SessionHistoryReadPoint,
 			turnId?: AgentTurnId
 		) => SessionStatisticsProjection;
-		setAttachmentCollectionBarrier: (barrier: () => Promise<void>) => void;
 	}>;
 
 export type SessionJsonlProjectionStore = SessionProjection &
@@ -1976,7 +1940,6 @@ export type SessionJsonlProjectionStore = SessionProjection &
 		| "jsonlProjection"
 		| "markSessionDeleted"
 		| "promptHistory"
-		| "setAttachmentCollectionBarrier"
 	>;
 
 export const createDrizzleSessionStore = (
@@ -1989,41 +1952,10 @@ export const createDrizzleSessionStore = (
 		options.sessionLogRoot ??
 		resolveLocalSessionLogRoot(operationalDb.$client.filename);
 
-	const attachmentRoot =
-		options.attachmentRoot ??
-		resolveLocalAttachmentRoot(operationalDb.$client.filename);
 	const snapshotRoot =
 		options.snapshotRoot ??
 		resolveLocalSnapshotRoot(operationalDb.$client.filename);
-	const attachmentStore =
-		options.attachmentStore ??
-		createSessionAttachmentStore({
-			lifecycleRoot: sessionLogRoot,
-			repository: createDrizzleAttachmentMetadataRepository(operationalDb),
-			root: attachmentRoot,
-		});
-	const externalizeAttachments = (
-		messages: readonly SessionMessage[],
-		signal?: AbortSignal,
-		externalizationOptions?: AttachmentExternalizationOptions
-	): Promise<AttachmentExternalizationLease> =>
-		attachmentStore
-			? attachmentStore.externalizeMessagesWithLease(
-					messages,
-					signal,
-					externalizationOptions
-				)
-			: Promise.resolve({
-					messages: [...messages],
-					release: async () => undefined,
-				});
-	const hydrateAttachments = (
-		messages: readonly SessionMessage[],
-		hydrationOptions: AttachmentHydrationOptions
-	): Promise<SessionMessage[]> =>
-		attachmentStore
-			? attachmentStore.hydrateMessages(messages, hydrationOptions)
-			: Promise.resolve([...messages]);
+	const attachmentStore = options.attachmentStore;
 	const promptHistoryOperations = createPromptHistory(
 		operationalDb,
 		attachmentStore
@@ -2043,23 +1975,6 @@ export const createDrizzleSessionStore = (
 		workspace.id,
 		options.clock
 	);
-	let attachmentCollectionBarrier: (() => Promise<void>) | undefined;
-	const collectAttachments = async (
-		safetyWindowMs = 60_000
-	): Promise<AttachmentMaintenanceReport> => {
-		await attachmentCollectionBarrier?.();
-		return attachmentStore
-			? attachmentStore.collect({
-					liveAttachmentIds: () => collectLiveAttachmentIds(operationalDb),
-					safetyWindowMs,
-				})
-			: {
-					orphanBytes: 0,
-					orphanCount: 0,
-					reclaimedBytes: 0,
-					reclaimedCount: 0,
-				};
-	};
 	const markSessionDeleted = (sessionId: SessionId): void => {
 		const binding = operationalDb
 			.select({ workspaceId: localSessionBinding.workspaceId })
@@ -2319,16 +2234,12 @@ export const createDrizzleSessionStore = (
 			}),
 		...projectedSessionReads,
 		jsonlProjection,
-		setAttachmentCollectionBarrier: (barrier) => {
-			attachmentCollectionBarrier = barrier;
-		},
 		appendCompaction: (input) =>
 			Promise.resolve(appendCompaction(db, operationalDb, workspace.id, input)),
 		promptHistory: {
 			getPromptHistory: () => promptHistoryOperations.migrate(),
 			recordPrompt: async (entry) => {
 				await promptHistoryOperations.record(entry);
-				await collectAttachments().catch(() => undefined);
 			},
 		},
 		createSession: async ({
@@ -2443,7 +2354,6 @@ export const createDrizzleSessionStore = (
 					.where(eq(localSessionBinding.sessionId, sessionId))
 					.run();
 			}
-			await collectAttachments();
 			const prune = fileObservationStore.pruneSnapshots;
 			if (prune) {
 				await prune().catch(() => undefined);
@@ -2536,9 +2446,5 @@ export const createDrizzleSessionStore = (
 			return Promise.resolve();
 		},
 		fileObservationStore,
-		attachmentStore,
-		externalizeAttachments,
-		hydrateAttachments,
-		collectAttachments,
 	};
 };

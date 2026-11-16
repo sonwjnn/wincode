@@ -33,7 +33,6 @@ const model = {
 const openStore = (root: string, databasePath: string): OpenedStore => {
 	const database = createDatabase(databasePath);
 	const store = createDrizzleSessionStore(database.db, {
-		attachmentRoot: path.join(root, "attachments"),
 		snapshotRoot: path.join(root, "snapshots"),
 		workspaceRoot: root,
 	});

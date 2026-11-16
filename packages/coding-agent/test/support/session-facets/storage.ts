@@ -1,6 +1,7 @@
+import type { SessionAttachmentStore } from "../../../modules/sessions/storage/attachment-store";
 import type { DrizzleSessionStore } from "../../../modules/sessions/storage/drizzle-session-store";
 import type { SessionStorage } from "../../../modules/sessions/storage/session-storage";
-import { attachmentsFacet } from "./attachments";
+import { attachmentsOver } from "./attachments";
 import { catalogFacet } from "./catalog";
 import { historyFacet } from "./history";
 import { lifecycleFacet } from "./lifecycle";
@@ -13,12 +14,13 @@ import { recordsFacet } from "./records";
  * file directly instead.
  */
 export const sessionStorageWithSuccessfulWrites = (
-	projectionStore: DrizzleSessionStore
+	projectionStore: DrizzleSessionStore,
+	attachmentStore: SessionAttachmentStore
 ): SessionStorage => ({
 	...recordsFacet(projectionStore),
 	...catalogFacet(projectionStore),
 	...historyFacet(projectionStore),
 	...lifecycleFacet(projectionStore),
-	...attachmentsFacet(projectionStore),
+	...attachmentsOver(attachmentStore),
 	...pluginSessionStateFacet(projectionStore),
 });

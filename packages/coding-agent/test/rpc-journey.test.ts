@@ -61,9 +61,9 @@ import {
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
 } from "../modules/sessions/storage/path";
-import { createSessionJsonlStore } from "../modules/sessions/storage/session-jsonl-store";
 import type { ConfigSnapshot } from "../shared/config/config-store";
 import { toSessionId } from "../shared/identifiers";
+import { createTestSessionJsonlStore as createSessionJsonlStore } from "./support/session-jsonl-storage";
 
 afterAll(async () => {
 	mock.restore();
@@ -1427,7 +1427,6 @@ test("RPC session/open keeps a held Session Writer as a refusal", async () => {
 	const ownerProjectionStore = createDrizzleSessionStore(
 		ownerProjectionDatabase.db,
 		{
-			attachmentRoot: path.join(workspace, "writer-conflict-attachments"),
 			operationalDatabase: ownerDatabase.db,
 			sessionLogRoot: resolveLocalSessionLogRoot(conflictDatabasePath),
 			snapshotRoot: path.join(workspace, "writer-conflict-snapshots"),

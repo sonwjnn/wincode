@@ -38,6 +38,7 @@ import { createEnvironmentRestorer } from "../support/environment";
 import { modelId } from "../support/identifiers";
 import { createEmptyPluginRuntime } from "../support/plugin-runtime";
 import { sessionStorageWithSuccessfulWrites } from "../support/session-facets";
+import { createTestSessionAttachmentStore } from "../support/session-facets/attachments";
 
 const workspace = path.join(testDirectory, "workspace");
 const homeRoot = path.join(testDirectory, "home");
@@ -71,7 +72,8 @@ const registry: AgentRegistry = buildAgentRegistry(
 );
 const database = createDatabase(path.join(testDirectory, "sessions.db"));
 const store = sessionStorageWithSuccessfulWrites(
-	createDrizzleSessionStore(database.db, { workspaceRoot: workspace })
+	createDrizzleSessionStore(database.db, { workspaceRoot: workspace }),
+	createTestSessionAttachmentStore(path.join(testDirectory, "session-logs"))
 );
 
 const lifecycleLog = async (): Promise<string[]> => {

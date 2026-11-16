@@ -4,18 +4,10 @@ import type {
 	AppendSessionCompactionInput,
 	SessionCompaction,
 } from "../compaction/types";
-import type { SessionMessage } from "../message";
 import type {
 	SessionBundleExportScope,
 	SessionBundleImportResult,
 } from "../session-bundle-contract";
-import type {
-	AttachmentExternalizationLease,
-	AttachmentExternalizationOptions,
-	AttachmentHydrationOptions,
-	AttachmentMaintenanceReport,
-	SessionAttachmentStore,
-} from "./attachment-store";
 import type {
 	PreparedSessionBundleExport,
 	SessionBundleImportFileSystem,
@@ -56,10 +48,6 @@ export type SessionProjection = {
 	appendCompaction: (
 		input: AppendSessionCompactionInput
 	) => Promise<SessionCompaction>;
-	attachmentStore: SessionAttachmentStore;
-	collectAttachments: (
-		safetyWindowMs?: number
-	) => Promise<AttachmentMaintenanceReport>;
 	commitSessionRecord: (input: CommitSessionRecordInput) => Promise<void>;
 	confirmSessionImportActivation?: (sessionId: SessionId) => Promise<void>;
 	createEmptySession: (
@@ -72,16 +60,7 @@ export type SessionProjection = {
 		input: CreateSessionUsageEntryInput
 	) => Promise<SessionUsageEntry>;
 	deleteSession: (sessionId: SessionId) => Promise<void>;
-	externalizeAttachments: (
-		messages: readonly SessionMessage[],
-		signal?: AbortSignal,
-		options?: AttachmentExternalizationOptions
-	) => Promise<AttachmentExternalizationLease>;
 	fileObservationStore?: FileObservationStore;
-	hydrateAttachments: (
-		messages: readonly SessionMessage[],
-		options: AttachmentHydrationOptions
-	) => Promise<SessionMessage[]>;
 	isSessionImportActivationPending?: (sessionId: SessionId) => Promise<boolean>;
 	isSessionImported?: (sessionId: SessionId) => Promise<boolean>;
 	resetSessionData: () => Promise<void>;

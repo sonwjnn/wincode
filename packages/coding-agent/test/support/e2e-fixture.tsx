@@ -20,6 +20,11 @@ import { writeComposerDraft } from "@/modules/sessions/hooks/input-controller/dr
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionProviderCollectionFactory } from "@/modules/sessions/provider-collection";
+import {
+	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
+	createSessionAttachmentStore,
+} from "@/modules/sessions/storage/attachment-store";
 import { createDatabase } from "@/modules/sessions/storage/client";
 import { createDrizzleSessionStore } from "@/modules/sessions/storage/drizzle-session-store";
 import {
@@ -191,13 +196,20 @@ export const createE2eStore = (): SessionStorage => {
 		resolveLocalSessionProjectionPath(databasePath)
 	);
 	const logRoot = resolveLocalSessionLogRoot(databasePath);
+	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(operational.db),
+		lifecycleRoot: logRoot,
+		repository: createDrizzleAttachmentMetadataRepository(operational.db),
+		root: resolveLocalAttachmentRoot(databasePath),
+	});
 	const projectionStore = createDrizzleSessionStore(projection.db, {
-		attachmentRoot: resolveLocalAttachmentRoot(databasePath),
+		attachmentStore,
 		operationalDatabase: operational.db,
 		sessionLogRoot: logRoot,
 		workspaceRoot: process.cwd(),
 	});
-	return createSessionJsonlStore(projectionStore, logRoot);
+	return createSessionJsonlStore(projectionStore, logRoot, attachmentStore);
 };
 
 /**

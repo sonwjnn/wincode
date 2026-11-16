@@ -1,6 +1,12 @@
+import {
+	createDrizzleAttachmentMetadataRepository,
+	createDrizzlePromptHistoryAttachmentLivenessSource,
+	createSessionAttachmentStore,
+} from "./attachment-store";
 import { createDatabase } from "./client";
 import { createDrizzleSessionStore } from "./drizzle-session-store";
 import {
+	resolveLocalAttachmentRoot,
 	resolveLocalSessionLogRoot,
 	resolveLocalSessionProjectionPath,
 } from "./path";
@@ -25,18 +31,39 @@ const openStores = (): CachedStorage => {
 	const projectionDatabase = createDatabase(
 		resolveLocalSessionProjectionPath(operationalDatabase.sqlite.filename)
 	);
-	const projectionStore = createDrizzleSessionStore(projectionDatabase.db, {
-		operationalDatabase: operationalDatabase.db,
-		sessionLogRoot: resolveLocalSessionLogRoot(
-			operationalDatabase.sqlite.filename
+	const sessionLogRoot = resolveLocalSessionLogRoot(
+		operationalDatabase.sqlite.filename
+	);
+	const attachmentStore = createSessionAttachmentStore({
+		additionalLiveAttachmentIds:
+			createDrizzlePromptHistoryAttachmentLivenessSource(
+				operationalDatabase.db
+			),
+		lifecycleRoot: sessionLogRoot,
+		repository: createDrizzleAttachmentMetadataRepository(
+			operationalDatabase.db
 		),
+		root: resolveLocalAttachmentRoot(operationalDatabase.sqlite.filename),
 	});
+	const projectionStore = createDrizzleSessionStore(projectionDatabase.db, {
+		attachmentStore,
+		operationalDatabase: operationalDatabase.db,
+		sessionLogRoot,
+	});
+	const storage = createSessionJsonlStore(
+		projectionStore,
+		sessionLogRoot,
+		attachmentStore
+	);
 	return {
-		promptHistory: projectionStore.promptHistory,
-		storage: createSessionJsonlStore(
-			projectionStore,
-			resolveLocalSessionLogRoot(operationalDatabase.sqlite.filename)
-		),
+		promptHistory: {
+			getPromptHistory: () => projectionStore.promptHistory.getPromptHistory(),
+			recordPrompt: async (entry) => {
+				await projectionStore.promptHistory.recordPrompt(entry);
+				await storage.collectAttachments().catch(() => undefined);
+			},
+		},
+		storage,
 	};
 };
 

@@ -33,6 +33,7 @@ import {
 	sessionStorageWithSuccessfulWrites,
 	successfulSessionWriteOutcome,
 } from "../support/session-facets";
+import { createTestSessionAttachmentStore } from "../support/session-facets/attachments";
 import { removeTemporaryDirectory } from "../support/temporary-directory";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-plugin-state-"));
@@ -54,7 +55,10 @@ const createStoreWithBlockedPluginStateWrites = (
 		workspaceRoot: workspace,
 	});
 	const storage: SessionStorage = {
-		...sessionStorageWithSuccessfulWrites(projectionStore),
+		...sessionStorageWithSuccessfulWrites(
+			projectionStore,
+			createTestSessionAttachmentStore(`${databasePath}.logs`)
+		),
 		mutatePluginSessionState: async (_sessionId, _pluginId, mutation) => {
 			onMutation?.(mutation.operationId);
 			return {

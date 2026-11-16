@@ -149,9 +149,7 @@ const createTestStore = async (): Promise<TestStore> => {
 	);
 	const databasePath = path.join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
-	const storage = createDrizzleSessionStore(db, {
-		attachmentRoot: path.join(dir, "attachments"),
-	});
+	const storage = createDrizzleSessionStore(db);
 	return { databasePath, storage };
 };
 
@@ -269,9 +267,7 @@ test("reopens durable records without reconstructing or running execution", asyn
 	await storage.commitSessionRecord({ record: assistant, sessionId: id });
 
 	const { db } = createDatabase(databasePath);
-	const reopened = createDrizzleSessionStore(db, {
-		attachmentRoot: path.join(os.tmpdir(), "wincode-reopened-attachments"),
-	});
+	const reopened = createDrizzleSessionStore(db);
 
 	expect(await reopened.listSessionRecords(id)).toEqual([
 		initialRecord,
@@ -437,11 +433,9 @@ test("keeps records isolated per session and per workspace", async () => {
 	const databasePath = path.join(dir, "conversation.sqlite");
 	const { db } = createDatabase(databasePath);
 	const firstWorkspace = createDrizzleSessionStore(db, {
-		attachmentRoot: path.join(dir, "attachments-a"),
 		workspaceRoot: path.join(dir, "workspace-a"),
 	});
 	const secondWorkspace = createDrizzleSessionStore(db, {
-		attachmentRoot: path.join(dir, "attachments-b"),
 		workspaceRoot: path.join(dir, "workspace-b"),
 	});
 	const sessionA = await createSession(firstWorkspace);
