@@ -64,6 +64,7 @@
         "@wincode/ai": "workspace:*",
         "@wincode/mcp": "workspace:*",
         "@wincode/subagents": "workspace:*",
+        "@wincode/tui": "workspace:*",
         "@wincode/utils": "workspace:*",
         "diff": "catalog:",
         "drizzle-orm": "^0.45.2",
@@ -134,6 +135,24 @@
       },
       "peerDependencies": {
         "@wincode/coding-agent": "^0.1.0",
+      },
+    },
+    "packages/tui": {
+      "name": "@wincode/tui",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@opentui/core": "0.6.6",
+        "@opentui/react": "0.6.6",
+        "@types/bun": "catalog:",
+        "@types/react": "^19.2.10",
+        "@wincode/config": "workspace:*",
+        "react": "catalog:",
+        "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "@opentui/core": "0.6.6",
+        "@opentui/react": "0.6.6",
+        "react": ">=19.2.0",
       },
     },
     "packages/utils": {
@@ -467,6 +486,8 @@
     "@wincode/mcp": ["@wincode/mcp@workspace:packages/mcp"],
 
     "@wincode/subagents": ["@wincode/subagents@workspace:packages/subagents"],
+
+    "@wincode/tui": ["@wincode/tui@workspace:packages/tui"],
 
     "@wincode/utils": ["@wincode/utils@workspace:packages/utils"],
 

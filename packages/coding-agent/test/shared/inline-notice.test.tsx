@@ -1,13 +1,10 @@
 import { expect, test } from "bun:test";
 import { RGBA } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
+import { InlineNotice, type InlineNoticeVariant } from "@wincode/tui";
 import { act } from "react";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
-import {
-	InlineNotice,
-	type InlineNoticeVariant,
-} from "@/shared/ui/inline-notice";
 import { flushTestRenderer } from "../support/opentui";
 
 const renderNotice = async (variant: InlineNoticeVariant, text: string) => {

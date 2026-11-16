@@ -1,0 +1,9 @@
+{
+  "extends": "@wincode/config/tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "@opentui/react",
+    "noEmit": true,
+    "types": ["bun"]
+  }
+}
