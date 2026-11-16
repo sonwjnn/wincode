@@ -231,6 +231,12 @@ A Coding-Agent module that contributes executable behavior through the public Pl
 **PluginAPI**:
 The common contract through which built-in and file-loaded Plugins contribute tools, commands, and lifecycle behavior, and Interactive Plugins override the focused composer's Model and ThinkingLevel for future Submissions without replacing the selected Agent. A Plugin's Identifier owns its registered contributions across factory, Session, and Agent Turn scopes. _Avoid_: built-in-only registry, file-only extension API
 
+**Plugin UI**:
+A user-facing presentation or interaction contributed by a Plugin through the Coding-Agent Application. It is distinct from the Plugin's executable tools and from the Session content it presents. _Avoid_: Plugin-owned terminal, Plugin application
+
+**Plugin UI Request**:
+A host-mediated request to present an interactive Plugin UI and optionally return a user result. Its lifetime is distinct from the Agent Turn that triggered it. _Avoid_: Agent input, Agent Turn
+
 **Built-in Plugin**:
 A Plugin bundled with Wincode and registered by the application as part of its shipped behavior. _Avoid_: file-loaded Plugin
 
