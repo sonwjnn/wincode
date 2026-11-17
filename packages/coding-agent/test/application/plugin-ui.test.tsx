@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type CapturedFrame, type InputRenderable, RGBA } from "@opentui/core";
+import { useKeyboard } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type {
@@ -148,6 +149,21 @@ type OtherPluginKeyboardState = {
 	stopInput: (() => void) | undefined;
 };
 
+function HostMetaWAction({
+	onAction,
+}: Readonly<{
+	onAction: (key: Readonly<{ meta: boolean; option: boolean }>) => void;
+}>) {
+	const { isTopLayer } = useKeyboardLayer();
+	useKeyboard((key) => {
+		if (isTopLayer("base") && (key.option || key.meta) && key.name === "w") {
+			key.preventDefault();
+			onAction({ meta: key.meta, option: key.option });
+		}
+	});
+	return null;
+}
+
 const pluginUiTestEnvironment = async (
 	executionMode: ExecutionMode = "interactive",
 	testRendererOptions: Readonly<{
@@ -159,7 +175,8 @@ const pluginUiTestEnvironment = async (
 	additionalPlugins: readonly Readonly<{
 		factory: PluginFactory;
 		id: string;
-	}>[] = []
+	}>[] = [],
+	hostMetaWAction?: (key: Readonly<{ meta: boolean; option: boolean }>) => void
 ) => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-plugin-ui-"));
 	const workspace = path.join(root, "workspace");
@@ -318,6 +335,9 @@ const pluginUiTestEnvironment = async (
 					<DialogProvider>
 						<PluginUIHostProvider>
 							<CapturePluginUIHost />
+							{hostMetaWAction === undefined ? null : (
+								<HostMetaWAction onAction={hostMetaWAction} />
+							)}
 							<TestTranscript />
 							<CustomEditorRegion />
 							<ThemeProbe label="global" />
@@ -723,6 +743,120 @@ test("PluginAPI rejects shortcut registrations for host-owned keys", async () =>
 	} finally {
 		await runtime.shutdown();
 		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("PluginAPI rejects modifier-free shortcuts without consuming ordinary input", async () => {
+	const pluginId = "plugin_plain_shortcut";
+	const shortcutCalls = { count: 0 };
+	const plainShortcutPlugin: PluginFactory = (api) => {
+		api.definePlugin({ id: pluginId });
+		api.registerShortcut("p", {
+			description: "Attempt to claim ordinary character input.",
+			handler: () => {
+				shortcutCalls.count += 1;
+			},
+		});
+	};
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{ kittyKeyboard: true },
+		false,
+		[{ factory: plainShortcutPlugin, id: pluginId }]
+	);
+	try {
+		expect(
+			environment.runtime.getLoadedPlugins().map(({ id }) => id)
+		).not.toContain(pluginId);
+		expect(
+			environment.runtime.diagnostics.some(({ message }) =>
+				message.includes("modifier+key notation")
+			)
+		).toBe(true);
+
+		await act(async () => {
+			environment.setup.mockInput.pressKey("p");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(shortcutCalls.count).toBe(0);
+		expect(
+			environment.setup
+				.captureCharFrame()
+				.split("\n")
+				.map((line) => line.trim())
+		).toContain("p");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("a matching Plugin Meta+W shortcut runs when the host does not claim it", async () => {
+	const pluginId = "plugin_meta_w_shortcut_control";
+	const pluginShortcutCalls = { count: 0 };
+	const plugin: PluginFactory = (api) => {
+		api.definePlugin({ id: pluginId });
+		api.registerShortcut("meta+w", {
+			description: "A modified shortcut control.",
+			handler: () => {
+				pluginShortcutCalls.count += 1;
+			},
+		});
+	};
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{ kittyKeyboard: false },
+		false,
+		[{ factory: plugin, id: pluginId }]
+	);
+	try {
+		await act(async () => {
+			environment.setup.mockInput.pressKey("w", { meta: true });
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(pluginShortcutCalls.count).toBe(1);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("a host Meta+W action suppresses a matching Plugin shortcut", async () => {
+	const pluginId = "plugin_meta_w_shortcut";
+	const pluginShortcutCalls = { count: 0 };
+	const plugin: PluginFactory = (api) => {
+		api.definePlugin({ id: pluginId });
+		api.registerShortcut("meta+w", {
+			description: "Conflicts with the host Meta+W action.",
+			handler: () => {
+				pluginShortcutCalls.count += 1;
+			},
+		});
+	};
+	let hostActionCalls = 0;
+	const hostKeyFlags: { meta: boolean; option: boolean }[] = [];
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{ kittyKeyboard: false },
+		false,
+		[{ factory: plugin, id: pluginId }],
+		(key) => {
+			hostActionCalls += 1;
+			hostKeyFlags.push(key);
+		}
+	);
+	try {
+		expect(
+			environment.runtime.getLoadedPlugins().map(({ id }) => id)
+		).toContain(pluginId);
+		await act(async () => {
+			environment.setup.mockInput.pressKey("w", { meta: true });
+			await flushTestRenderer(environment.setup, 2);
+		});
+
+		expect(hostActionCalls).toBe(1);
+		expect(hostKeyFlags).toEqual([{ meta: true, option: false }]);
+		expect(pluginShortcutCalls.count).toBe(0);
+	} finally {
+		await environment.dispose();
 	}
 });
 

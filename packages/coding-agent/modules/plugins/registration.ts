@@ -234,7 +234,10 @@ export const validatePluginShortcut = (
 		);
 	}
 	const shortcut = parseKeyboardShortcut(shortcutCandidate);
-	if (shortcut === undefined) {
+	if (
+		shortcut === undefined ||
+		!(shortcut.alt || shortcut.ctrl || shortcut.meta || shortcut.shift)
+	) {
 		throw new Error(
 			"Plugin Shortcuts must use modifier+key notation such as 'ctrl+shift+p'."
 		);

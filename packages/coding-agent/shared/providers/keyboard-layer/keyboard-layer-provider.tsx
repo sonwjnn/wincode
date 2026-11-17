@@ -31,6 +31,7 @@ export type ToggleShortcut = "ctrl+o";
 export type ToggleHandler = () => void;
 type ToggleKeyEvent = {
 	ctrl: boolean;
+	defaultPrevented: boolean;
 	meta: boolean;
 	name: string;
 	option: boolean;
@@ -329,7 +330,8 @@ export function KeyboardLayerProvider({
 	}, []);
 
 	const handlePluginShortcut = useCallback((key: ToggleKeyEvent) => {
-		if (stackRef.current.at(-1) !== "base") {
+		// Host and focused local handlers keep precedence when they claim a key.
+		if (key.defaultPrevented || stackRef.current.at(-1) !== "base") {
 			return false;
 		}
 		const matching = findMatchingPluginShortcuts(shortcutHandlers.current, key);
