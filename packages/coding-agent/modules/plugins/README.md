@@ -142,6 +142,50 @@ Prompt observers can use `onUIPromptStart` and `onUIPromptEnd`. Their context id
 
 One-Shot, JSON, Print, and RPC execution do not render Plugin UI. If there is no Interactive Session host, methods use terminal-free defaults: selection/input/editor return `undefined`, confirmation returns `false`, notifications do nothing, theme listing is empty, theme lookup returns `undefined`, and theme changes return a failure result. This keeps noninteractive and RPC execution React-free; it does not imply that an RPC UI capability is available.
 
+### Temporary React editor
+
+A Plugin Command can temporarily replace the composer through `ui.custom()`. Its factory may be asynchronous and returns a React component; the host supplies the current theme, composer keybindings, an `AbortSignal`, `done(value)`, terminal dimensions, and the Interactive Session environment. The composer binding list and entries are read-only snapshots; copy them before passing them to mutable OpenTUI options. The Plugin uses the existing renderer and does not own terminal or renderer lifecycle. The transcript and Session view remain live while the editor is open.
+
+```tsx
+import { useKeyboard } from "@opentui/react";
+import type {
+  PluginFactory,
+  PluginUICustomComponent,
+  PluginUICustomFactory,
+} from "@wincode/coding-agent";
+
+const ReplyEditor: PluginUICustomComponent<string> = ({ done, theme }) => {
+  useKeyboard((key) => {
+    if (key.name !== "enter" && key.name !== "return") return;
+    key.preventDefault();
+    done("reply sent");
+  });
+  return <box><text fg={theme.colors.text}>Enter submits; Escape dismisses.</text></box>;
+};
+
+const replyEditorFactory: PluginUICustomFactory<string> = async () => ReplyEditor;
+
+const replyPlugin: PluginFactory = (api) => {
+  const plugin = api.definePlugin({ id: "reply" });
+  plugin.registerCommand({
+    name: "reply",
+    description: "Compose a reply in a temporary editor.",
+    handler: async ({ ui }) => {
+      const reply = await ui.custom(replyEditorFactory, { title: "Reply" });
+      return reply === undefined ? "Reply editor dismissed." : reply;
+    },
+  });
+};
+
+export default replyPlugin;
+```
+
+An explicitly selected Plugin Command opens directly. Requests from Tools or other event-originated callbacks show a new host invitation every time and cannot mount or take focus until accepted. One request at a time is admitted per Interactive UI host; a competing request rejects with `PluginUICustomError` and code `plugin_ui_custom_busy`. Factory or React component failures reject with code `plugin_ui_custom_failed` and are recovered by the host's React error boundary.
+
+`ui.custom()` returns `Promise<T | undefined>`. `done(value)` settles it once; Escape dismisses and Ctrl+C reclaims the composer. `undefined` deliberately does not distinguish dismissal, cancellation, declined consent, unsupported execution mode, or `done(undefined)`. Return a non-`undefined` value when the Plugin needs to distinguish successful completion. Session/view replacement, Plugin reload or disable, and renderer teardown abort the provided signal, unmount the component, release admission, and restore the composer and focus. Agent Turn completion or interruption alone does not close the editor.
+
+In RPC, JSON, and Print execution, `custom()` resolves to `undefined` without invoking the component factory or producing terminal controls. The focused host contract and a runnable React example are in [custom-editor-plugin.tsx](../../examples/custom-editor-plugin.tsx).
+
 ## Status Panels
 
 Plugins may register a status panel with `registerStatusPanel`. The host renders its snapshot in the session sidebar and indicator, routes refresh and item actions through the Plugin Runtime, and lets a command open the same panel with `statusPanelId`. When a panel supplies `refresh`, its dialog exposes `Ctrl+R`; `Space` runs the selected item action. A panel owns its status values and action behavior; its `runAction` context also receives the Plugin UI API. The host does not need domain-specific UI or imports.

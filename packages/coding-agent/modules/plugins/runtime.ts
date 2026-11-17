@@ -65,6 +65,8 @@ import type {
 	PluginToolRegistrationAPI,
 	PluginUI,
 	PluginUIContext,
+	PluginUICustomFactory,
+	PluginUICustomOptions,
 	PluginUIPromptContext,
 	PluginUIPromptHook,
 	PluginUIPromptKind,
@@ -264,9 +266,12 @@ type SessionPluginState = {
 
 type PluginUIHostBinding = Readonly<{ host: PluginUIHost }>;
 
+type PluginUIInvocation = "command" | "event";
+
 type PluginUIHandleBinding = Readonly<{
 	binding: PluginUIHostBinding;
 	handle: PluginUIHandle;
+	pluginId: string;
 }>;
 
 type PluginUIPromptSpan = {
@@ -462,9 +467,9 @@ export const createPluginRuntime = (
 		if (handles === undefined) {
 			return;
 		}
-		for (const [ownerPluginId, entry] of handles) {
+		for (const [handleKey, entry] of handles) {
 			if (
-				(pluginId !== undefined && ownerPluginId !== pluginId) ||
+				(pluginId !== undefined && entry.pluginId !== pluginId) ||
 				(binding !== undefined && entry.binding !== binding)
 			) {
 				continue;
@@ -474,13 +479,17 @@ export const createPluginRuntime = (
 			} catch {
 				// UI cleanup must not block Session or Plugin shutdown.
 			}
-			handles.delete(ownerPluginId);
+			handles.delete(handleKey);
 		}
 		if (handles.size === 0) {
 			pluginUIHandles.delete(sessionId);
 		}
 	};
-	const getPluginUI = (pluginId: string, sessionId?: string): PluginUI => {
+	const getPluginUI = (
+		pluginId: string,
+		sessionId?: string,
+		invocation: PluginUIInvocation = "event"
+	): PluginUI => {
 		if (sessionId === undefined) {
 			return unsupportedPluginUI;
 		}
@@ -505,16 +514,18 @@ export const createPluginRuntime = (
 			handles = new Map();
 			pluginUIHandles.set(sessionId, handles);
 		}
-		const current = handles.get(pluginId);
+		const handleKey = `${pluginId}:${invocation}`;
+		const current = handles.get(handleKey);
 		if (current?.binding === binding) {
 			return current.handle.ui;
 		}
 		current?.handle.close();
 		const handle = binding.host.create(
 			{ pluginId, sessionId } satisfies PluginUIOwner,
-			(kind, title) => beginUIPrompt(plugin, state, kind, title)
+			(kind, title) => beginUIPrompt(plugin, state, kind, title),
+			invocation
 		);
-		handles.set(pluginId, { binding, handle });
+		handles.set(handleKey, { binding, handle, pluginId });
 		return handle.ui;
 	};
 	const start = async (): Promise<readonly PluginDiagnostic[]> => {
@@ -926,7 +937,7 @@ export const createPluginRuntime = (
 		return Object.freeze({
 			...base,
 			...omitUndefined({ sessionHistory, sessionState }),
-			ui: getPluginUI(plugin.id, context.sessionId),
+			ui: getPluginUI(plugin.id, context.sessionId, "event"),
 		}) as Context & PluginUIContext;
 	};
 	const initializePluginSession = async (
@@ -1441,16 +1452,33 @@ export const createPluginRuntime = (
 					sessionState: _ignoredState,
 					...base
 				} = context;
-				const pluginContext: PluginCommandContext = Object.freeze({
-					...base,
-					...omitUndefined({ sessionHistory, sessionState }),
-					ui: getPluginUI(plugin.id, context.sessionId),
+				const eventUI = getPluginUI(plugin.id, context.sessionId, "event");
+				const commandUI = getPluginUI(plugin.id, context.sessionId, "command");
+				let commandInvocationActive = true;
+				const ui: PluginUI = Object.freeze({
+					...eventUI,
+					custom: <Value>(
+						factory: PluginUICustomFactory<Value>,
+						options?: PluginUICustomOptions
+					) =>
+						commandInvocationActive
+							? commandUI.custom(factory, options)
+							: eventUI.custom(factory, options),
 				});
-				const result = await command.handler(pluginContext);
-				if (typeof result !== "string") {
-					throw new Error("Plugin Command returned invalid text.");
+				try {
+					const pluginContext: PluginCommandContext = Object.freeze({
+						...base,
+						...omitUndefined({ sessionHistory, sessionState }),
+						ui,
+					});
+					const result = await command.handler(pluginContext);
+					if (typeof result !== "string") {
+						throw new Error("Plugin Command returned invalid text.");
+					}
+					return result;
+				} finally {
+					commandInvocationActive = false;
 				}
-				return result;
 			} catch (error) {
 				await logPluginFailure(
 					"Plugin command failed",

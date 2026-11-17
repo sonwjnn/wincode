@@ -63,6 +63,8 @@ PLUGIN_ARGS=(--plugin "${WINCODE_SMOKE_PLUGIN:-$ROOT/packages/coding-agent/test/
 if [[ "${WINCODE_SMOKE_LIVE:-0}" == 1 ]]; then
   PREPARE="$ROOT/scripts/test-support/prepare-live-smoke.ts"
   PLUGIN_ARGS=()
+elif [[ -n "${WINCODE_SMOKE_EXTRA_PLUGIN:-}" ]]; then
+  PLUGIN_ARGS+=(--plugin "$WINCODE_SMOKE_EXTRA_PLUGIN")
 fi
 OS_USERNAME="${USER:-${LOGNAME:-$(id -un)}}"
 (

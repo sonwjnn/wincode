@@ -1,3 +1,4 @@
+import type { TextareaOptions } from "@opentui/core";
 import type {
 	AgentDefinition,
 	AgentId,
@@ -12,6 +13,7 @@ import type {
 	ProviderModelSelection,
 	ThinkingLevel,
 } from "@wincode/ai";
+import type { ComponentType } from "react";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type { Theme } from "../../shared/providers/theme/themes";
@@ -106,7 +108,66 @@ export type PluginUIDialogOptions = Readonly<{
 }>;
 
 export type PluginNotificationLevel = "info" | "warning" | "error";
-export type PluginUIPromptKind = "select" | "confirm" | "input" | "editor";
+export type PluginUIPromptKind =
+	| "select"
+	| "confirm"
+	| "input"
+	| "editor"
+	| "custom";
+
+export type PluginUICustomErrorCode =
+	| "plugin_ui_custom_busy"
+	| "plugin_ui_custom_failed";
+
+/** A stable coded failure from a Plugin custom UI interaction. */
+export class PluginUICustomError extends Error {
+	readonly code: PluginUICustomErrorCode;
+
+	constructor(code: PluginUICustomErrorCode, cause?: unknown) {
+		const message =
+			code === "plugin_ui_custom_busy"
+				? "Another custom Plugin UI interaction is already active."
+				: "The custom Plugin UI failed to execute.";
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "PluginUICustomError";
+		this.code = code;
+	}
+}
+
+type PluginUICustomComposerKeybinding = Readonly<
+	NonNullable<TextareaOptions["keyBindings"]>[number]
+>;
+
+export type PluginUICustomKeybindings = Readonly<{
+	composer: readonly PluginUICustomComposerKeybinding[];
+	dismiss: "escape";
+	reclaim: "ctrl+c";
+}>;
+
+export type PluginUICustomContext<Value> = Readonly<{
+	done: (value: Value) => void;
+	environment: Readonly<{
+		executionMode: "interactive";
+		sessionId: string;
+	}>;
+	height: number;
+	keybindings: PluginUICustomKeybindings;
+	signal: AbortSignal;
+	theme: Theme;
+	width: number;
+}>;
+
+/** A React component mounted by the host in the existing editor region. */
+export type PluginUICustomComponent<Value> = ComponentType<
+	PluginUICustomContext<Value>
+>;
+
+/** Returns the component type for an accepted custom UI interaction. */
+export type PluginUICustomFactory<Value> = (
+	context: PluginUICustomContext<Value>
+) => PluginUICustomComponent<Value> | Promise<PluginUICustomComponent<Value>>;
+
+export type PluginUICustomOptions = Readonly<{ title?: string }>;
 
 export type PluginThemeChangeResult =
 	| Readonly<{ success: true }>
@@ -138,6 +199,10 @@ export type PluginUI = Readonly<{
 	getAllThemes: () => readonly Theme[];
 	getTheme: (name: string) => Theme | undefined;
 	setTheme: (theme: string | Theme) => PluginThemeChangeResult;
+	custom: <Value>(
+		factory: PluginUICustomFactory<Value>,
+		options?: PluginUICustomOptions
+	) => Promise<Value | undefined>;
 }>;
 
 export type PluginUIContext = Readonly<{ ui: PluginUI }>;

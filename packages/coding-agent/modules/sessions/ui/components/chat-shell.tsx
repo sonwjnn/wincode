@@ -17,6 +17,7 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import { PluginUICustomEditor } from "@/modules/plugins/ui/plugin-ui-host";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
@@ -619,35 +620,37 @@ export function ChatShell({
 				<WaitingMessageStrip queued={queuedSubmissions} />
 
 				<box flexShrink={0} position="relative" width="100%">
-					<ChatTextArea
-						activityIndicator={
-							isBusy ? (
-								<ActivityFooter
-									accentColor={activityAccentColor}
-									agent={agent}
-									autoCompact={autoCompact}
-									isCompacting={isCompacting}
-									retryOperation={retryOperation}
-									retryStatus={retryStatus}
-								/>
-							) : undefined
-						}
-						composerBorderColor={composerBorderColor}
-						draftKey={draftKey}
-						id={composerId}
-						isSelectionReady={isSelectionReady}
-						onCompact={onCompact}
-						onEmptySubmit={onEmptySubmit}
-						onOpenSessionHistory={onOpenSessionHistory}
-						onOpenSettings={onOpenSettings}
-						onProviderModelChanged={onProviderModelChanged}
-						onSubmit={handleSubmit}
-						providerController={providerController}
-						recalledSubmissions={recalledSubmissions}
-						recallRevision={recallRevision}
-						sessionId={viewId}
-						sessionPromptHistory={promptHistory}
-					/>
+					<PluginUICustomEditor sessionId={viewId}>
+						<ChatTextArea
+							activityIndicator={
+								isBusy ? (
+									<ActivityFooter
+										accentColor={activityAccentColor}
+										agent={agent}
+										autoCompact={autoCompact}
+										isCompacting={isCompacting}
+										retryOperation={retryOperation}
+										retryStatus={retryStatus}
+									/>
+								) : undefined
+							}
+							composerBorderColor={composerBorderColor}
+							draftKey={draftKey}
+							id={composerId}
+							isSelectionReady={isSelectionReady}
+							onCompact={onCompact}
+							onEmptySubmit={onEmptySubmit}
+							onOpenSessionHistory={onOpenSessionHistory}
+							onOpenSettings={onOpenSettings}
+							onProviderModelChanged={onProviderModelChanged}
+							onSubmit={handleSubmit}
+							providerController={providerController}
+							recalledSubmissions={recalledSubmissions}
+							recallRevision={recallRevision}
+							sessionId={viewId}
+							sessionPromptHistory={promptHistory}
+						/>
+					</PluginUICustomEditor>
 				</box>
 				<SessionFooterStatuses scope={viewId} />
 				<box

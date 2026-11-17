@@ -6,6 +6,7 @@ LIVE=0
 APPROVED=0
 BINARY=""
 MODEL=""
+PLUGIN_UI_SMOKE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --live) LIVE=1; shift ;;
@@ -16,6 +17,7 @@ while [[ $# -gt 0 ]]; do
     --binary)
       [[ $# -ge 2 && -x "$2" && "$2" == /* ]] || { printf 'Expected an absolute executable binary path.\n' >&2; exit 1; }
       BINARY="$2"; shift 2 ;;
+    --plugin-ui) PLUGIN_UI_SMOKE=1; shift ;;
     *) printf 'Unknown smoke option: %s\n' "$1" >&2; exit 1 ;;
   esac
 done
@@ -27,8 +29,12 @@ if [[ "$LIVE" == 0 && -n "$MODEL" ]]; then
   printf '%s\n' '--model is only valid with --live.' >&2
   exit 1
 fi
+if [[ "$PLUGIN_UI_SMOKE" == 1 && ( "$LIVE" == 1 || -n "$BINARY" ) ]]; then
+  printf '%s\n' '--plugin-ui requires the source fake-provider smoke (no --live or --binary).' >&2
+  exit 1
+fi
 BRANCH_EXPORT_SMOKE=0
-if [[ "$LIVE" == 0 && -z "$BINARY" ]]; then
+if [[ "$LIVE" == 0 && -z "$BINARY" && "$PLUGIN_UI_SMOKE" == 0 ]]; then
   BRANCH_EXPORT_SMOKE=1
 fi
 for command in bun tmux; do
@@ -49,6 +55,10 @@ ARTIFACT_DIR="${WINCODE_SMOKE_ARTIFACT_DIR:-$ROOT/test-artifacts/interactive-smo
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd -P)"
 SMOKE_PLUGIN="$ROOT/packages/coding-agent/test/support/interactive-smoke-provider.ts"
+EXTRA_PLUGIN=""
+if [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
+  EXTRA_PLUGIN="$ROOT/packages/coding-agent/test/support/interactive-plugin-ui-smoke.tsx"
+fi
 if [[ "$LIVE" == 0 && -n "$BINARY" ]]; then
   SMOKE_PLUGIN="$TEST_HOME/interactive-smoke-provider.ts"
   "$BUN_PATH" build \
@@ -108,6 +118,7 @@ tmux new-session -d -s "$SESSION" -x 80 -y 24 -c "$WORKSPACE" \
   -e "WINCODE_SMOKE_APPROVED=$APPROVED" \
   -e "WINCODE_SMOKE_MODEL=$MODEL" \
   -e "WINCODE_SMOKE_BRANCH_EXPORT=$BRANCH_EXPORT_SMOKE" \
+  -e "WINCODE_SMOKE_EXTRA_PLUGIN=$EXTRA_PLUGIN" \
   "$ROOT/scripts/test-support/interactive-smoke-launcher.sh"
 tmux set-option -p -t "$SESSION" remain-on-exit on
 
@@ -121,6 +132,15 @@ fail_with_frame() {
   fi
   printf '%s\n' "$FRAME" >&2
   exit 1
+}
+wait_for_file() {
+  local file="$1"
+  local attempts="${2:-120}"
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    [[ -f "$file" ]] && return 0
+    sleep 0.1
+  done
+  fail_with_frame "Timed out waiting for smoke artifact '$file'."
 }
 wait_for_text() {
   local text="$1"
@@ -252,6 +272,32 @@ if [[ "$BRANCH_EXPORT_SMOKE" == 1 ]]; then
   tmux send-keys -t "$SESSION" Enter
   wait_for_text 'imported-branch-only' 150
 fi
+if [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
+  tmux send-keys -l -t "$SESSION" '/smoke-editor-turn'
+  wait_for_text 'smoke-editor-turn' 150
+  tmux send-keys -t "$SESSION" Tab
+  tmux send-keys -t "$SESSION" Enter
+  wait_for_text 'Smoke custom editor' 150
+  wait_for_file "$WORKSPACE/.smoke-editor-command-started"
+  wait_for_file "$WORKSPACE/.smoke-editor-command-context"
+  wait_for_file "$WORKSPACE/.smoke-custom-editor-mounted"
+  wait_for_file "$WORKSPACE/.smoke-custom-editor-turn-progress"
+  wait_for_file "$WORKSPACE/.smoke-custom-editor-turn-terminal"
+  IFS= read -r COMMAND_CONTEXT < "$WORKSPACE/.smoke-editor-command-context" || true
+  [[ "$COMMAND_CONTEXT" == 'session:sdk' ]] || fail_with_frame 'The custom editor Plugin did not receive its active Session SDK.'
+  IFS= read -r TURN_TERMINAL < "$WORKSPACE/.smoke-custom-editor-turn-terminal" || true
+  [[ "$TURN_TERMINAL" == 'agent-turn-completed' ]] || fail_with_frame "The custom editor smoke Agent Turn ended as '$TURN_TERMINAL'."
+  capture_frame
+  printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom editor' || \
+    fail_with_frame 'The custom editor closed before its Agent Turn completed.'
+  tmux send-keys -l -t "$SESSION" 'interactive smoke editor response'
+  tmux send-keys -t "$SESSION" Enter
+  wait_for_file "$WORKSPACE/.smoke-editor-command-result"
+  IFS= read -r EDITOR_RESULT < "$WORKSPACE/.smoke-editor-command-result" || true
+  [[ "$EDITOR_RESULT" == 'interactive smoke editor response' ]] || \
+    fail_with_frame 'The custom editor did not return the submitted response.'
+  wait_for_text 'Ask anything...' 150
+fi
 fi
 tmux send-keys -l -t "$SESSION" '/exit'
 tmux send-keys -t "$SESSION" Enter
@@ -297,6 +343,8 @@ if [[ "$LIVE" == 1 ]]; then
   printf 'PASS: live Provider reply and clean /exit.\n'
 elif [[ -n "$BINARY" ]]; then
   printf 'PASS: release executable TUI startup and clean /exit; no Provider request sent.\n'
+elif [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
+  printf 'PASS: faux streaming, cancellation, tool roundtrip, error recovery, resize, custom editor Agent Turn, clean /exit.\n'
 else
   printf 'PASS: faux streaming, cancellation, tool roundtrip, error recovery, resize, clean /exit.\n'
 fi

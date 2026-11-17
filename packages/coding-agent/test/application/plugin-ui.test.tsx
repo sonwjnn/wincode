@@ -2,39 +2,98 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { InputRenderable } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
-import { agentIdSchema } from "@wincode/agent-core";
+import { agentIdSchema, toModelId } from "@wincode/agent-core";
+import type {
+	PluginUICustomComponent,
+	PluginUICustomContext,
+	SessionSdk,
+	SessionSdkEvent,
+	SessionSdkHandle,
+} from "@wincode/coding-agent";
 import { LocalStyleProvider } from "@wincode/tui";
-import { act } from "react";
+import { act, useRef, useState } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginTools } from "@/modules/plugins/tools";
 import type { PluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
 import {
+	PluginUICustomEditor,
 	PluginUIHostProvider,
 	usePluginUIHost,
 } from "@/modules/plugins/ui/plugin-ui-host";
+import { openSessionServices } from "@/modules/sessions/host/session-services";
+import type { SessionMessage } from "@/modules/sessions/message";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
+import { toSessionId } from "@/shared/identifiers";
 import { DialogProvider } from "@/shared/providers/dialog/dialog-provider";
-import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
+import { CHAT_TEXT_AREA_KEY_BINDINGS } from "@/shared/providers/keyboard-layer/constants";
+import {
+	KeyboardLayerProvider,
+	useKeyboardLayer,
+} from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import {
 	ThemeProvider,
 	useTheme,
 } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
+import customEditorPlugin from "../../examples/custom-editor-plugin";
 import pluginUiFixture from "../fixtures/plugin-ui-fixture";
 import pluginUiOtherFixture from "../fixtures/plugin-ui-other-fixture";
+import {
+	createFakeProviderCollection,
+	createFakeProviderRecorder,
+	type FakeProviderRecorder,
+} from "../support/e2e-fake-runtime";
 import { toolCallId } from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 
+const sessionMessagesFromTranscript = (
+	transcript: readonly object[]
+): readonly SessionMessage[] => transcript as readonly SessionMessage[];
+
+const textFromSessionTranscript = (transcript: readonly object[]): string =>
+	sessionMessagesFromTranscript(transcript)
+		.flatMap(({ parts }) =>
+			parts.flatMap((part) => (part.type === "text" ? [part.text] : []))
+		)
+		.join(" ");
+
+type OpenedPluginUITestAgentSession = Readonly<{
+	dispose: () => Promise<void>;
+	handle: SessionSdkHandle;
+}>;
+
+type CustomUIState = {
+	asyncFactoryResult: Promise<PluginUICustomComponent<string>>;
+	factoryCalls: number;
+	factoryStarted: Promise<void>;
+	lastComponentDimensions:
+		| Readonly<{ height: number; width: number }>
+		| undefined;
+	lastContext: PluginUICustomContext<string> | undefined;
+	resolveAsyncFactory: (component: PluginUICustomComponent<string>) => void;
+	throwComponent: boolean;
+};
+
 const pluginUiTestEnvironment = async (
 	executionMode: ExecutionMode = "interactive",
-	testRendererOptions: Readonly<{ kittyKeyboard?: boolean }> = {}
+	testRendererOptions: Readonly<{
+		height?: number;
+		kittyKeyboard?: boolean;
+		width?: number;
+	}> = {},
+	bindPluginUIHostInEditor = false
 ) => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-plugin-ui-"));
 	const workspace = path.join(root, "workspace");
 	await fs.mkdir(workspace, { recursive: true });
 	const sessionId = `plugin-ui-${crypto.randomUUID()}`;
+	const configStore = createConfigStore({
+		homeRoot: root,
+		trustedProjectRoots: [workspace],
+	});
 	const runtime = await loadPlugins({
 		bundledPlugins: [
 			{ factory: pluginUiFixture, id: "plugin_ui_fixture" },
@@ -42,25 +101,140 @@ const pluginUiTestEnvironment = async (
 				factory: pluginUiOtherFixture,
 				id: "plugin_ui_other_fixture",
 			},
+			{ factory: customEditorPlugin, id: "custom_editor" },
 		],
 		cliPaths: [],
 		config: {
-			configStore: createConfigStore({ homeRoot: root }),
+			configStore,
 			cwd: workspace,
 			homeRoot: root,
+			trustedProjectRoots: [workspace],
 			workspace,
 		},
 		userDataDir: root,
 	});
 	let pluginUIHost: PluginUIHost | undefined;
+	let isTopLayer: (id: string) => boolean = () => false;
+	const transcriptState: {
+		advance: () => void;
+		showSessionTranscript: (transcript: readonly object[]) => void;
+	} = {
+		advance: () => undefined,
+		showSessionTranscript: () => undefined,
+	};
+	const customEditorState: { setMounted: (mounted: boolean) => void } = {
+		setMounted: () => undefined,
+	};
 	function CapturePluginUIHost() {
 		pluginUIHost = usePluginUIHost();
+		isTopLayer = useKeyboardLayer().isTopLayer;
 		return null;
+	}
+	function TestTranscript() {
+		const [revision, setRevision] = useState(0);
+		const [sessionTranscript, setSessionTranscript] = useState<string>();
+		transcriptState.advance = () => setRevision((current) => current + 1);
+		transcriptState.showSessionTranscript = (transcript) =>
+			setSessionTranscript(textFromSessionTranscript(transcript));
+		return (
+			<text>
+				{sessionTranscript ?? `Plugin UI host fixture · update ${revision}`}
+			</text>
+		);
+	}
+	function FixtureComposer() {
+		const inputRef = useRef<InputRenderable>(null);
+		const [value, setValue] = useState("");
+		const { isTopLayer } = useKeyboardLayer();
+		return (
+			<box flexDirection="column">
+				<text>Fixture composer</text>
+				<input
+					focused={isTopLayer("base")}
+					onContentChange={() => setValue(inputRef.current?.value ?? "")}
+					ref={inputRef}
+				/>
+				<text>{value}</text>
+			</box>
+		);
 	}
 	function ThemeProbe({ label }: Readonly<{ label: string }>) {
 		const { colors, currentTheme } = useTheme();
 		return <text>{`${label}:${currentTheme.name}:${colors.primary}`}</text>;
 	}
+	function CustomEditorRegion() {
+		const [mounted, setMounted] = useState(true);
+		customEditorState.setMounted = setMounted;
+		if (!mounted) {
+			return <FixtureComposer />;
+		}
+		return (
+			<PluginUICustomEditor
+				{...(bindPluginUIHostInEditor ? { pluginRuntime: runtime } : {})}
+				sessionId={sessionId}
+			>
+				<FixtureComposer />
+			</PluginUICustomEditor>
+		);
+	}
+	const openAgentSession = async (
+		recorder: FakeProviderRecorder
+	): Promise<OpenedPluginUITestAgentSession> => {
+		const services = await openSessionServices({
+			policy: {
+				cwd: workspace,
+				databasePath: path.join(root, "agent-session.sqlite"),
+				workspace,
+			},
+			sources: {
+				configRuntime: () => ({
+					configStore,
+					cwd: workspace,
+					homeRoot: root,
+					trustedProjectRoots: [workspace],
+					workspace,
+				}),
+				createProviderCollection: () => createFakeProviderCollection(recorder),
+				pluginRuntime: () => runtime,
+			},
+		});
+		let handle: SessionSdkHandle | undefined;
+		let agentSdk: SessionSdk | undefined;
+		try {
+			const model = {
+				modelId: toModelId("gpt-5.6-luna"),
+				providerId: "openai",
+			};
+			const agentSessionId = toSessionId(sessionId);
+			agentSdk = await services.sessionSdk.createSessionRuntime({
+				pluginFactories: [
+					{ factory: pluginUiFixture, id: "plugin_ui_fixture" },
+				],
+				projectTrust: "trust",
+			});
+			await agentSdk.createEmptySession({
+				model,
+				sessionId: agentSessionId,
+			});
+			handle = await agentSdk.openSession(agentSessionId, {
+				autoContinue: false,
+				view: true,
+			});
+			return {
+				dispose: async () => {
+					await handle?.dispose();
+					await agentSdk?.dispose();
+					await services.shutdown();
+				},
+				handle,
+			};
+		} catch (error) {
+			await handle?.dispose();
+			await agentSdk?.dispose();
+			await services.shutdown();
+			throw error;
+		}
+	};
 	const setup = await testRender(
 		<ThemeProvider themeName="opencode">
 			<ToastProvider>
@@ -68,7 +242,8 @@ const pluginUiTestEnvironment = async (
 					<DialogProvider>
 						<PluginUIHostProvider>
 							<CapturePluginUIHost />
-							<text>Plugin UI host fixture</text>
+							<TestTranscript />
+							<CustomEditorRegion />
 							<ThemeProbe label="global" />
 							<LocalStyleProvider colors={{ primary: "#123456" }}>
 								<ThemeProbe label="local" />
@@ -78,13 +253,15 @@ const pluginUiTestEnvironment = async (
 				</KeyboardLayerProvider>
 			</ToastProvider>
 		</ThemeProvider>,
-		{ height: 16, width: 64, ...testRendererOptions }
+		{ exitOnCtrlC: false, height: 16, width: 64, ...testRendererOptions }
 	);
 	await flushTestRenderer(setup, 2);
 	if (pluginUIHost === undefined) {
 		throw new Error("Plugin UI host was not mounted.");
 	}
-	const unbindPluginUIHost = runtime.bindPluginUIHost(sessionId, pluginUIHost);
+	const unbindPluginUIHost = bindPluginUIHostInEditor
+		? () => undefined
+		: runtime.bindPluginUIHost(sessionId, pluginUIHost);
 	await runtime.startSession({ executionMode, sessionId, workspace });
 	const executeCommand = async (
 		pluginId: string,
@@ -110,12 +287,61 @@ const pluginUiTestEnvironment = async (
 			await flushTestRenderer(setup, 2);
 		});
 	};
-	const dispose = async (): Promise<void> => {
+	const pressReclaim = async (): Promise<void> => {
 		await act(async () => {
+			setup.mockInput.pressKey("c", { ctrl: true });
+			await flushTestRenderer(setup, 2);
+		});
+	};
+	const customUIState = runtime.getResource<CustomUIState>(
+		"plugin_ui_fixture",
+		"custom_ui_state"
+	);
+	if (customUIState === undefined) {
+		throw new Error("The custom UI fixture state was not registered.");
+	}
+	const executePluginTool = (name: string, id: string) => {
+		const tool = createPluginTools({
+			agentId: agentIdSchema.parse("build"),
+			pluginRuntime: runtime,
+			pluginTools: runtime.getToolDescriptors(sessionId),
+			sessionId,
+			workspace,
+		}).find(({ definition }) => definition.name.includes(name));
+		if (tool === undefined) {
+			throw new Error(`The ${name} fixture Tool was not registered.`);
+		}
+		return tool.execute({ input: {}, toolCallId: toolCallId(id) });
+	};
+	const executeCustomTool = () =>
+		executePluginTool("ui_custom", "plugin-ui-custom-tool");
+	let rendererDestroyed = false;
+	const destroyRenderer = async (): Promise<void> => {
+		if (rendererDestroyed) {
+			return;
+		}
+		setup.renderer.destroy();
+		await setup.renderer.closed;
+		rendererDestroyed = true;
+	};
+	const isCustomLayerTop = (): boolean => {
+		const request = pluginUIHost?.getCustomUI();
+		return request === null || request === undefined
+			? false
+			: isTopLayer(`plugin-custom-${request.id}`);
+	};
+	const dispose = async (): Promise<void> => {
+		if (rendererDestroyed) {
 			unbindPluginUIHost();
 			await runtime.shutdown();
-		});
-		await act(() => setup.renderer.destroy());
+		} else {
+			await act(async () => {
+				unbindPluginUIHost();
+				await runtime.shutdown();
+			});
+			await act(() => setup.renderer.destroy());
+			rendererDestroyed = true;
+		}
 		await fs.rm(root, { recursive: true, force: true });
 	};
 	return {
@@ -123,13 +349,888 @@ const pluginUiTestEnvironment = async (
 		executeCommand,
 		pluginUIHost,
 		runtime,
+		executeCustomTool,
+		customUIState,
+		destroyRenderer,
+		executePluginTool,
+		isCustomLayerTop,
 		pressEscape,
+		pressReclaim,
 		unbindPluginUIHost,
 		sessionId,
 		setup,
 		workspace,
+		transcriptState,
+		openAgentSession,
+		configStore,
+		setCustomEditorMounted: customEditorState.setMounted,
 	};
 };
+
+test("a direct Plugin Command opens custom UI, returns once, and restores its composer", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const initialFactoryCalls = environment.customUIState.factoryCalls;
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(environment.setup.captureCharFrame()).toContain("Custom response");
+		expect(environment.setup.captureCharFrame()).toContain("Escape dismiss");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Ctrl+C reclaim editor"
+		);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Plugin UI invitation"
+		);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"opencode:64x16:6:interactive"
+		);
+		expect(environment.customUIState.factoryCalls).toBe(
+			initialFactoryCalls + 1
+		);
+
+		await act(() => environment.setup.mockInput.typeText("local response"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(await result).toBe("local response");
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(true);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture custom UI"
+		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("custom UI cannot mutate the host composer keybindings", async () => {
+	const environment = await pluginUiTestEnvironment();
+	const expectedBindings = CHAT_TEXT_AREA_KEY_BINDINGS.map((binding) => ({
+		...binding,
+	}));
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const composerBindings =
+			environment.customUIState.lastContext?.keybindings.composer;
+		if (composerBindings === undefined) {
+			throw new Error("The custom UI did not receive composer bindings.");
+		}
+
+		expect(composerBindings).toEqual(expectedBindings);
+		expect(composerBindings).not.toBe(CHAT_TEXT_AREA_KEY_BINDINGS);
+		expect(Object.isFrozen(composerBindings)).toBe(true);
+		for (const [index, binding] of composerBindings.entries()) {
+			expect(binding).not.toBe(CHAT_TEXT_AREA_KEY_BINDINGS[index]);
+			expect(Object.isFrozen(binding)).toBe(true);
+		}
+		expect(
+			Reflect.set(composerBindings, "0", { name: "x", action: "delete" })
+		).toBe(false);
+		const firstBinding = composerBindings[0];
+		if (firstBinding === undefined) {
+			throw new Error("The custom UI received no composer keybindings.");
+		}
+		expect(Reflect.set(firstBinding, "action", "delete")).toBe(false);
+		expect(CHAT_TEXT_AREA_KEY_BINDINGS).toEqual(expectedBindings);
+
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Interactive Mode binds the custom editor host for its mounted Session and releases it on unmount", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {}, true);
+	try {
+		const { result: firstRequest } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+
+		await environment.pressEscape();
+		expect(await firstRequest).toBe("undefined");
+		await act(() => environment.setCustomEditorMounted(false));
+
+		const { result: unboundRequest } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		expect(await unboundRequest).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture custom UI"
+		);
+
+		await act(() => environment.setCustomEditorMounted(true));
+		const { result: reboundRequest } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		await environment.pressEscape();
+		expect(await reboundRequest).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("the verified author example opens a React editor and returns its response", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"custom_editor",
+			"reply-editor"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Reply to the current message"
+		);
+		expect(environment.setup.captureCharFrame()).toContain("Enter:");
+
+		await act(() => environment.setup.mockInput.typeText("Example response"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+		expect(await result).toBe("Example response");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("custom editor preserves the live composer draft and transcript through restoration", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		await act(() => environment.setup.mockInput.typeText("existing draft"));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("existing draft");
+
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => environment.transcriptState.advance());
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Plugin UI host fixture · update 1"
+		);
+		const { result: themeChange } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"theme"
+		);
+		expect(JSON.parse((await themeChange) ?? "{}")).toMatchObject({
+			changed: { success: true },
+			loaded: "one-dark",
+		});
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"one-dark:64x16:6:interactive"
+		);
+
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Plugin UI host fixture · update 1"
+		);
+		expect(environment.setup.captureCharFrame()).toContain("existing draft");
+		await act(() => environment.setup.mockInput.typeText(" restored"));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"existing draft restored"
+		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Agent Turn completion leaves custom editor open and restores the live transcript", async () => {
+	const environment = await pluginUiTestEnvironment();
+	const recorder = createFakeProviderRecorder();
+	recorder.stepScript = async function* () {
+		yield { delta: "Fresh provider response", type: "text-delta" };
+		yield { completion: { kind: "completed" }, type: "finish" };
+	};
+	let agentSession: OpenedPluginUITestAgentSession | undefined;
+	let stopObservingSession: (() => void) | undefined;
+	let stopObservingTurn: (() => void) | undefined;
+	try {
+		const { result: customResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		agentSession = await environment.openAgentSession(recorder);
+		const handle = agentSession.handle;
+		await act(() => {
+			stopObservingSession = handle.subscribe((snapshot) =>
+				environment.transcriptState.showSessionTranscript(snapshot.transcript)
+			);
+		});
+		const terminal = Promise.withResolvers<SessionSdkEvent>();
+		stopObservingTurn = handle.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed" ||
+				event.type === "agent-turn-cancelled" ||
+				event.type === "agent-turn-interrupted"
+			) {
+				terminal.resolve(event);
+			}
+		});
+
+		await act(async () => {
+			const admission = await handle.prompt({
+				text: "Request fresh provider state.",
+			});
+			expect(admission.rejected).toBe(false);
+			expect((await terminal.promise).type).toBe("agent-turn-completed");
+		});
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Fresh provider response"
+		);
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(false);
+
+		await environment.pressEscape();
+		expect(await customResult).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Fresh provider response"
+		);
+	} finally {
+		stopObservingSession?.();
+		stopObservingTurn?.();
+		await agentSession?.dispose();
+		await environment.dispose();
+	}
+});
+
+test("Plugin Tool progress updates the live transcript without dismissing a custom editor", async () => {
+	const environment = await pluginUiTestEnvironment();
+	const recorder = createFakeProviderRecorder();
+	const progressToolCallId = toolCallId("plugin-ui-progress-tool-call");
+	const progressToolResult =
+		Promise.withResolvers<
+			Extract<SessionSdkEvent, { type: "tool-call-finished" }>
+		>();
+	const terminal = Promise.withResolvers<SessionSdkEvent>();
+	let agentSession: OpenedPluginUITestAgentSession | undefined;
+	let stopObservingSession: (() => void) | undefined;
+	let stopObservingTurn: (() => void) | undefined;
+	let currentTranscript: readonly object[] = [];
+	let progressResultReachedProvider = false;
+	let editorVisibleWhenToolFinished = false;
+	try {
+		const { result: customResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const customContext = environment.customUIState.lastContext;
+		if (customContext === undefined) {
+			throw new Error("The custom editor did not receive its context.");
+		}
+
+		await environment.configStore.setValue(
+			environment.workspace,
+			"global",
+			["permission", "plugin:plugin_ui_fixture:ui_progress"],
+			"allow"
+		);
+		agentSession = await environment.openAgentSession(recorder);
+		const handle = agentSession.handle;
+		recorder.stepScript = async function* (request) {
+			const toolResult = request.messages
+				.flatMap(({ content }) => content)
+				.find(
+					(part) =>
+						part.type === "tool-result" &&
+						part.toolCallId === progressToolCallId
+				);
+			if (toolResult?.type === "tool-result") {
+				if (toolResult.output !== "progress completed") {
+					throw new Error("The Agent Turn received an unexpected Tool result.");
+				}
+				progressResultReachedProvider = true;
+				yield {
+					delta: "Plugin Tool progress completed in the Agent Turn.",
+					type: "text-delta",
+				};
+			} else {
+				const progressTool = request.tools?.find(({ name }) =>
+					name.endsWith("_ui_progress")
+				);
+				if (progressTool === undefined) {
+					throw new Error("The Agent Turn did not receive ui_progress.");
+				}
+				yield {
+					input: {},
+					toolCallId: progressToolCallId,
+					toolName: progressTool.name,
+					type: "tool-call",
+				};
+			}
+			yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+			yield { completion: { kind: "completed" }, type: "finish" };
+		};
+		await act(() => {
+			stopObservingSession = handle.subscribe((snapshot) => {
+				currentTranscript = snapshot.transcript;
+				environment.transcriptState.showSessionTranscript(snapshot.transcript);
+			});
+		});
+		stopObservingTurn = handle.onEvent((event) => {
+			if (
+				event.type === "tool-call-finished" &&
+				event.toolCallId === progressToolCallId
+			) {
+				progressToolResult.resolve(event);
+				editorVisibleWhenToolFinished = environment.isCustomLayerTop();
+			}
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed" ||
+				event.type === "agent-turn-cancelled" ||
+				event.type === "agent-turn-interrupted"
+			) {
+				terminal.resolve(event);
+			}
+		});
+
+		await act(async () => {
+			const admission = await handle.prompt({
+				text: "Ask the Agent to report progress through its Plugin Tool.",
+			});
+			expect(admission.rejected).toBe(false);
+			expect((await terminal.promise).type).toBe("agent-turn-completed");
+			expect((await progressToolResult.promise).outcome).toMatchObject({
+				output: "progress completed",
+				type: "success",
+			});
+		});
+		await flushTestRenderer(environment.setup, 2);
+
+		const progressPart = sessionMessagesFromTranscript(currentTranscript)
+			.flatMap(({ parts }) => parts)
+			.find(
+				(part) =>
+					part.type === "dynamic-tool" && part.toolCallId === progressToolCallId
+			);
+		expect(progressPart).toMatchObject({
+			output: "progress completed",
+			state: "output-available",
+		});
+		expect(progressResultReachedProvider).toBe(true);
+		expect(editorVisibleWhenToolFinished).toBe(true);
+		expect(environment.customUIState.lastContext).toBe(customContext);
+		expect(customContext.signal.aborted).toBe(false);
+		expect(textFromSessionTranscript(currentTranscript)).toContain(
+			"Plugin Tool progress completed in the Agent Turn."
+		);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Tool progress completed in the Agent Turn."
+		);
+
+		await environment.pressEscape();
+		expect(await customResult).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+	} finally {
+		stopObservingSession?.();
+		stopObservingTurn?.();
+		await agentSession?.dispose();
+		await environment.dispose();
+	}
+});
+
+test("Agent Turn interruption leaves custom editor open and restores the live transcript", async () => {
+	const environment = await pluginUiTestEnvironment();
+	const recorder = createFakeProviderRecorder();
+	const providerStarted = Promise.withResolvers<void>();
+	const providerOutput = Promise.withResolvers<void>();
+	recorder.stepScript = async function* (_request, _recorder, signal) {
+		yield { delta: "Partial provider response", type: "text-delta" };
+		providerStarted.resolve();
+		if (signal === undefined) {
+			throw new Error(
+				"The fake Provider did not receive the Agent Turn signal."
+			);
+		}
+		const aborted = Promise.withResolvers<void>();
+		const onAbort = () => aborted.resolve();
+		signal.addEventListener("abort", onAbort, { once: true });
+		if (signal.aborted) {
+			onAbort();
+		}
+		await aborted.promise;
+		throw signal.reason ?? new DOMException("Interrupted", "AbortError");
+	};
+	let agentSession: OpenedPluginUITestAgentSession | undefined;
+	let stopObservingSession: (() => void) | undefined;
+	let stopObservingTurn: (() => void) | undefined;
+	try {
+		const { result: customResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		agentSession = await environment.openAgentSession(recorder);
+		const handle = agentSession.handle;
+		await act(() => {
+			stopObservingSession = handle.subscribe((snapshot) =>
+				environment.transcriptState.showSessionTranscript(snapshot.transcript)
+			);
+		});
+		const terminal = Promise.withResolvers<SessionSdkEvent>();
+		stopObservingTurn = handle.onEvent((event) => {
+			if (event.type === "text-delta") {
+				providerOutput.resolve();
+			}
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed" ||
+				event.type === "agent-turn-cancelled" ||
+				event.type === "agent-turn-interrupted"
+			) {
+				terminal.resolve(event);
+			}
+		});
+
+		await act(async () => {
+			const admission = await handle.prompt({
+				text: "Request interruptible provider state.",
+			});
+			expect(admission.rejected).toBe(false);
+			await providerStarted.promise;
+			await providerOutput.promise;
+		});
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(false);
+		await act(async () => {
+			await handle.interrupt();
+			expect((await terminal.promise).type).toBe("agent-turn-interrupted");
+		});
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(false);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Request interruptible provider state."
+		);
+
+		await environment.pressEscape();
+		expect(await customResult).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Request interruptible provider state."
+		);
+	} finally {
+		stopObservingSession?.();
+		stopObservingTurn?.();
+		await agentSession?.dispose();
+		await environment.dispose();
+	}
+});
+
+test("custom UI receives resized dimensions without losing keyboard dismissal", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 8,
+		width: 18,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			height: 8,
+			width: 18,
+		});
+
+		await act(() => environment.setup.resize(22, 10));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			height: 10,
+			width: 22,
+		});
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("reserved Ctrl+C reclaims the composer without terminating the host", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(environment.isCustomLayerTop()).toBe(true);
+
+		await environment.pressReclaim();
+		expect(await result).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		const { result: hostStillActive } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"notify"
+		);
+		expect(await hostStillActive).toBe("notified");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("renderer teardown aborts and settles an active custom editor", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(async () => environment.destroyRenderer());
+
+		expect(await result).toBe("undefined");
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(true);
+		expect(environment.pluginUIHost?.getCustomUI()).toBeNull();
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("late done calls cannot settle or replace a subsequent custom UI interaction", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result: firstResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const firstContext = environment.customUIState.lastContext;
+		if (firstContext === undefined) {
+			throw new Error(
+				"The first custom UI factory did not receive its context."
+			);
+		}
+		await act(() => {
+			firstContext.done("first result");
+			firstContext.done("duplicate result");
+		});
+		await flushTestRenderer(environment.setup, 2);
+		expect(await firstResult).toBe("first result");
+
+		const { result: secondResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => firstContext.done("stale result"));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+
+		const secondContext = environment.customUIState.lastContext;
+		if (secondContext === undefined || secondContext === firstContext) {
+			throw new Error(
+				"The next custom UI factory did not receive a fresh context."
+			);
+		}
+		await act(() => secondContext.done("second result"));
+		expect(await secondResult).toBe("second result");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("event-originated custom UI asks for fresh consent before factory execution", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const initialFactoryCalls = environment.customUIState.factoryCalls;
+		const result = environment.executeCustomTool();
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Plugin UI invitation"
+		);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Fixture event custom UI"
+		);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture custom UI"
+		);
+		expect(environment.customUIState.factoryCalls).toBe(initialFactoryCalls);
+
+		await act(() => environment.setup.mockInput.pressArrow("up"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+
+		await act(() => environment.setup.mockInput.typeText("consented response"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(await result).toMatchObject({
+			output: "consented response",
+			type: "success",
+		});
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(true);
+
+		const nextRequest = environment.executeCustomTool();
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Plugin UI invitation"
+		);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture custom UI"
+		);
+		expect(environment.customUIState.factoryCalls).toBe(
+			initialFactoryCalls + 1
+		);
+		await environment.pressEscape();
+		expect(await nextRequest).toMatchObject({
+			output: "undefined",
+			type: "success",
+		});
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("declining an event-originated custom UI resolves undefined and releases admission", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const initialFactoryCalls = environment.customUIState.factoryCalls;
+		const declined = environment.executeCustomTool();
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(await declined).toMatchObject({
+			output: "undefined",
+			type: "success",
+		});
+		expect(environment.customUIState.factoryCalls).toBe(initialFactoryCalls);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture custom UI"
+		);
+
+		const accepted = environment.executeCustomTool();
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => environment.setup.mockInput.pressArrow("up"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		await act(() => environment.setup.mockInput.pressEscape());
+		await flushTestRenderer(environment.setup, 2);
+		expect(await accepted).toMatchObject({
+			output: "undefined",
+			type: "success",
+		});
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("a pending invitation owns the host-wide admission slot across Plugins", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const pending = environment.executeCustomTool();
+		await flushTestRenderer(environment.setup, 2);
+
+		const { result: competingCommand } = await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"other-custom-busy"
+		);
+		expect(await competingCommand).toBe("plugin_ui_custom_busy");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Plugin UI invitation"
+		);
+
+		await act(() => environment.setup.mockInput.pressArrow("up"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		const { result: mountedCompetingCommand } =
+			await environment.executeCommand(
+				"plugin_ui_other_fixture",
+				"other-custom-busy"
+			);
+		expect(await mountedCompetingCommand).toBe("plugin_ui_custom_busy");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+
+		await environment.pressEscape();
+		expect(await pending).toMatchObject({
+			output: "undefined",
+			type: "success",
+		});
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("factory and component failures reject with stable codes and release the slot", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result: factoryFailure } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-factory-failure"
+		);
+		expect(await factoryFailure).toBe("plugin_ui_custom_failed");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+
+		const { result: componentFailure } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-component-failure"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(await componentFailure).toBe("plugin_ui_custom_failed");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+
+		environment.customUIState.throwComponent = false;
+		const { result: recovered } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => environment.setup.mockInput.typeText("recovered response"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		expect(await recovered).toBe("recovered response");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("view replacement aborts custom UI and ignores a late async factory result", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-late-factory"
+		);
+		await environment.customUIState.factoryStarted;
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Loading custom Plugin UI"
+		);
+
+		await act(() => environment.unbindPluginUIHost());
+		await flushTestRenderer(environment.setup, 2);
+		expect(await result).toBe("undefined");
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(true);
+
+		environment.customUIState.resolveAsyncFactory(() => (
+			<text>Late custom UI</text>
+		));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Late custom UI"
+		);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+
+		await act(() =>
+			environment.runtime.bindPluginUIHost(
+				environment.sessionId,
+				environment.pluginUIHost
+			)
+		);
+		const { result: nextRequest } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => environment.setup.mockInput.pressEnter());
+		expect(await nextRequest).toBe("");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Plugin runtime shutdown cancels custom UI before unloading the Plugin", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(async () => environment.runtime.shutdown());
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(await result).toBe("undefined");
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(true);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Plugin disable aborts mounted custom UI and restores the host editor", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+
+		await act(() =>
+			environment.runtime.disablePlugin(
+				"plugin_ui_fixture",
+				"Plugin disabled for custom UI lifecycle test."
+			)
+		);
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(await result).toBe("undefined");
+		expect(environment.customUIState.lastContext?.signal.aborted).toBe(true);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("custom UI leaves the live transcript region mounted while replacing the editor", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Plugin UI host fixture"
+		);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Plugin UI host fixture · update 0"
+		);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+	} finally {
+		await environment.dispose();
+	}
+});
 
 test("a public Plugin Command selects a host-rendered option with the keyboard", async () => {
 	const environment = await pluginUiTestEnvironment();
@@ -541,6 +1642,13 @@ test("JSON, Print, and RPC Plugins receive terminal-free UI defaults", async () 
 			expect(await confirm).toBe("cancelled");
 			expect(await input).toBe("undefined");
 			expect(await editor).toBe("undefined");
+			const initialFactoryCalls = environment.customUIState.factoryCalls;
+			const { result: custom } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				"custom"
+			);
+			expect(await custom).toBe("undefined");
+			expect(environment.customUIState.factoryCalls).toBe(initialFactoryCalls);
 			expect(await notification).toBe("notified");
 			const themeResult = JSON.parse((await theme) ?? "{}");
 			expect(themeResult).toEqual({

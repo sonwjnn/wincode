@@ -11,6 +11,7 @@ export const unsupportedPluginUI: PluginUI = Object.freeze({
 	confirm: async () => false,
 	input: async () => undefined,
 	editor: async () => undefined,
+	custom: async () => undefined,
 	notify: () => undefined,
 	getAllThemes: () => [],
 	getTheme: () => undefined,

@@ -3,23 +3,33 @@ import type {
 	SelectRenderable,
 	TextareaRenderable,
 } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
-import { isUndefined } from "@wincode/utils";
 import {
+	useKeyboard,
+	useRenderer,
+	useTerminalDimensions,
+} from "@opentui/react";
+import { isUndefined, logger } from "@wincode/utils";
+import {
+	Component,
 	createContext,
 	createElement,
 	type ReactNode,
 	useContext,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
+	useState,
+	useSyncExternalStore,
 } from "react";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import type { DialogContextValue } from "../../../shared/providers/dialog/dialog-provider";
 import {
 	useDialog,
 	useDialogEscape,
 	useDialogLayer,
 } from "../../../shared/providers/dialog/dialog-provider";
+import { CHAT_TEXT_AREA_KEY_BINDINGS } from "../../../shared/providers/keyboard-layer/constants";
 import { useKeyboardLayer } from "../../../shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../../../shared/providers/theme/theme-provider";
 import type { Theme } from "../../../shared/providers/theme/themes";
@@ -35,9 +45,15 @@ import type {
 	PluginNotificationLevel,
 	PluginThemeChangeResult,
 	PluginUI,
+	PluginUICustomComponent,
+	PluginUICustomContext,
+	PluginUICustomFactory,
+	PluginUICustomOptions,
 	PluginUIDialogOptions,
 	PluginUIPromptKind,
 } from "../public";
+import { PluginUICustomError } from "../public";
+import type { PluginRuntime } from "../runtime";
 
 type PluginUIOwner = Readonly<{
 	pluginId: string;
@@ -49,14 +65,69 @@ type PluginUIHandle = Readonly<{
 	ui: PluginUI;
 }>;
 
+type PluginUICustomHostRequest = Readonly<{
+	dismiss: () => void;
+	done: (value: unknown) => void;
+	factory: (
+		context: PluginUICustomContext<unknown>
+	) =>
+		| PluginUICustomComponent<unknown>
+		| Promise<PluginUICustomComponent<unknown>>;
+	fail: (error: unknown) => void;
+	id: string;
+	sessionId: string;
+	signal: AbortSignal;
+	title: string;
+}>;
+
+type PluginUICustomStore = Readonly<{
+	clear: (requestId: string) => void;
+	get: () => PluginUICustomHostRequest | null;
+	set: (request: PluginUICustomHostRequest | null) => void;
+	subscribe: (listener: () => void) => () => void;
+}>;
+
+const createPluginUICustomStore = (): PluginUICustomStore => {
+	let current: PluginUICustomHostRequest | null = null;
+	const listeners = new Set<() => void>();
+	return Object.freeze({
+		clear(requestId) {
+			if (current?.id === requestId) {
+				current = null;
+			}
+		},
+		get: () => current,
+		set(request) {
+			if (current === request) {
+				return;
+			}
+			current = request;
+			for (const listener of [...listeners]) {
+				listener();
+			}
+		},
+		subscribe(listener) {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+	});
+};
+
+const EMPTY_PLUGIN_CUSTOM_UI = createPluginUICustomStore();
+
 export type PluginUIHost = Readonly<{
+	close: () => void;
 	create: (
 		owner: PluginUIOwner,
-		beginPrompt: (kind: PluginUIPromptKind, title: string) => () => void
+		beginPrompt: (kind: PluginUIPromptKind, title: string) => () => void,
+		invocation: "command" | "event"
 	) => PluginUIHandle;
+	getCustomUI: () => PluginUICustomHostRequest | null;
+	subscribeCustomUI: (listener: () => void) => () => void;
 }>;
 
 type PluginUIHostDependencies = Readonly<{
+	customUI: PluginUICustomStore;
 	dialog: () => DialogContextValue;
 	theme: () => Readonly<{ setTheme: (theme: Theme) => void }>;
 	toast: () => ToastContextValue;
@@ -272,6 +343,270 @@ const PluginEditorDialog = ({
 	);
 };
 
+type PluginUICustomInvitationProps = Readonly<{
+	pluginId: string;
+	title: string;
+	onAccept: () => void;
+	onDecline: () => void;
+}>;
+
+const PluginUICustomInvitation = ({
+	pluginId,
+	title,
+	onAccept,
+	onDecline,
+}: PluginUICustomInvitationProps) => {
+	const selectRef = useRef<SelectRenderable>(null);
+	const { colors } = useTheme();
+	const { isTopLayer } = useKeyboardLayer();
+	const layerId = useDialogLayer();
+	const isActiveLayer = isTopLayer(layerId);
+
+	useEffect(() => {
+		if (isActiveLayer) {
+			selectRef.current?.focus();
+		}
+	}, [isActiveLayer]);
+
+	return (
+		<DialogInset>
+			<box flexDirection="column" gap={1}>
+				<text fg={colors.text} selectable={false} wrapMode="word">
+					{`Plugin '${pluginId}' requests permission to open a custom UI: ${title}`}
+				</text>
+				<select
+					focused
+					onSelect={(index) => (index === 0 ? onAccept() : onDecline())}
+					options={[
+						{ description: "", name: "Allow once" },
+						{ description: "", name: "Decline" },
+					]}
+					ref={selectRef}
+					selectedIndex={1}
+				/>
+				<box flexDirection="row" gap={2} height={1} marginTop={1}>
+					<DialogFooterHint label="accept" shortcut="enter" />
+					<DialogFooterHint label="decline" shortcut="escape" />
+				</box>
+			</box>
+		</DialogInset>
+	);
+};
+
+class PluginUICustomErrorBoundary extends Component<
+	Readonly<{ children: ReactNode; onError: (error: Error) => void }>,
+	Readonly<{ failed: boolean }>
+> {
+	override state = { failed: false };
+
+	static getDerivedStateFromError(): Readonly<{ failed: boolean }> {
+		return { failed: true };
+	}
+
+	override componentDidCatch(error: Error): void {
+		this.props.onError(error);
+	}
+
+	override render(): ReactNode {
+		return this.state.failed ? null : this.props.children;
+	}
+}
+
+const CUSTOM_UI_KEYBINDINGS = Object.freeze({
+	composer: Object.freeze(
+		CHAT_TEXT_AREA_KEY_BINDINGS.map((binding) => Object.freeze({ ...binding }))
+	),
+	dismiss: "escape",
+	reclaim: "ctrl+c",
+} as const);
+
+type PluginUICustomEditorProps = Readonly<{
+	children: ReactNode;
+	pluginRuntime?: PluginRuntime;
+	sessionId: string;
+}>;
+
+const customUIContext = (
+	request: PluginUICustomHostRequest,
+	sessionId: string,
+	width: number,
+	height: number,
+	theme: Theme
+): PluginUICustomContext<unknown> =>
+	Object.freeze({
+		done: request.done,
+		environment: Object.freeze({
+			executionMode: "interactive",
+			sessionId,
+		}),
+		height,
+		keybindings: CUSTOM_UI_KEYBINDINGS,
+		signal: request.signal,
+		theme,
+		width,
+	});
+
+/** Replaces one Session's composer region without owning its renderer or transcript. */
+export function PluginUICustomEditor({
+	children,
+	pluginRuntime: providedPluginRuntime,
+	sessionId,
+}: PluginUICustomEditorProps) {
+	const host = useOptionalPluginUIHost();
+	const pluginRuntime = providedPluginRuntime ?? getInteractivePluginRuntime();
+	const request = useSyncExternalStore(
+		host?.subscribeCustomUI ?? EMPTY_PLUGIN_CUSTOM_UI.subscribe,
+		host?.getCustomUI ?? EMPTY_PLUGIN_CUSTOM_UI.get,
+		host?.getCustomUI ?? EMPTY_PLUGIN_CUSTOM_UI.get
+	);
+	const activeRequest = request?.sessionId === sessionId ? request : null;
+	const activeRequestRef = useRef(activeRequest);
+	activeRequestRef.current = activeRequest;
+	const { isTopLayer, pop, push } = useKeyboardLayer();
+	const renderer = useRenderer();
+	const { currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const factoryContextRef = useRef<PluginUICustomContext<unknown> | null>(null);
+	factoryContextRef.current =
+		activeRequest === null
+			? null
+			: customUIContext(
+					activeRequest,
+					sessionId,
+					dimensions.width,
+					dimensions.height,
+					currentTheme
+				);
+	const [loadedComponent, setLoadedComponent] = useState<Readonly<{
+		component: PluginUICustomComponent<unknown>;
+		requestId: string;
+	}> | null>(null);
+	const layerId =
+		activeRequest === null ? undefined : `plugin-custom-${activeRequest.id}`;
+
+	useEffect(() => {
+		if (host === null || pluginRuntime === undefined) {
+			return;
+		}
+		return pluginRuntime.bindPluginUIHost(sessionId, host);
+	}, [host, pluginRuntime, sessionId]);
+
+	useLayoutEffect(() => {
+		if (activeRequest === null || layerId === undefined) {
+			return;
+		}
+		push(layerId, () => {
+			activeRequest.dismiss();
+			return true;
+		});
+		return () => {
+			if (!renderer.isDestroyed) {
+				pop(layerId);
+			}
+		};
+	}, [activeRequest, layerId, pop, push, renderer]);
+
+	useKeyboard((key) => {
+		const current = activeRequestRef.current;
+		if (
+			current === null ||
+			!isTopLayer(`plugin-custom-${current.id}`) ||
+			key.name !== "escape"
+		) {
+			return;
+		}
+		key.preventDefault();
+		current.dismiss();
+	});
+
+	useEffect(() => {
+		if (host === null || activeRequest === null) {
+			setLoadedComponent(null);
+			return;
+		}
+		let mounted = true;
+		const context = factoryContextRef.current;
+		if (context === null) {
+			return;
+		}
+		const isCurrentRequest = () =>
+			mounted &&
+			!activeRequest.signal.aborted &&
+			host.getCustomUI()?.id === activeRequest.id;
+		setLoadedComponent((loaded) =>
+			loaded?.requestId === activeRequest.id ? loaded : null
+		);
+		void Promise.resolve()
+			.then(() => activeRequest.factory(context))
+			.then((component) => {
+				if (!isCurrentRequest()) {
+					return;
+				}
+				if (typeof component !== "function") {
+					throw new TypeError(
+						"Plugin custom UI factory must return a React component."
+					);
+				}
+				setLoadedComponent({ component, requestId: activeRequest.id });
+			})
+			.catch((error: unknown) => {
+				if (isCurrentRequest()) {
+					activeRequest.fail(error);
+				}
+			});
+		return () => {
+			mounted = false;
+		};
+	}, [activeRequest, host]);
+
+	if (host === null) {
+		return children;
+	}
+
+	const customContent =
+		activeRequest === null
+			? null
+			: {
+					component:
+						loadedComponent?.requestId === activeRequest.id
+							? loadedComponent.component
+							: null,
+					context: customUIContext(
+						activeRequest,
+						sessionId,
+						dimensions.width,
+						dimensions.height,
+						currentTheme
+					),
+				};
+	return (
+		<>
+			<box flexShrink={0} visible={activeRequest === null} width="100%">
+				{children}
+			</box>
+			{activeRequest === null ? null : (
+				<box flexDirection="column" flexShrink={0} width="100%">
+					{customContent === null || customContent.component === null ? (
+						<text fg={currentTheme.colors.textMuted}>
+							Loading custom Plugin UI…
+						</text>
+					) : (
+						<PluginUICustomErrorBoundary
+							key={activeRequest.id}
+							onError={activeRequest.fail}
+						>
+							{createElement(customContent.component, customContent.context)}
+						</PluginUICustomErrorBoundary>
+					)}
+					<text fg={currentTheme.colors.textMuted} wrapMode="word">
+						Escape dismiss · Ctrl+C reclaim editor
+					</text>
+				</box>
+			)}
+		</>
+	);
+}
+
 const unsupportedThemeChange = (error: string): PluginThemeChangeResult => ({
 	error,
 	success: false,
@@ -325,12 +660,24 @@ const isValidTheme = (candidate: unknown): candidate is Theme => {
 };
 
 const createPluginUIHost = ({
+	customUI,
 	dialog: getDialog,
 	theme: getThemeContext,
 	toast: getToast,
-}: PluginUIHostDependencies): PluginUIHost =>
-	Object.freeze({
-		create(owner, beginPrompt) {
+}: PluginUIHostDependencies): PluginUIHost => {
+	let activeCustomRequest: (() => void) | undefined;
+	let hostClosed = false;
+	return Object.freeze({
+		close() {
+			if (hostClosed) {
+				return;
+			}
+			hostClosed = true;
+			activeCustomRequest?.();
+		},
+		getCustomUI: customUI.get,
+		subscribeCustomUI: customUI.subscribe,
+		create(owner, beginPrompt, invocation) {
 			const activeRequests = new Set<() => void>();
 			let closed = false;
 
@@ -407,6 +754,163 @@ const createPluginUIHost = ({
 				return result.promise;
 			};
 
+			const requestCustom = <Value,>(
+				factory: PluginUICustomFactory<Value>,
+				options: PluginUICustomOptions | undefined
+			): Promise<Value | undefined> => {
+				if (closed || hostClosed || owner.sessionId === undefined) {
+					return Promise.resolve(undefined);
+				}
+				if (activeCustomRequest !== undefined) {
+					return Promise.reject(
+						new PluginUICustomError("plugin_ui_custom_busy")
+					);
+				}
+
+				const result = Promise.withResolvers<Value | undefined>();
+				const controller = new AbortController();
+				const requestId = `plugin-custom-${crypto.randomUUID()}`;
+				const invitationLayerId = `${requestId}-invitation`;
+				const title = options?.title ?? "Custom Plugin UI";
+				let accepted = invocation === "command";
+				let settled = false;
+				let invitationOpen = false;
+				let invitationDialog: DialogContextValue | undefined;
+				let endPrompt = (): void => undefined;
+				let presentation: PluginUICustomHostRequest | undefined;
+				let cancel = (): void => undefined;
+				const releaseAdmission = (): void => {
+					if (activeCustomRequest === cancel) {
+						activeCustomRequest = undefined;
+					}
+				};
+				const closeInvitation = (): void => {
+					if (!invitationOpen) {
+						return;
+					}
+					invitationOpen = false;
+					invitationDialog?.close(invitationLayerId);
+				};
+				const clearPresentation = (): void => {
+					if (customUI.get()?.id !== requestId) {
+						return;
+					}
+					if (hostClosed) {
+						customUI.clear(requestId);
+					} else {
+						customUI.set(null);
+					}
+				};
+				const endPromptSafely = (): void => {
+					try {
+						endPrompt();
+					} catch {
+						// Prompt observers cannot prevent custom UI cleanup.
+					}
+				};
+				const finish = (
+					value: Value | undefined,
+					error?: PluginUICustomError,
+					closePendingInvitation = true
+				): void => {
+					if (settled) {
+						return;
+					}
+					settled = true;
+					activeRequests.delete(cancel);
+					releaseAdmission();
+					if (closePendingInvitation) {
+						closeInvitation();
+					}
+					controller.abort();
+					clearPresentation();
+					endPromptSafely();
+					if (error === undefined) {
+						result.resolve(value);
+					} else {
+						result.reject(error);
+					}
+				};
+				cancel = () => finish(undefined);
+				const fail = (error: unknown): void => {
+					void logger
+						.error("Plugin custom UI execution failed", {
+							cause: error instanceof Error ? error.message : String(error),
+							operation: "plugin.ui.custom",
+							pluginId: owner.pluginId,
+						})
+						.catch(() => undefined);
+					finish(
+						undefined,
+						new PluginUICustomError("plugin_ui_custom_failed", error)
+					);
+				};
+				const hostFactory = (context: PluginUICustomContext<unknown>) =>
+					factory(context as PluginUICustomContext<Value>) as unknown as
+						| PluginUICustomComponent<unknown>
+						| Promise<PluginUICustomComponent<unknown>>;
+				const done = (value: unknown): void => finish(value as Value);
+				presentation = Object.freeze({
+					dismiss: cancel,
+					done,
+					factory: hostFactory,
+					fail,
+					id: requestId,
+					sessionId: owner.sessionId,
+					signal: controller.signal,
+					title,
+				});
+				activeCustomRequest = cancel;
+				activeRequests.add(cancel);
+				try {
+					endPrompt = beginPrompt("custom", title);
+				} catch (error) {
+					fail(error);
+					return result.promise;
+				}
+
+				if (invocation === "command") {
+					customUI.set(presentation);
+				} else {
+					invitationDialog = getDialog();
+					invitationOpen = true;
+					const dismissInvitation = (): void => {
+						invitationOpen = false;
+						if (!accepted) {
+							finish(undefined, undefined, false);
+						}
+					};
+					const accept = (): void => {
+						if (settled || accepted || presentation === undefined) {
+							return;
+						}
+						accepted = true;
+						invitationOpen = false;
+						invitationDialog?.close(invitationLayerId);
+						customUI.set(presentation);
+					};
+					try {
+						invitationDialog.open({
+							children: createElement(
+								PluginDialogRequest,
+								{ onDismiss: dismissInvitation },
+								createElement(PluginUICustomInvitation, {
+									onAccept: accept,
+									onDecline: cancel,
+									pluginId: owner.pluginId,
+									title,
+								})
+							),
+							layerId: invitationLayerId,
+							title: "Plugin UI invitation",
+						});
+					} catch (error) {
+						fail(error);
+					}
+				}
+				return result.promise;
+			};
+
 			const ui: PluginUI = Object.freeze({
 				select: (prompt, choices, options) => {
 					if (choices.length === 0) {
@@ -459,6 +963,7 @@ const createPluginUIHost = ({
 								onResolve: resolve,
 							})
 					),
+				custom: (factory, options) => requestCustom(factory, options),
 				notify: (message, level: PluginNotificationLevel = "info") => {
 					if (closed) {
 						return;
@@ -514,6 +1019,7 @@ const createPluginUIHost = ({
 			});
 		},
 	});
+};
 
 const PluginUIHostContext = createContext<PluginUIHost | null>(null);
 
@@ -523,6 +1029,7 @@ export function PluginUIHostProvider({
 	const dialog = useDialog();
 	const theme = useTheme();
 	const toast = useToast();
+	const customUI = useMemo(createPluginUICustomStore, []);
 	const dialogRef = useRef(dialog);
 	const themeRef = useRef(theme);
 	const toastRef = useRef(toast);
@@ -532,12 +1039,14 @@ export function PluginUIHostProvider({
 	const host = useMemo(
 		() =>
 			createPluginUIHost({
+				customUI,
 				dialog: () => dialogRef.current,
 				theme: () => themeRef.current,
 				toast: () => toastRef.current,
 			}),
-		[]
+		[customUI]
 	);
+	useEffect(() => () => host.close(), [host]);
 	return (
 		<PluginUIHostContext.Provider value={host}>
 			{children}
