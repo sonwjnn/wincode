@@ -14,6 +14,7 @@ import {
 	createContext,
 	createElement,
 	type ReactNode,
+	useCallback,
 	useContext,
 	useEffect,
 	useLayoutEffect,
@@ -42,9 +43,13 @@ import { useToast } from "../../../shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "../../../shared/ui/dialog-footer-hint";
 import { DialogInset } from "../../../shared/ui/dialog-inset";
 import type {
+	PluginAutocompleteProviderFactory,
+	PluginEditorComponent,
+	PluginEditorContext,
 	PluginNotificationLevel,
 	PluginThemeChangeResult,
 	PluginUI,
+	PluginUIContributionResult,
 	PluginUICustomComponent,
 	PluginUICustomContext,
 	PluginUICustomFactory,
@@ -63,6 +68,16 @@ type PluginUIOwner = Readonly<{
 type PluginUIHandle = Readonly<{
 	close: () => void;
 	ui: PluginUI;
+}>;
+
+type PluginEditorContribution = Readonly<{
+	component: PluginEditorComponent;
+	pluginId: string;
+}>;
+
+type PluginAutocompleteRegistration = Readonly<{
+	owner: PluginUIOwner;
+	provider: PluginAutocompleteProviderFactory;
 }>;
 
 type PluginUICustomHostRequest = Readonly<{
@@ -115,6 +130,12 @@ const createPluginUICustomStore = (): PluginUICustomStore => {
 
 const EMPTY_PLUGIN_CUSTOM_UI = createPluginUICustomStore();
 
+export type PluginComposerHost = Readonly<{
+	getText: () => string;
+	pasteText: (text: string) => boolean;
+	setText: (text: string, cursorOffset?: number) => boolean;
+}>;
+
 export type PluginUIHost = Readonly<{
 	close: () => void;
 	create: (
@@ -122,6 +143,19 @@ export type PluginUIHost = Readonly<{
 		beginPrompt: (kind: PluginUIPromptKind, title: string) => () => void,
 		invocation: "command" | "event"
 	) => PluginUIHandle;
+	bindComposer: (sessionId: string, composer: PluginComposerHost) => () => void;
+	getComposer: (sessionId: string) => PluginComposerHost | undefined;
+	getActiveEditorComponent: (
+		sessionId: string
+	) => PluginEditorComponent | undefined;
+	subscribeEditor: (sessionId: string, listener: () => void) => () => void;
+	getAutocompleteProviders: (
+		sessionId: string
+	) => readonly PluginAutocompleteProviderFactory[];
+	subscribeAutocompleteProviders: (
+		sessionId: string,
+		listener: () => void
+	) => () => void;
 	getCustomUI: () => PluginUICustomHostRequest | null;
 	subscribeCustomUI: (listener: () => void) => () => void;
 }>;
@@ -667,6 +701,65 @@ const createPluginUIHost = ({
 }: PluginUIHostDependencies): PluginUIHost => {
 	let activeCustomRequest: (() => void) | undefined;
 	let hostClosed = false;
+	const composers = new Map<
+		string,
+		Readonly<{ composer: PluginComposerHost }>
+	>();
+	const editorContributions = new Map<string, PluginEditorContribution>();
+	const editorListeners = new Map<string, Set<() => void>>();
+	const autocompleteProviders = new Map<
+		string,
+		PluginAutocompleteRegistration[]
+	>();
+	const autocompleteListeners = new Map<string, Set<() => void>>();
+	const autocompleteProviderSnapshots = new Map<
+		string,
+		readonly PluginAutocompleteProviderFactory[]
+	>();
+	const notifyListeners = (
+		listeners: Map<string, Set<() => void>>,
+		sessionId: string
+	): void => {
+		for (const listener of [...(listeners.get(sessionId) ?? [])]) {
+			listener();
+		}
+	};
+	const releaseEditor = (owner: PluginUIOwner): void => {
+		if (owner.sessionId === undefined) {
+			return;
+		}
+		const contribution = editorContributions.get(owner.sessionId);
+		if (contribution?.pluginId !== owner.pluginId) {
+			return;
+		}
+		editorContributions.delete(owner.sessionId);
+		notifyListeners(editorListeners, owner.sessionId);
+	};
+	const removeAutocompleteProvider = (
+		registration: PluginAutocompleteRegistration
+	): void => {
+		const sessionId = registration.owner.sessionId;
+		if (sessionId === undefined) {
+			return;
+		}
+		const registrations = autocompleteProviders.get(sessionId);
+		if (registrations === undefined) {
+			return;
+		}
+		const next = registrations.filter(
+			(candidate) => candidate !== registration
+		);
+		if (next.length === 0) {
+			autocompleteProviders.delete(sessionId);
+		} else {
+			autocompleteProviders.set(sessionId, next);
+		}
+		notifyAutocompleteProviders(sessionId);
+	};
+	const notifyAutocompleteProviders = (sessionId: string): void => {
+		autocompleteProviderSnapshots.delete(sessionId);
+		notifyListeners(autocompleteListeners, sessionId);
+	};
 	return Object.freeze({
 		close() {
 			if (hostClosed) {
@@ -674,12 +767,140 @@ const createPluginUIHost = ({
 			}
 			hostClosed = true;
 			activeCustomRequest?.();
+			composers.clear();
+			editorContributions.clear();
+			autocompleteProviders.clear();
+			autocompleteProviderSnapshots.clear();
+			editorListeners.clear();
+			autocompleteListeners.clear();
+		},
+		bindComposer(sessionId, composer) {
+			if (hostClosed) {
+				return () => undefined;
+			}
+			const binding = Object.freeze({ composer });
+			composers.set(sessionId, binding);
+			return () => {
+				if (composers.get(sessionId) === binding) {
+					composers.delete(sessionId);
+				}
+			};
+		},
+		getComposer: (sessionId) => composers.get(sessionId)?.composer,
+		getActiveEditorComponent: (sessionId) =>
+			editorContributions.get(sessionId)?.component,
+		subscribeEditor(sessionId, listener) {
+			let listeners = editorListeners.get(sessionId);
+			if (listeners === undefined) {
+				listeners = new Set();
+				editorListeners.set(sessionId, listeners);
+			}
+			listeners.add(listener);
+			return () => {
+				listeners?.delete(listener);
+				if (
+					listeners?.size === 0 &&
+					editorListeners.get(sessionId) === listeners
+				) {
+					editorListeners.delete(sessionId);
+				}
+			};
+		},
+		getAutocompleteProviders(sessionId) {
+			let snapshot = autocompleteProviderSnapshots.get(sessionId);
+			if (snapshot === undefined) {
+				snapshot = Object.freeze(
+					(autocompleteProviders.get(sessionId) ?? []).map(
+						({ provider }) => provider
+					)
+				);
+				autocompleteProviderSnapshots.set(sessionId, snapshot);
+			}
+			return snapshot;
+		},
+		subscribeAutocompleteProviders(sessionId, listener) {
+			let listeners = autocompleteListeners.get(sessionId);
+			if (listeners === undefined) {
+				listeners = new Set();
+				autocompleteListeners.set(sessionId, listeners);
+			}
+			listeners.add(listener);
+			return () => {
+				listeners?.delete(listener);
+				if (
+					listeners?.size === 0 &&
+					autocompleteListeners.get(sessionId) === listeners
+				) {
+					autocompleteListeners.delete(sessionId);
+				}
+			};
 		},
 		getCustomUI: customUI.get,
 		subscribeCustomUI: customUI.subscribe,
 		create(owner, beginPrompt, invocation) {
 			const activeRequests = new Set<() => void>();
+			const autocompleteCleanup = new Set<() => void>();
 			let closed = false;
+			const getEditorComponent = (): PluginEditorComponent | undefined => {
+				if (closed || hostClosed || owner.sessionId === undefined) {
+					return;
+				}
+				const contribution = editorContributions.get(owner.sessionId);
+				return contribution?.pluginId === owner.pluginId
+					? contribution.component
+					: undefined;
+			};
+			const setEditorComponent = (
+				component: PluginEditorComponent | undefined
+			): PluginUIContributionResult | undefined => {
+				if (closed || hostClosed || owner.sessionId === undefined) {
+					return;
+				}
+				const current = editorContributions.get(owner.sessionId);
+				if (current !== undefined && current.pluginId !== owner.pluginId) {
+					return {
+						code: "plugin_ui_contribution_conflict",
+						ownerPluginId: current.pluginId,
+						success: false,
+						surface: "editor",
+					};
+				}
+				if (component === undefined) {
+					releaseEditor(owner);
+				} else {
+					editorContributions.set(
+						owner.sessionId,
+						Object.freeze({ component, pluginId: owner.pluginId })
+					);
+					notifyListeners(editorListeners, owner.sessionId);
+				}
+				return { success: true };
+			};
+			const addAutocompleteProvider = (
+				provider: PluginAutocompleteProviderFactory
+			): (() => void) => {
+				if (closed || hostClosed || owner.sessionId === undefined) {
+					return () => undefined;
+				}
+				const registration = Object.freeze({ owner, provider });
+				const registrations = autocompleteProviders.get(owner.sessionId) ?? [];
+				autocompleteProviders.set(owner.sessionId, [
+					...registrations,
+					registration,
+				]);
+				notifyAutocompleteProviders(owner.sessionId);
+				let registered = true;
+				const unregister = (): void => {
+					if (!registered) {
+						return;
+					}
+					registered = false;
+					autocompleteCleanup.delete(unregister);
+					removeAutocompleteProvider(registration);
+				};
+				autocompleteCleanup.add(unregister);
+				return unregister;
+			};
 
 			const request = <Value,>(
 				kind: PluginUIPromptKind,
@@ -964,6 +1185,31 @@ const createPluginUIHost = ({
 							})
 					),
 				custom: (factory, options) => requestCustom(factory, options),
+				getEditorText: () => {
+					if (closed || hostClosed || owner.sessionId === undefined) {
+						return;
+					}
+					return composers.get(owner.sessionId)?.composer.getText();
+				},
+				setEditorText: (text) => {
+					if (closed || hostClosed || owner.sessionId === undefined) {
+						return false;
+					}
+					return (
+						composers.get(owner.sessionId)?.composer.setText(text) ?? false
+					);
+				},
+				pasteToEditor: (text) => {
+					if (closed || hostClosed || owner.sessionId === undefined) {
+						return false;
+					}
+					return (
+						composers.get(owner.sessionId)?.composer.pasteText(text) ?? false
+					);
+				},
+				addAutocompleteProvider,
+				getEditorComponent,
+				setEditorComponent,
 				notify: (message, level: PluginNotificationLevel = "info") => {
 					if (closed) {
 						return;
@@ -1013,6 +1259,10 @@ const createPluginUIHost = ({
 					closed = true;
 					for (const cancel of [...activeRequests]) {
 						cancel();
+					}
+					releaseEditor(owner);
+					for (const unregister of [...autocompleteCleanup]) {
+						unregister();
 					}
 				},
 				ui,
@@ -1064,6 +1314,67 @@ export function usePluginUIHost(): PluginUIHost {
 		throw new Error("usePluginUIHost must be used within PluginUIHostProvider");
 	}
 	return host;
+}
+
+const EMPTY_AUTOCOMPLETE_PROVIDERS: readonly PluginAutocompleteProviderFactory[] =
+	Object.freeze([]);
+const subscribeToNothing = (): (() => void) => () => undefined;
+
+export function usePluginAutocompleteProviders(
+	sessionId: string | undefined
+): readonly PluginAutocompleteProviderFactory[] {
+	const host = useOptionalPluginUIHost();
+	const subscribe = useCallback(
+		(listener: () => void) =>
+			host === null || sessionId === undefined
+				? subscribeToNothing()
+				: host.subscribeAutocompleteProviders(sessionId, listener),
+		[host, sessionId]
+	);
+	const getSnapshot = useCallback(
+		() =>
+			host === null || sessionId === undefined
+				? EMPTY_AUTOCOMPLETE_PROVIDERS
+				: host.getAutocompleteProviders(sessionId),
+		[host, sessionId]
+	);
+	return useSyncExternalStore(
+		subscribe,
+		getSnapshot,
+		() => EMPTY_AUTOCOMPLETE_PROVIDERS
+	);
+}
+
+export function PluginEditorSlot({
+	context,
+	sessionId,
+}: Readonly<{
+	context: PluginEditorContext;
+	sessionId: string | undefined;
+}>) {
+	const host = useOptionalPluginUIHost();
+	const subscribe = useCallback(
+		(listener: () => void) =>
+			host === null || sessionId === undefined
+				? subscribeToNothing()
+				: host.subscribeEditor(sessionId, listener),
+		[host, sessionId]
+	);
+	const getSnapshot = useCallback(
+		() =>
+			host === null || sessionId === undefined
+				? undefined
+				: host.getActiveEditorComponent(sessionId),
+		[host, sessionId]
+	);
+	const component = useSyncExternalStore(
+		subscribe,
+		getSnapshot,
+		() => undefined
+	);
+	return component === undefined
+		? context.defaultEditor
+		: createElement(component, context);
 }
 
 export type { PluginUIHandle, PluginUIOwner };

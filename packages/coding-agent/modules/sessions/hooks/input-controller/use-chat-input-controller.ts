@@ -10,6 +10,16 @@ import {
 	applyFileMentionReplacement,
 	filterFileMentionOptions,
 } from "@/modules/file-mentions";
+import type {
+	PluginAutocompleteContext,
+	PluginAutocompleteItem,
+	PluginAutocompleteProvider,
+	PluginAutocompleteProviderFactory,
+} from "@/modules/plugins/public";
+import {
+	createPluginAutocompleteContext,
+	wrapPluginAutocompleteProviders,
+} from "@/modules/plugins/ui/plugin-autocomplete";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import { useLatest } from "@/shared/hooks/use-latest";
@@ -54,6 +64,57 @@ const EMPTY_OVERLAY: InputOverlayState = {
 	items: [],
 	kind: null,
 	selectedIndex: -1,
+};
+const EMPTY_PLUGIN_AUTOCOMPLETE_PROVIDERS: readonly PluginAutocompleteProviderFactory[] =
+	[];
+
+type PluginCompletionState =
+	| Readonly<{
+			context: PluginAutocompleteContext;
+			cursorOffset: number;
+			items: readonly PluginAutocompleteItem[];
+			kind: "autocomplete";
+			prefix: string;
+			provider: PluginAutocompleteProvider;
+			text: string;
+	  }>
+	| Readonly<{
+			cursorOffset: number;
+			items: readonly PluginAutocompleteItem[];
+			kind: "argument";
+			prefix: string;
+			text: string;
+	  }>;
+
+const getVisibleOverlayKind = (
+	completion: PluginCompletionState | null,
+	overlayKind: InputOverlayState["kind"]
+): InputOverlayState["kind"] => {
+	if (completion?.kind === "argument") {
+		return "plugin-argument";
+	}
+	if (completion?.kind === "autocomplete") {
+		return "plugin-autocomplete";
+	}
+	return overlayKind;
+};
+
+const getOverlayItemsLength = (
+	kind: InputOverlayState["kind"],
+	commandItems: number,
+	fileMentionItems: number,
+	pluginItems: number
+): number => {
+	if (kind === "command") {
+		return commandItems;
+	}
+	if (kind === "file-mention") {
+		return fileMentionItems;
+	}
+	if (kind === "plugin-autocomplete" || kind === "plugin-argument") {
+		return pluginItems;
+	}
+	return 0;
 };
 
 type RecalledCompositionAccumulator = {
@@ -137,6 +198,8 @@ export function useChatInputController({
 	composerDocument,
 	disabled,
 	commandController,
+	pluginAutocompleteProviders = EMPTY_PLUGIN_AUTOCOMPLETE_PROVIDERS,
+	sessionId,
 	draftKey,
 	getFileMentionOptions: getFileMentionOptionsFromOptions,
 	onSubmit,
@@ -150,6 +213,8 @@ export function useChatInputController({
 		() => composerDocument.replaceText(initialDraft, initialDraft.length).text
 	);
 	const [selectedIndex, setSelectedIndex] = useState(0);
+	const [pluginCompletion, setPluginCompletion] =
+		useState<PluginCompletionState | null>(null);
 	const [overlayKind, setOverlayKind] =
 		useState<InputOverlayState["kind"]>(null);
 	const [activeTrigger, setActiveTrigger] = useState<ActiveTrigger | null>(
@@ -321,6 +386,143 @@ export function useChatInputController({
 				: filterFileMentionOptions(fileMentionOptions, fileMentionQuery),
 		[fileMentionOptions, fileMentionQuery]
 	);
+	const composerCursorOffset = composerDocument.capture().cursorOffset;
+	const autocompleteContext = useMemo(
+		() =>
+			sessionId === undefined
+				? undefined
+				: createPluginAutocompleteContext(
+						textValue,
+						composerCursorOffset,
+						sessionId
+					),
+		[composerCursorOffset, sessionId, textValue]
+	);
+	const autocompleteProvider = useMemo(() => {
+		let composedProvider: PluginAutocompleteProvider;
+		const baseProvider: PluginAutocompleteProvider = {
+			getSuggestions(context) {
+				const trigger = detectTrigger(context.text, context.cursorOffset);
+				if (
+					trigger?.kind !== "file-mention" ||
+					composedProvider.shouldTriggerFileCompletion?.(context) === false
+				) {
+					return null;
+				}
+				const items = filterFileMentionOptions(
+					fileMentionOptions,
+					trigger.query
+				).map(({ label, path }) => ({ label, value: path }));
+				return items.length === 0
+					? null
+					: { items, prefix: `@${trigger.query}` };
+			},
+			applyCompletion(context, item, prefix) {
+				const trigger = detectTrigger(context.text, context.cursorOffset);
+				const fileMention = fileMentionOptions.find(
+					({ path }) => path === item.value
+				);
+				if (trigger?.kind === "file-mention" && fileMention !== undefined) {
+					const replacement = applyFileMentionReplacement(
+						context.text,
+						trigger,
+						`@${fileMention.label}`,
+						{ addTrailingSpace: fileMention.type !== "directory" }
+					);
+					return {
+						cursorOffset: replacement.cursorOffset,
+						text: replacement.text,
+					};
+				}
+				const start = Math.max(0, context.cursorOffset - prefix.length);
+				const text = `${context.text.slice(0, start)}${item.value}${context.text.slice(context.cursorOffset)}`;
+				return { cursorOffset: start + item.value.length, text };
+			},
+			shouldTriggerFileCompletion(context) {
+				return (
+					detectTrigger(context.text, context.cursorOffset)?.kind ===
+					"file-mention"
+				);
+			},
+		};
+		composedProvider = wrapPluginAutocompleteProviders(
+			baseProvider,
+			pluginAutocompleteProviders
+		);
+		return composedProvider;
+	}, [fileMentionOptions, pluginAutocompleteProviders]);
+
+	useEffect(() => {
+		let active = true;
+		setPluginCompletion(null);
+		if (
+			sessionId === undefined ||
+			autocompleteContext === undefined ||
+			activeTrigger?.kind === "command"
+		) {
+			return () => {
+				active = false;
+			};
+		}
+		const setAutocompleteCompletion = async (): Promise<void> => {
+			if (activeTrigger?.kind !== "file-mention") {
+				const argumentCompletion =
+					await commandController.getArgumentCompletions(
+						textValue,
+						composerCursorOffset
+					);
+				if (!active) {
+					return;
+				}
+				if (argumentCompletion !== null) {
+					setSelectedIndex(0);
+					setPluginCompletion({
+						cursorOffset: composerCursorOffset,
+						items: argumentCompletion.items,
+						kind: "argument",
+						prefix: argumentCompletion.prefix,
+						text: textValue,
+					});
+					return;
+				}
+			}
+			if (pluginAutocompleteProviders.length === 0) {
+				return;
+			}
+			const result =
+				await autocompleteProvider.getSuggestions(autocompleteContext);
+			if (!active || result === null || result.items.length === 0) {
+				return;
+			}
+			setSelectedIndex(0);
+			setPluginCompletion({
+				context: autocompleteContext,
+				cursorOffset: composerCursorOffset,
+				items: result.items,
+				kind: "autocomplete",
+				prefix: result.prefix,
+				provider: autocompleteProvider,
+				text: textValue,
+			});
+		};
+		void setAutocompleteCompletion().catch(() => {
+			if (active) {
+				setPluginCompletion(null);
+			}
+		});
+		return () => {
+			active = false;
+		};
+	}, [
+		activeTrigger?.kind,
+		autocompleteContext,
+		autocompleteProvider,
+		commandController,
+		composerCursorOffset,
+		pluginAutocompleteProviders.length,
+		sessionId,
+		textValue,
+	]);
 
 	const closeOverlay = useCallback(() => {
 		setActiveTrigger(null);
@@ -563,24 +765,106 @@ export function useChatInputController({
 		]
 	);
 
+	const currentPluginCompletion =
+		pluginCompletion !== null &&
+		pluginCompletion.text === textValue &&
+		pluginCompletion.cursorOffset === composerCursorOffset
+			? pluginCompletion
+			: null;
+	const visibleOverlayKind = getVisibleOverlayKind(
+		currentPluginCompletion,
+		overlayKind
+	);
+	const applyPluginAutocompleteAtIndex = useCallback(
+		(index: number): void => {
+			if (currentPluginCompletion?.kind !== "autocomplete") {
+				return;
+			}
+			const item = currentPluginCompletion.items[index];
+			if (item === undefined) {
+				return;
+			}
+			try {
+				const edit = currentPluginCompletion.provider.applyCompletion(
+					currentPluginCompletion.context,
+					item,
+					currentPluginCompletion.prefix
+				);
+				setProgrammaticText(edit.text, edit.cursorOffset);
+				const fileMention = filteredFileMentions.find(
+					({ path }) => path === item.value
+				);
+				if (fileMention?.type === "directory") {
+					const nextTrigger = detectTrigger(edit.text, edit.cursorOffset);
+					if (nextTrigger?.kind === "file-mention") {
+						setActiveTrigger(nextTrigger);
+						setOverlayKind("file-mention");
+						setSelectedIndex(0);
+						return;
+					}
+				}
+			} catch {
+				// An autocomplete callback cannot interrupt normal composition.
+			}
+			closeOverlay();
+		},
+		[
+			closeOverlay,
+			currentPluginCompletion,
+			filteredFileMentions,
+			setProgrammaticText,
+		]
+	);
+	const applyPluginArgumentAtIndex = useCallback(
+		(index: number): void => {
+			if (currentPluginCompletion?.kind !== "argument") {
+				return;
+			}
+			const item = currentPluginCompletion.items[index];
+			if (item === undefined) {
+				return;
+			}
+			const start = Math.max(
+				0,
+				currentPluginCompletion.cursorOffset -
+					currentPluginCompletion.prefix.length
+			);
+			const text = `${currentPluginCompletion.text.slice(0, start)}${item.value}${currentPluginCompletion.text.slice(currentPluginCompletion.cursorOffset)}`;
+			setProgrammaticText(text, start + item.value.length);
+			closeOverlay();
+		},
+		[closeOverlay, currentPluginCompletion, setProgrammaticText]
+	);
 	const onEnter = useCallback(() => {
 		if (disabled) {
 			return;
 		}
 
-		if (overlayKind === "command") {
+		if (visibleOverlayKind === "command") {
 			selectCommandAtIndex(selectedIndex, "enter");
 			return;
 		}
 
-		if (overlayKind === "file-mention") {
+		if (visibleOverlayKind === "file-mention") {
 			executeFileMentionAtIndex(selectedIndex);
+			return;
+		}
+
+		if (visibleOverlayKind === "plugin-autocomplete") {
+			applyPluginAutocompleteAtIndex(selectedIndex);
+			return;
+		}
+
+		if (visibleOverlayKind === "plugin-argument") {
+			applyPluginArgumentAtIndex(selectedIndex);
 		}
 	}, [
+		applyPluginArgumentAtIndex,
+		applyPluginAutocompleteAtIndex,
 		disabled,
 		selectCommandAtIndex,
 		executeFileMentionAtIndex,
-		overlayKind,
+		visibleOverlayKind,
 		selectedIndex,
 	]);
 
@@ -694,7 +978,7 @@ export function useChatInputController({
 
 	const onArrowUp = useCallback(
 		(cursor?: number, _textLength?: number): boolean => {
-			if (isNull(overlayKind)) {
+			if (isNull(visibleOverlayKind)) {
 				if (isUndefined(cursor)) {
 					return false;
 				}
@@ -705,10 +989,12 @@ export function useChatInputController({
 				return navigateHistory(-1);
 			}
 
-			const itemsLength =
-				overlayKind === "command"
-					? filteredCommands.length
-					: filteredFileMentions.length;
+			const itemsLength = getOverlayItemsLength(
+				visibleOverlayKind,
+				filteredCommands.length,
+				filteredFileMentions.length,
+				currentPluginCompletion?.items.length ?? 0
+			);
 			if (itemsLength === 0) {
 				return false;
 			}
@@ -722,10 +1008,11 @@ export function useChatInputController({
 			return true;
 		},
 		[
+			currentPluginCompletion,
 			filteredCommands.length,
 			filteredFileMentions.length,
 			navigateHistory,
-			overlayKind,
+			visibleOverlayKind,
 			setProgrammaticText,
 			composerDocument,
 		]
@@ -733,7 +1020,7 @@ export function useChatInputController({
 
 	const onArrowDown = useCallback(
 		(cursor?: number, length?: number): boolean => {
-			if (isNull(overlayKind)) {
+			if (isNull(visibleOverlayKind)) {
 				if (
 					!(isUndefined(cursor) || isUndefined(length)) &&
 					decideDownAction(cursor, length) === "moveToEnd"
@@ -747,10 +1034,12 @@ export function useChatInputController({
 				return navigateHistory(1);
 			}
 
-			const itemsLength =
-				overlayKind === "command"
-					? filteredCommands.length
-					: filteredFileMentions.length;
+			const itemsLength = getOverlayItemsLength(
+				visibleOverlayKind,
+				filteredCommands.length,
+				filteredFileMentions.length,
+				currentPluginCompletion?.items.length ?? 0
+			);
 
 			if (itemsLength === 0) {
 				return false;
@@ -765,10 +1054,11 @@ export function useChatInputController({
 			return true;
 		},
 		[
+			currentPluginCompletion,
 			filteredCommands.length,
 			filteredFileMentions.length,
 			navigateHistory,
-			overlayKind,
+			visibleOverlayKind,
 			setProgrammaticText,
 			composerDocument,
 		]
@@ -776,13 +1066,13 @@ export function useChatInputController({
 
 	const onItemSelect = useCallback(
 		(index: number) => {
-			if (isNull(overlayKind)) {
+			if (isNull(visibleOverlayKind)) {
 				return;
 			}
 
 			setSelectedIndex(index);
 		},
-		[overlayKind]
+		[visibleOverlayKind]
 	);
 
 	const onItemExecute = useCallback(
@@ -791,16 +1081,33 @@ export function useChatInputController({
 				return;
 			}
 
-			if (overlayKind === "command") {
+			if (visibleOverlayKind === "command") {
 				selectCommandAtIndex(index, "enter");
 				return;
 			}
 
-			if (overlayKind === "file-mention") {
+			if (visibleOverlayKind === "file-mention") {
 				executeFileMentionAtIndex(index);
+				return;
+			}
+
+			if (visibleOverlayKind === "plugin-autocomplete") {
+				applyPluginAutocompleteAtIndex(index);
+				return;
+			}
+
+			if (visibleOverlayKind === "plugin-argument") {
+				applyPluginArgumentAtIndex(index);
 			}
 		},
-		[disabled, executeFileMentionAtIndex, overlayKind, selectCommandAtIndex]
+		[
+			applyPluginArgumentAtIndex,
+			applyPluginAutocompleteAtIndex,
+			disabled,
+			executeFileMentionAtIndex,
+			selectCommandAtIndex,
+			visibleOverlayKind,
+		]
 	);
 
 	const handleTab = useCallback(
@@ -809,40 +1116,66 @@ export function useChatInputController({
 				return;
 			}
 
-			if (!shift && overlayKind === "file-mention") {
+			if (!shift && visibleOverlayKind === "file-mention") {
 				executeFileMentionAtIndex(selectedIndex);
 				return;
 			}
 
-			if (!shift && overlayKind === "command") {
+			if (!shift && visibleOverlayKind === "command") {
 				selectCommandAtIndex(selectedIndex, "tab");
+				return;
+			}
+
+			if (!shift && visibleOverlayKind === "plugin-autocomplete") {
+				applyPluginAutocompleteAtIndex(selectedIndex);
+				return;
+			}
+
+			if (!shift && visibleOverlayKind === "plugin-argument") {
+				applyPluginArgumentAtIndex(selectedIndex);
 				return;
 			}
 
 			onTab(shift);
 		},
 		[
+			applyPluginArgumentAtIndex,
+			applyPluginAutocompleteAtIndex,
 			disabled,
 			executeFileMentionAtIndex,
 			onTab,
-			overlayKind,
+			visibleOverlayKind,
 			selectCommandAtIndex,
 			selectedIndex,
 		]
 	);
 
 	let overlay: InputOverlayState = EMPTY_OVERLAY;
-	if (overlayKind === "command") {
+	if (visibleOverlayKind === "command") {
 		overlay = {
 			allItems: commandSuggestions.allItems,
 			items: filteredCommands,
 			kind: "command",
 			selectedIndex,
 		};
-	} else if (overlayKind === "file-mention") {
+	} else if (visibleOverlayKind === "file-mention") {
 		overlay = {
 			items: filteredFileMentions,
 			kind: "file-mention",
+			selectedIndex,
+		};
+	} else if (currentPluginCompletion?.kind === "autocomplete") {
+		overlay = {
+			items: currentPluginCompletion.items,
+			kind: "plugin-autocomplete",
+			prefix: currentPluginCompletion.prefix,
+			selectedIndex,
+		};
+	} else if (currentPluginCompletion?.kind === "argument") {
+		overlay = {
+			items: currentPluginCompletion.items,
+			kind: "plugin-argument",
+			prefix: currentPluginCompletion.prefix,
 			selectedIndex,
 		};
 	}
@@ -857,6 +1190,8 @@ export function useChatInputController({
 			onItemExecute,
 			onItemSelect,
 			onTab: handleTab,
+			nextPrompt: () => navigateHistory(1),
+			previousPrompt: () => navigateHistory(-1),
 			onTextChange,
 			recall,
 			submit,

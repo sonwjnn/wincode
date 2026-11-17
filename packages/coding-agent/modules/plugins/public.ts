@@ -13,7 +13,7 @@ import type {
 	ProviderModelSelection,
 	ThinkingLevel,
 } from "@wincode/ai";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type { Theme } from "../../shared/providers/theme/themes";
@@ -173,6 +173,81 @@ export type PluginThemeChangeResult =
 	| Readonly<{ success: true }>
 	| Readonly<{ success: false; error: string }>;
 
+export type PluginUIContributionResult =
+	| Readonly<{ success: true }>
+	| Readonly<{
+			code: "plugin_ui_contribution_conflict";
+			ownerPluginId: string;
+			success: false;
+			surface: "editor";
+	  }>;
+
+export type PluginAutocompleteItem = Readonly<{
+	description?: string;
+	label: string;
+	value: string;
+}>;
+
+export type PluginAutocompleteResult = Readonly<{
+	items: readonly PluginAutocompleteItem[];
+	prefix: string;
+}>;
+
+export type PluginAutocompleteContext = Readonly<{
+	column: number;
+	cursorOffset: number;
+	line: number;
+	lines: readonly string[];
+	sessionId: string;
+	text: string;
+}>;
+
+export type PluginAutocompleteEdit = Readonly<{
+	cursorOffset: number;
+	text: string;
+}>;
+
+export type PluginAutocompleteProvider = Readonly<{
+	getSuggestions: (
+		context: PluginAutocompleteContext
+	) =>
+		| PluginAutocompleteResult
+		| null
+		| Promise<PluginAutocompleteResult | null>;
+	applyCompletion: (
+		context: PluginAutocompleteContext,
+		item: PluginAutocompleteItem,
+		prefix: string
+	) => PluginAutocompleteEdit;
+	shouldTriggerFileCompletion?: (context: PluginAutocompleteContext) => boolean;
+}>;
+
+export type PluginAutocompleteProviderFactory = (
+	current: PluginAutocompleteProvider
+) => PluginAutocompleteProvider;
+
+export type PluginEditorKeybinding = Readonly<
+	NonNullable<TextareaOptions["keyBindings"]>[number]
+>;
+
+export type PluginEditorContext = Readonly<{
+	cursorOffset: number;
+	defaultEditor: ReactNode;
+	height: number;
+	keybindings: readonly PluginEditorKeybinding[];
+	nextPrompt: () => boolean;
+	paste: (text: string) => boolean;
+	previousPrompt: () => boolean;
+	setText: (text: string, cursorOffset?: number) => void;
+	submit: () => Promise<void>;
+	text: string;
+	theme: Theme;
+	width: number;
+}>;
+
+/** A React editor mounted in place of the host editor or around its default slot. */
+export type PluginEditorComponent = ComponentType<PluginEditorContext>;
+
 /** UI-neutral operations the host makes available to a Plugin callback. */
 export type PluginUI = Readonly<{
 	select: (
@@ -203,6 +278,16 @@ export type PluginUI = Readonly<{
 		factory: PluginUICustomFactory<Value>,
 		options?: PluginUICustomOptions
 	) => Promise<Value | undefined>;
+	getEditorText: () => string | undefined;
+	setEditorText: (text: string) => boolean;
+	pasteToEditor: (text: string) => boolean;
+	addAutocompleteProvider: (
+		provider: PluginAutocompleteProviderFactory
+	) => () => void;
+	getEditorComponent: () => PluginEditorComponent | undefined;
+	setEditorComponent: (
+		component: PluginEditorComponent | undefined
+	) => PluginUIContributionResult | undefined;
 }>;
 
 export type PluginUIContext = Readonly<{ ui: PluginUI }>;
@@ -495,8 +580,16 @@ export type PluginCommandHandler = (
 	context: PluginCommandContext
 ) => string | Promise<string>;
 
+export type PluginCommandArgumentCompletion = (
+	prefix: string
+) =>
+	| readonly PluginAutocompleteItem[]
+	| null
+	| Promise<readonly PluginAutocompleteItem[] | null>;
+
 export type PluginCommandRegistration = Readonly<{
 	description: string;
+	getArgumentCompletions?: PluginCommandArgumentCompletion;
 	name: string;
 }> &
 	(

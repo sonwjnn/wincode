@@ -98,6 +98,34 @@ describe("getSuggestions", () => {
 	});
 });
 
+describe("getArgumentCompletions", () => {
+	test("uses the current Plugin Command argument prefix without changing slash selection", async () => {
+		const prefixes: string[] = [];
+		const controller = createController({
+			pluginCommands: [
+				{
+					...OPEN_ISSUE_COMMAND,
+					getArgumentCompletions: (prefix) => {
+						prefixes.push(prefix);
+						return [{ label: "WCO-12", value: "WCO-12" }];
+					},
+				},
+			],
+		});
+
+		expect(
+			await controller.getArgumentCompletions("/open-issue WCO-1", 18)
+		).toEqual({
+			items: [{ label: "WCO-12", value: "WCO-12" }],
+			prefix: "WCO-1",
+		});
+		expect(prefixes).toEqual(["WCO-1"]);
+		expect(
+			await controller.getArgumentCompletions("/open-issue", 11)
+		).toBeNull();
+	});
+});
+
 describe("select", () => {
 	test("returns a Skill intent with the namespaced invocation", () => {
 		const controller = createController();

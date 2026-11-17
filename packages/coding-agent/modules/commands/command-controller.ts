@@ -1,5 +1,9 @@
 import type { ProviderModel } from "@wincode/ai";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import type {
+	PluginAutocompleteItem,
+	PluginAutocompleteResult,
+} from "@/modules/plugins/public";
 import type { PluginCommandDescriptor } from "@/modules/plugins/runtime";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
@@ -25,6 +29,9 @@ import {
 	resolveSubmissionPrompt,
 	type SubmissionIntent,
 } from "./submission-resolution";
+
+const PLUGIN_COMMAND_ARGUMENT_PATTERN = /^\/([a-z0-9_-]+)[\t ]+([\s\S]*)$/iu;
+const PLUGIN_ARGUMENT_PREFIX_PATTERN = /(?:^|[\t\n ])([^\t\n ]*)$/u;
 
 declare const commandSuggestionIdBrand: unique symbol;
 
@@ -88,6 +95,10 @@ export type CommandController = {
 		query: string,
 		scope?: CommandSuggestionScope
 	) => CommandSuggestions;
+	getArgumentCompletions: (
+		text: string,
+		cursorOffset: number
+	) => Promise<PluginAutocompleteResult | null>;
 	prepareSubmission: (
 		input: CommandSubmissionInput
 	) => Promise<CommandSubmissionPlan | undefined>;
@@ -210,14 +221,26 @@ export function createCommandController(
 	const skills = createSkillCommandSpecs(options.skills);
 	const pluginCommands: PluginCommandSpec[] = (
 		options.pluginCommands ?? []
-	).map(({ description, name, pluginId, statusPanelId, value }) => ({
-		description,
-		kind: "plugin",
-		name,
-		pluginId,
-		...(statusPanelId === undefined ? {} : { statusPanelId }),
-		value,
-	}));
+	).map(
+		({
+			description,
+			getArgumentCompletions,
+			name,
+			pluginId,
+			statusPanelId,
+			value,
+		}) => ({
+			description,
+			...(getArgumentCompletions === undefined
+				? {}
+				: { getArgumentCompletions }),
+			kind: "plugin",
+			name,
+			pluginId,
+			...(statusPanelId === undefined ? {} : { statusPanelId }),
+			value,
+		})
+	);
 	const baseCommands: CommandItem[] = [
 		...getVisibleCommands({
 			unavailableCapabilities: options.unavailableCapabilities,
@@ -237,6 +260,24 @@ export function createCommandController(
 	);
 
 	return {
+		getArgumentCompletions: async (text, cursorOffset) => {
+			const beforeCursor = text.slice(0, cursorOffset);
+			const match = PLUGIN_COMMAND_ARGUMENT_PATTERN.exec(beforeCursor);
+			const commandName = match?.[1]?.toLowerCase();
+			const command = pluginCommands.find(
+				(candidate) => candidate.name.toLowerCase() === commandName
+			);
+			if (match === null || command?.getArgumentCompletions === undefined) {
+				return null;
+			}
+			const argument = match[2] ?? "";
+			const prefix = PLUGIN_ARGUMENT_PREFIX_PATTERN.exec(argument)?.[1] ?? "";
+			const items: readonly PluginAutocompleteItem[] | null =
+				await command.getArgumentCompletions(prefix);
+			return items === null || items.length === 0
+				? null
+				: Object.freeze({ items: Object.freeze([...items]), prefix });
+		},
 		getSuggestions(query, scope = "root") {
 			if (scope === "skill") {
 				return {

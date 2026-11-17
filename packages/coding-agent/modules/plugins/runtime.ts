@@ -32,6 +32,7 @@ import type {
 	PluginBeforeCompactionResult,
 	PluginBeforeSessionHistoryNavigationContext,
 	PluginBeforeSessionHistoryNavigationHook,
+	PluginCommandArgumentCompletion,
 	PluginCommandContext,
 	PluginCommandHandler,
 	PluginCommandInputContext,
@@ -112,6 +113,7 @@ export type PluginResourceDescriptor = Readonly<{
 
 export type PluginCommandDescriptor = Readonly<{
 	description: string;
+	getArgumentCompletions?: PluginCommandArgumentCompletion;
 	handler?: PluginCommandHandler;
 	name: string;
 	statusPanelId?: string;
@@ -316,6 +318,9 @@ const descriptorForCommand = (
 ): PluginCommandDescriptor =>
 	Object.freeze({
 		description: command.description,
+		...(command.getArgumentCompletions === undefined
+			? {}
+			: { getArgumentCompletions: command.getArgumentCompletions }),
 		...(command.handler === undefined ? {} : { handler: command.handler }),
 		name: command.name,
 		...(command.statusPanelId === undefined

@@ -3,9 +3,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { InputRenderable } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type {
+	PluginAutocompleteProviderFactory,
+	PluginEditorComponent,
+	PluginEditorContext,
+	PluginUIContributionResult,
 	PluginUICustomComponent,
 	PluginUICustomContext,
 	SessionSdk,
@@ -13,11 +18,12 @@ import type {
 	SessionSdkHandle,
 } from "@wincode/coding-agent";
 import { LocalStyleProvider } from "@wincode/tui";
-import { act, useRef, useState } from "react";
+import { act, useEffect, useRef, useState } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginTools } from "@/modules/plugins/tools";
 import type { PluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
 import {
+	PluginEditorSlot,
 	PluginUICustomEditor,
 	PluginUIHostProvider,
 	usePluginUIHost,
@@ -52,6 +58,24 @@ import { flushTestRenderer } from "../support/opentui";
 const sessionMessagesFromTranscript = (
 	transcript: readonly object[]
 ): readonly SessionMessage[] => transcript as readonly SessionMessage[];
+
+const WrappedPluginEditor: PluginEditorComponent = ({
+	defaultEditor,
+	theme,
+	width,
+}) => (
+	<box flexDirection="column">
+		<text>{`Wrapped host editor · ${theme.name} · ${width}`}</text>
+		{defaultEditor}
+	</box>
+);
+
+const ReplacementPluginEditor: PluginEditorComponent = ({ defaultEditor }) => (
+	<box flexDirection="column">
+		<text>Replacement host editor</text>
+		{defaultEditor}
+	</box>
+);
 
 const textFromSessionTranscript = (transcript: readonly object[]): string =>
 	sessionMessagesFromTranscript(transcript)
@@ -146,14 +170,64 @@ const pluginUiTestEnvironment = async (
 		const inputRef = useRef<InputRenderable>(null);
 		const [value, setValue] = useState("");
 		const { isTopLayer } = useKeyboardLayer();
+		const host = usePluginUIHost();
+		const currentTheme = useTheme().currentTheme;
+		const dimensions = useTerminalDimensions();
+		useEffect(
+			() =>
+				host.bindComposer(sessionId, {
+					getText: () => inputRef.current?.value ?? "",
+					setText: (text) => {
+						if (inputRef.current === null) {
+							return false;
+						}
+						inputRef.current.value = text;
+						setValue(text);
+						return true;
+					},
+					pasteText: (text) => {
+						const input = inputRef.current;
+						if (input === null) {
+							return false;
+						}
+						input.insertText(text);
+						setValue(input.value);
+						return true;
+					},
+				}),
+			[host]
+		);
+		const defaultEditor = (
+			<input
+				focused={isTopLayer("base")}
+				onContentChange={() => setValue(inputRef.current?.value ?? "")}
+				ref={inputRef}
+			/>
+		);
+		const editorContext: PluginEditorContext = {
+			cursorOffset: value.length,
+			defaultEditor,
+			height: dimensions.height,
+			keybindings: CHAT_TEXT_AREA_KEY_BINDINGS,
+			nextPrompt: () => false,
+			paste: (text) => host.getComposer(sessionId)?.pasteText(text) ?? false,
+			previousPrompt: () => false,
+			setText: (text) => {
+				const input = inputRef.current;
+				if (input !== null) {
+					input.value = text;
+				}
+				setValue(text);
+			},
+			submit: async () => undefined,
+			text: value,
+			theme: currentTheme,
+			width: dimensions.width,
+		};
 		return (
 			<box flexDirection="column">
 				<text>Fixture composer</text>
-				<input
-					focused={isTopLayer("base")}
-					onContentChange={() => setValue(inputRef.current?.value ?? "")}
-					ref={inputRef}
-				/>
+				<PluginEditorSlot context={editorContext} sessionId={sessionId} />
 				<text>{value}</text>
 			</box>
 		);
@@ -366,6 +440,145 @@ const pluginUiTestEnvironment = async (
 		setCustomEditorMounted: customEditorState.setMounted,
 	};
 };
+
+test("Plugin editor ownership rejects competitors and restores the default on unload", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const owner = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const competitor = environment.runtime.getPluginUI(
+			"plugin_ui_other_fixture",
+			environment.sessionId
+		);
+		let registered: PluginUIContributionResult | undefined;
+		await act(async () => {
+			registered = owner.setEditorComponent(WrappedPluginEditor);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(registered).toEqual({ success: true });
+		expect(owner.getEditorComponent()).toBe(WrappedPluginEditor);
+		expect(competitor.getEditorComponent()).toBeUndefined();
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Wrapped host editor"
+		);
+		await act(async () => {
+			registered = owner.setEditorComponent(ReplacementPluginEditor);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(registered).toEqual({ success: true });
+		expect(owner.getEditorComponent()).toBe(ReplacementPluginEditor);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Replacement host editor"
+		);
+
+		let conflict: PluginUIContributionResult | undefined;
+		await act(async () => {
+			conflict = competitor.setEditorComponent(WrappedPluginEditor);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(conflict).toEqual({
+			code: "plugin_ui_contribution_conflict",
+			ownerPluginId: "plugin_ui_fixture",
+			success: false,
+			surface: "editor",
+		});
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Replacement host editor"
+		);
+
+		await act(async () => {
+			registered = owner.setEditorComponent(undefined);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(registered).toEqual({ success: true });
+		expect(owner.getEditorComponent()).toBeUndefined();
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Replacement host editor"
+		);
+		await act(async () => {
+			registered = owner.setEditorComponent(WrappedPluginEditor);
+			await flushTestRenderer(environment.setup, 2);
+		});
+
+		await act(async () => {
+			environment.runtime.disablePlugin("plugin_ui_fixture", "fixture unload");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Wrapped host editor"
+		);
+		expect(owner.getEditorText()).toBeUndefined();
+		expect(owner.setEditorText("stale")).toBe(false);
+		expect(owner.pasteToEditor("stale")).toBe(false);
+		expect(owner.setEditorComponent(WrappedPluginEditor)).toBeUndefined();
+		await act(async () => {
+			registered = competitor.setEditorComponent(WrappedPluginEditor);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(registered).toEqual({ success: true });
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Plugin autocomplete providers unregister and release with their owner", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const first: PluginAutocompleteProviderFactory = (current) => current;
+		const second: PluginAutocompleteProviderFactory = (current) => current;
+		const firstUI = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const secondUI = environment.runtime.getPluginUI(
+			"plugin_ui_other_fixture",
+			environment.sessionId
+		);
+		const removeFirst = firstUI.addAutocompleteProvider(first);
+		const removeSecond = secondUI.addAutocompleteProvider(second);
+
+		expect(
+			environment.pluginUIHost.getAutocompleteProviders(environment.sessionId)
+		).toEqual([first, second]);
+		removeFirst();
+		expect(
+			environment.pluginUIHost.getAutocompleteProviders(environment.sessionId)
+		).toEqual([second]);
+
+		firstUI.addAutocompleteProvider(first);
+		await act(async () => {
+			environment.runtime.disablePlugin("plugin_ui_fixture", "fixture unload");
+		});
+		expect(
+			environment.pluginUIHost.getAutocompleteProviders(environment.sessionId)
+		).toEqual([second]);
+		removeSecond();
+		expect(
+			environment.pluginUIHost.getAutocompleteProviders(environment.sessionId)
+		).toEqual([]);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Plugin UI reads, sets, and pastes text through the mounted Session composer", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		expect(ui.getEditorText()).toBe("");
+		expect(ui.setEditorText("Draft from Plugin")).toBe(true);
+		expect(ui.getEditorText()).toBe("Draft from Plugin");
+		expect(ui.pasteToEditor(" pasted text")).toBe(true);
+		expect(ui.getEditorText()).toBe("Draft from Plugin pasted text");
+	} finally {
+		await environment.dispose();
+	}
+});
 
 test("a direct Plugin Command opens custom UI, returns once, and restores its composer", async () => {
 	const environment = await pluginUiTestEnvironment();
@@ -1637,6 +1850,24 @@ test("JSON, Print, and RPC Plugins receive terminal-free UI defaults", async () 
 				"plugin_ui_fixture",
 				"theme"
 			);
+			const unsupportedUI = environment.runtime.getPluginUI(
+				"plugin_ui_fixture",
+				environment.sessionId
+			);
+			expect(unsupportedUI.getEditorText()).toBeUndefined();
+			expect(unsupportedUI.setEditorText("ignored")).toBe(false);
+			expect(unsupportedUI.pasteToEditor("ignored")).toBe(false);
+			expect(unsupportedUI.getEditorComponent()).toBeUndefined();
+			expect(
+				unsupportedUI.setEditorComponent(WrappedPluginEditor)
+			).toBeUndefined();
+			const unregister = unsupportedUI.addAutocompleteProvider(
+				(current) => current
+			);
+			unregister();
+			expect(
+				environment.pluginUIHost.getAutocompleteProviders(environment.sessionId)
+			).toEqual([]);
 
 			expect(await select).toBe("dismissed");
 			expect(await confirm).toBe("cancelled");

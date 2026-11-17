@@ -8,6 +8,7 @@ import type {
 } from "@/modules/commands/command-controller";
 import type { TrackedSubmissionIntent } from "@/modules/commands/submission-resolution";
 import type { FileMentionOption } from "@/modules/file-mentions";
+import type { PluginAutocompleteProviderFactory } from "@/modules/plugins/public";
 import type { PromptHistoryEntry } from "@/modules/sessions/hooks/input-controller/history";
 import type { SubmitSnapshot } from "@/modules/sessions/hooks/input-controller/submit";
 import type { ChatInputController } from "@/modules/sessions/hooks/input-controller/types";
@@ -18,7 +19,10 @@ import type {
 	PromptHistoryEntry as StoredPromptHistoryEntry,
 } from "@/modules/sessions/storage/prompt-history";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
-import { createComposerDocument } from "@/modules/sessions/ui/composer-document";
+import {
+	type ComposerDocument,
+	createComposerDocument,
+} from "@/modules/sessions/ui/composer-document";
 import type {
 	ChatPromptComposition,
 	ChatPromptSubmission,
@@ -32,9 +36,12 @@ const suggestion = fromPartial<CommandSuggestion>({
 });
 
 const createCommandController = (
-	seenIntents: CommandControllerInput["intents"][]
+	seenIntents: CommandControllerInput["intents"][],
+	getArgumentCompletions: CommandController["getArgumentCompletions"] = async () =>
+		null
 ): CommandController => ({
 	getSuggestions: () => ({ allItems: [suggestion], items: [suggestion] }),
+	getArgumentCompletions,
 	prepareSubmission: async (input) => {
 		seenIntents.push(input.intents);
 		return {
@@ -59,25 +66,38 @@ type CommandControllerInput = Parameters<
 
 type ControllerProbeProps = {
 	commandController: CommandController;
+	documentHolder?: { current: ComposerDocument | null };
+	getFileMentionOptions?: () => Promise<FileMentionOption[]>;
 	holder: { current: ChatInputController | null };
 	onSubmit: (submission: ChatPromptSubmission) => boolean;
+	pluginAutocompleteProviders?: readonly PluginAutocompleteProviderFactory[];
+	sessionId?: string;
 	sessionPromptHistory?: PromptHistoryEntry[];
 	promptHistoryStore: PromptHistoryStore;
 };
 
 function ControllerProbe({
 	commandController,
+	documentHolder,
+	getFileMentionOptions: getFileMentionOptionsFromProps = noFileMentions,
 	holder,
 	onSubmit,
+	pluginAutocompleteProviders,
+	sessionId,
 	sessionPromptHistory = EMPTY_HISTORY,
 	promptHistoryStore,
 }: ControllerProbeProps) {
 	const composerDocument = useMemo(createComposerDocument, []);
+	if (documentHolder !== undefined) {
+		documentHolder.current = composerDocument;
+	}
 	const controller = useChatInputController({
 		commandController,
 		composerDocument,
 		disabled: false,
-		getFileMentionOptions: noFileMentions,
+		getFileMentionOptions: getFileMentionOptionsFromProps,
+		pluginAutocompleteProviders,
+		sessionId,
 		onSubmit,
 		onTab: () => undefined,
 		sessionPromptHistory,
@@ -138,6 +158,214 @@ const waitForControllerEffects = async (
 	await Bun.sleep(10);
 	await renderController(setup);
 };
+
+describe("composer autocomplete", () => {
+	test("keeps slash suggestions ahead of plugins and applies Plugin items", async () => {
+		const provider: PluginAutocompleteProviderFactory = (current) => ({
+			...current,
+			getSuggestions(context) {
+				if (context.text.slice(0, context.cursorOffset).endsWith("#")) {
+					return {
+						items: [
+							{ label: "issue WCO-12", value: "WCO-12" },
+							{ label: "issue WCO-13", value: "WCO-13" },
+						],
+						prefix: "#",
+					};
+				}
+				return current.getSuggestions(context);
+			},
+		});
+		const holder: { current: ChatInputController | null } = { current: null };
+		const documentHolder: { current: ComposerDocument | null } = {
+			current: null,
+		};
+		const setup = await testRenderWithClipboard(
+			<ControllerProbe
+				commandController={createCommandController([])}
+				documentHolder={documentHolder}
+				holder={holder}
+				onSubmit={() => true}
+				pluginAutocompleteProviders={[provider]}
+				promptHistoryStore={createPromptHistoryStore([])}
+				sessionId="session-1"
+			/>,
+			{ height: 12, width: 80 }
+		);
+
+		try {
+			await waitForControllerEffects(setup);
+			const setText = async (text: string): Promise<void> => {
+				await act(async () => {
+					const document = documentHolder.current;
+					if (document === null) {
+						throw new Error("expected the composer document");
+					}
+					const previousText = document.capture().text;
+					const snapshot = document.replaceText(text, text.length);
+					holder.current?.actions.onTextChange(
+						snapshot,
+						snapshot.cursorOffset,
+						previousText
+					);
+				});
+				await waitForControllerEffects(setup);
+			};
+
+			await setText("ask #");
+			expect(holder.current?.state.overlay.kind).toBe("plugin-autocomplete");
+			expect(holder.current?.state.overlay.items[0]?.label).toBe(
+				"issue WCO-12"
+			);
+			await act(async () => {
+				expect(holder.current?.actions.onArrowDown()).toBe(true);
+			});
+			await renderController(setup);
+			expect(holder.current?.state.overlay.selectedIndex).toBe(1);
+			await act(async () => holder.current?.actions.onTab(false));
+			await renderController(setup);
+			expect(holder.current?.state.text).toBe("ask WCO-13");
+
+			await setText("ask #");
+			await act(async () => holder.current?.actions.onEnter());
+			await renderController(setup);
+			expect(holder.current?.state.text).toBe("ask WCO-12");
+
+			await setText("/rev");
+			expect(holder.current?.state.overlay.kind).toBe("command");
+		} finally {
+			await act(async () => setup.renderer.destroy());
+		}
+	});
+
+	test("delegates file-mention completion through a Plugin provider", async () => {
+		const provider: PluginAutocompleteProviderFactory = (current) => current;
+		const holder: { current: ChatInputController | null } = { current: null };
+		const documentHolder: { current: ComposerDocument | null } = {
+			current: null,
+		};
+		const setup = await testRenderWithClipboard(
+			<ControllerProbe
+				commandController={createCommandController([])}
+				documentHolder={documentHolder}
+				getFileMentionOptions={async () => [
+					{ label: "src", path: "src", type: "directory" },
+					{
+						label: "src/main.tsx",
+						path: "src/main.tsx",
+						type: "file",
+					},
+				]}
+				holder={holder}
+				onSubmit={() => true}
+				pluginAutocompleteProviders={[provider]}
+				promptHistoryStore={createPromptHistoryStore([])}
+				sessionId="session-1"
+			/>,
+			{ height: 12, width: 80 }
+		);
+
+		try {
+			await waitForControllerEffects(setup);
+			const setText = async (text: string): Promise<void> => {
+				await act(async () => {
+					const document = documentHolder.current;
+					if (document === null) {
+						throw new Error("expected the composer document");
+					}
+					const previousText = document.capture().text;
+					const snapshot = document.replaceText(text, text.length);
+					holder.current?.actions.onTextChange(
+						snapshot,
+						snapshot.cursorOffset,
+						previousText
+					);
+				});
+				await waitForControllerEffects(setup);
+			};
+
+			await setText("See @src");
+			let overlay = holder.current?.state.overlay;
+			if (overlay?.kind !== "plugin-autocomplete") {
+				throw new Error("expected Plugin-composed path suggestions");
+			}
+			const directoryIndex = overlay.items.findIndex(
+				({ value }) => value === "src"
+			);
+			expect(directoryIndex).toBeGreaterThanOrEqual(0);
+			await act(async () =>
+				holder.current?.actions.onItemExecute(directoryIndex)
+			);
+			await waitForControllerEffects(setup);
+			expect(holder.current?.state.text).toBe("See @src");
+			expect(holder.current?.state.overlay.kind).toBe("plugin-autocomplete");
+
+			await setText("See @src/ma");
+			overlay = holder.current?.state.overlay;
+			if (overlay?.kind !== "plugin-autocomplete") {
+				throw new Error("expected nested Plugin-composed path suggestions");
+			}
+			const fileIndex = overlay.items.findIndex(
+				({ value }) => value === "src/main.tsx"
+			);
+			expect(fileIndex).toBeGreaterThanOrEqual(0);
+			await act(async () => holder.current?.actions.onItemExecute(fileIndex));
+			await renderController(setup);
+			expect(holder.current?.state.text).toBe("See @src/main.tsx ");
+		} finally {
+			await act(async () => setup.renderer.destroy());
+		}
+	});
+
+	test("shows and applies Plugin Command argument completions", async () => {
+		const holder: { current: ChatInputController | null } = { current: null };
+		const documentHolder: { current: ComposerDocument | null } = {
+			current: null,
+		};
+		const commandController = createCommandController(
+			[],
+			async (text, cursorOffset) => {
+				const tokenStart = text.lastIndexOf(" ", cursorOffset - 1) + 1;
+				const prefix = text.slice(tokenStart, cursorOffset);
+				return text.startsWith("/deploy ")
+					? { items: [{ label: "staging", value: "staging" }], prefix }
+					: null;
+			}
+		);
+		const setup = await testRenderWithClipboard(
+			<ControllerProbe
+				commandController={commandController}
+				documentHolder={documentHolder}
+				holder={holder}
+				onSubmit={() => true}
+				promptHistoryStore={createPromptHistoryStore([])}
+				sessionId="session-1"
+			/>,
+			{ height: 12, width: 80 }
+		);
+
+		try {
+			await waitForControllerEffects(setup);
+			await act(async () => {
+				const document = documentHolder.current;
+				if (document === null) {
+					throw new Error("expected the composer document");
+				}
+				const text = "/deploy sta";
+				const snapshot = document.replaceText(text, text.length);
+				holder.current?.actions.onTextChange(snapshot, text.length, "");
+			});
+			await waitForControllerEffects(setup);
+			expect(holder.current?.state.overlay.kind).toBe("plugin-argument");
+			expect(holder.current?.state.overlay.items[0]?.label).toBe("staging");
+			await act(async () => holder.current?.actions.onItemExecute(0));
+			await renderController(setup);
+			expect(holder.current?.state.text).toBe("/deploy staging");
+		} finally {
+			await act(async () => setup.renderer.destroy());
+		}
+	});
+});
 
 describe("composer command intent history and Recall", () => {
 	test("history navigation restores the selected Skill intent without persisting it", async () => {

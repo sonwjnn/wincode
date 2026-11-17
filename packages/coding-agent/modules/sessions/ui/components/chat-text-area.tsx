@@ -1,6 +1,10 @@
 import * as fs from "node:fs/promises";
-import type { PasteEvent, TextareaRenderable } from "@opentui/core";
-import { useKeyboard, usePaste } from "@opentui/react";
+import {
+	decodePasteBytes,
+	type PasteEvent,
+	type TextareaRenderable,
+} from "@opentui/core";
+import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
 import type { ThinkingSelection } from "@wincode/ai";
 import { isNull } from "@wincode/utils";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
@@ -13,6 +17,16 @@ import {
 	findFileMentionRanges,
 	getFileMentionOptions,
 } from "@/modules/file-mentions";
+import type {
+	PluginAutocompleteItem,
+	PluginEditorContext,
+	PluginEditorKeybinding,
+} from "@/modules/plugins/public";
+import {
+	PluginEditorSlot,
+	useOptionalPluginUIHost,
+	usePluginAutocompleteProviders,
+} from "@/modules/plugins/ui/plugin-ui-host";
 import { StatusBar } from "@/modules/prompt-settings/ui/prompt-status-bar";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
 import {
@@ -41,13 +55,20 @@ import {
 	attachComposerDocumentToTextarea,
 	createComposerDocument,
 } from "../composer-document";
-import { createPasteIntake } from "../paste-intake";
+import {
+	createPasteIntake,
+	type PasteIntakeDependencies,
+} from "../paste-intake";
 import { useComposerProviderSelection } from "../use-composer-provider-selection";
 import { useSyntaxStyle } from "../use-syntax-style";
 
 const EMPTY_PROMPT_HISTORY: PromptHistoryEntry[] = [];
 const EMPTY_RECALLED_SUBMISSIONS: readonly ChatPromptComposition[] = [];
 const EMPTY_COMMAND_CAPABILITIES: readonly CommandCapability[] = [];
+const PLUGIN_EDITOR_KEYBINDINGS: readonly PluginEditorKeybinding[] =
+	Object.freeze(
+		CHAT_TEXT_AREA_KEY_BINDINGS.map((binding) => Object.freeze({ ...binding }))
+	);
 const toSelectableCommandItem = (item: CommandSuggestion) => ({
 	description: item.description,
 	id: item.id,
@@ -56,6 +77,15 @@ const toSelectableCommandItem = (item: CommandSuggestion) => ({
 
 const toSelectableFileMentionItem = (item: FileMentionOption) => ({
 	id: item.path,
+	label: item.label,
+});
+
+const toSelectablePluginItem = (
+	item: PluginAutocompleteItem,
+	index: number
+) => ({
+	description: item.description ?? "",
+	id: `${index}:${item.value}`,
 	label: item.label,
 });
 
@@ -182,6 +212,7 @@ export function ChatTextArea({
 	);
 	const textAreaRef = useRef<TextareaRenderable>(null);
 	const composerDocument = useMemo(createComposerDocument, []);
+	const lastComposerTextRef = useRef(composerDocument.capture().text);
 	const ctrlCRef = useRef<() => boolean>(() => false);
 	const lastRecallRevisionRef = useRef(recallRevision);
 	const onSubmitRef = useRef<() => Promise<void>>(async () => undefined);
@@ -191,7 +222,10 @@ export function ChatTextArea({
 	const syncFileMentionExtmarksRef = useRef<() => void>(() => undefined);
 
 	const { isTopLayer, pop, push, setResponder } = useKeyboardLayer();
-	const { colors } = useTheme();
+	const { colors, currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const pluginUIHost = useOptionalPluginUIHost();
+	const pluginAutocompleteProviders = usePluginAutocompleteProviders(sessionId);
 	const clipboard = useClipboard();
 	const { show } = useToast();
 	const commandControllerFactory = useCommandControllerFactory();
@@ -210,6 +244,7 @@ export function ChatTextArea({
 					textarea,
 					() => composerStyleIdsRef.current
 				);
+				lastComposerTextRef.current = composerDocument.capture().text;
 				registerClipboardTextTransform(textarea, (text: string) => {
 					const selection = textarea.getSelection();
 					const pastedText = composerDocument.capture().pastedText;
@@ -273,6 +308,8 @@ export function ChatTextArea({
 		composerDocument,
 		disabled,
 		commandController,
+		pluginAutocompleteProviders,
+		sessionId,
 		draftKey,
 		getFileMentionOptions,
 		onSubmit,
@@ -287,36 +324,37 @@ export function ChatTextArea({
 
 	const handleTextareaContentChange = useCallback(() => {
 		const textarea = textAreaRef.current;
-		if (!textarea) {
-			return;
-		}
-
 		const editorChange = composerDocument.observeEditorChange();
 		if (!editorChange) {
 			return;
 		}
 		const { previousText, snapshot: observedSnapshot } = editorChange;
-		const mentionDelete = isNull(state.overlay.kind)
-			? deleteFileMentionAfterTrailingCharacterDelete(
-					previousText,
-					textarea.plainText,
-					textarea.cursorOffset
-				)
-			: null;
+		const priorText =
+			textarea === null ? lastComposerTextRef.current : previousText;
+		const mentionDelete =
+			textarea !== null && isNull(state.overlay.kind)
+				? deleteFileMentionAfterTrailingCharacterDelete(
+						priorText,
+						textarea.plainText,
+						textarea.cursorOffset
+					)
+				: null;
 		if (mentionDelete) {
 			const snapshot = composerDocument.replaceText(
 				mentionDelete.text,
 				mentionDelete.cursorOffset
 			);
-			actions.onTextChange(snapshot, snapshot.cursorOffset, previousText);
+			lastComposerTextRef.current = snapshot.text;
+			actions.onTextChange(snapshot, snapshot.cursorOffset, priorText);
 			syncFileMentionExtmarksRef.current();
 			return;
 		}
 
+		lastComposerTextRef.current = observedSnapshot.text;
 		actions.onTextChange(
 			observedSnapshot,
 			observedSnapshot.cursorOffset,
-			previousText
+			priorText
 		);
 		syncFileMentionExtmarksRef.current();
 	}, [actions, composerDocument, state.overlay.kind]);
@@ -460,30 +498,100 @@ export function ChatTextArea({
 		(event: PasteEvent) => {
 			const textarea = textAreaRef.current;
 			if (!textarea) {
+				const before = composerDocument.capture();
+				const pastedText = decodePasteBytes(event.bytes);
+				const nextText =
+					before.text.slice(0, before.cursorOffset) +
+					pastedText +
+					before.text.slice(before.cursorOffset);
+				const snapshot = composerDocument.replaceText(
+					nextText,
+					before.cursorOffset + pastedText.length
+				);
+				lastComposerTextRef.current = snapshot.text;
+				actions.onTextChange(snapshot, snapshot.cursorOffset, before.text);
 				return;
 			}
 
 			textarea.handlePaste(event);
 			handleTextareaContentChange();
 		},
-		[handleTextareaContentChange]
+		[actions.onTextChange, composerDocument, handleTextareaContentChange]
 	);
+	const createPasteDependencies = useCallback(
+		(active: boolean): PasteIntakeDependencies => ({
+			active,
+			applyTextPaste,
+			document: composerDocument,
+			onDocumentChange: handleTextareaContentChange,
+			onError: (message) => show({ message, variant: "error" }),
+			readClipboardImage: () => readClipboardImage(clipboard),
+			readImagePath: (text) =>
+				readImagePath(text, {
+					readFile: (imagePath) => Bun.file(imagePath).bytes(),
+					stat: async (imagePath) => fs.stat(imagePath),
+				}),
+		}),
+		[
+			applyTextPaste,
+			clipboard,
+			composerDocument,
+			handleTextareaContentChange,
+			show,
+		]
+	);
+	const setEditorText = useCallback(
+		(text: string, cursorOffset = text.length): boolean => {
+			if (disabled) {
+				return false;
+			}
+			const previousText = composerDocument.capture().text;
+			const snapshot = composerDocument.replaceText(text, cursorOffset);
+			lastComposerTextRef.current = snapshot.text;
+			actions.onTextChange(snapshot, snapshot.cursorOffset, previousText);
+			syncFileMentionExtmarksRef.current();
+			return true;
+		},
+		[actions.onTextChange, composerDocument, disabled]
+	);
+	const pasteToEditor = useCallback(
+		(text: string): boolean =>
+			pasteIntake.pasteText(
+				text,
+				createPasteDependencies(
+					!disabled && (isTopLayer("base") || isTopLayer("command"))
+				)
+			),
+		[createPasteDependencies, disabled, isTopLayer, pasteIntake]
+	);
+	const submitFromEditor = useCallback(async (): Promise<void> => {
+		if (!disabled) {
+			await onSubmitRef.current();
+		}
+	}, [disabled]);
+	const composerHost = useMemo(
+		() => ({
+			getText: () => composerDocument.capture().text,
+			pasteText: pasteToEditor,
+			setText: setEditorText,
+		}),
+		[composerDocument, pasteToEditor, setEditorText]
+	);
+	useEffect(() => {
+		if (sessionId === undefined || pluginUIHost === null) {
+			return;
+		}
+		return pluginUIHost.bindComposer(sessionId, composerHost);
+	}, [composerHost, pluginUIHost, sessionId]);
 
 	usePaste((event) => {
 		pasteIntake
-			.handle(event, {
-				active: !disabled && (isTopLayer("base") || isTopLayer("command")),
-				applyTextPaste,
-				document: composerDocument,
-				onDocumentChange: handleTextareaContentChange,
-				onError: (message) => show({ message, variant: "error" }),
-				readClipboardImage: () => readClipboardImage(clipboard),
-				readImagePath: (text) =>
-					readImagePath(text, {
-						readFile: (imagePath) => Bun.file(imagePath).bytes(),
-						stat: async (imagePath) => fs.stat(imagePath),
-					}),
-			})
+			.handle(
+				event,
+				createPasteDependencies(
+					!disabled && (isTopLayer("base") || isTopLayer("command"))
+				)
+			)
 			.catch(() => applyTextPaste(event));
 	});
 
@@ -522,13 +630,15 @@ export function ChatTextArea({
 			(key.name === "up" || key.name === "down")
 		) {
 			const textarea = textAreaRef.current;
-			if (textarea) {
-				const consumed = (
-					key.name === "up" ? actions.onArrowUp : actions.onArrowDown
-				)(textarea.cursorOffset, textarea.plainText.length);
-				if (consumed) {
-					key.preventDefault();
-				}
+			const snapshot = composerDocument.capture();
+			const consumed = (
+				key.name === "up" ? actions.onArrowUp : actions.onArrowDown
+			)(
+				textarea?.cursorOffset ?? snapshot.cursorOffset,
+				textarea?.plainText.length ?? snapshot.text.length
+			);
+			if (consumed) {
+				key.preventDefault();
 			}
 			return;
 		}
@@ -569,6 +679,36 @@ export function ChatTextArea({
 			!hasThinkingLevels ||
 			thinkingLevel !== undefined ||
 			statusBarThinkingSelection?.thinkingLevel !== undefined);
+	const defaultEditor = (
+		<textarea
+			flexGrow={1}
+			focused={isFocused}
+			focusedTextColor={disabled ? colors.textDisabled : colors.text}
+			id={id}
+			keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
+			onContentChange={handleTextareaContentChange}
+			placeholder="Ask anything..."
+			placeholderColor={colors.textMuted}
+			ref={attachTextArea}
+			textColor={disabled ? colors.textDisabled : colors.text}
+		/>
+	);
+	const editorContext: PluginEditorContext = Object.freeze({
+		cursorOffset: composerDocument.capture().cursorOffset,
+		defaultEditor,
+		height: dimensions.height,
+		keybindings: PLUGIN_EDITOR_KEYBINDINGS,
+		nextPrompt: () => !disabled && actions.nextPrompt(),
+		paste: pasteToEditor,
+		previousPrompt: () => !disabled && actions.previousPrompt(),
+		setText: (text, cursorOffset) => {
+			setEditorText(text, cursorOffset);
+		},
+		submit: submitFromEditor,
+		text: state.text,
+		theme: currentTheme,
+		width: dimensions.width,
+	});
 
 	return (
 		<box
@@ -596,6 +736,30 @@ export function ChatTextArea({
 							onSelect={actions.onItemSelect}
 							selectedIndex={state.overlay.selectedIndex}
 							widthBasis={state.overlay.allItems.map(toSelectableCommandItem)}
+						/>
+					</BorderedContentBlock>
+				</box>
+			)}
+
+			{(state.overlay.kind === "plugin-autocomplete" ||
+				state.overlay.kind === "plugin-argument") && (
+				<box bottom="100%" left={0} position="absolute" right={0} zIndex={10}>
+					<BorderedContentBlock
+						border={["left", "right"]}
+						borderColor={colors.borderActive}
+						colors={colors}
+						contentGap={0}
+						customBorderChars={{ vertical: "┃" }}
+						marginBottom={0}
+						paddingX={0}
+						paddingY={0}
+					>
+						<SelectableList
+							emptyMessage="No matching completions"
+							items={state.overlay.items.map(toSelectablePluginItem)}
+							onConfirm={actions.onItemExecute}
+							onSelect={actions.onItemSelect}
+							selectedIndex={state.overlay.selectedIndex}
 						/>
 					</BorderedContentBlock>
 				</box>
@@ -646,18 +810,7 @@ export function ChatTextArea({
 				paddingY={0}
 			>
 				<box flexDirection="row" gap={1} width="100%">
-					<textarea
-						flexGrow={1}
-						focused={isFocused}
-						focusedTextColor={disabled ? colors.textDisabled : colors.text}
-						id={id}
-						keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
-						onContentChange={handleTextareaContentChange}
-						placeholder={"Ask anything..."}
-						placeholderColor={colors.textMuted}
-						ref={attachTextArea}
-						textColor={disabled ? colors.textDisabled : colors.text}
-					/>
+					<PluginEditorSlot context={editorContext} sessionId={sessionId} />
 				</box>
 			</BorderedContentBlock>
 		</box>

@@ -228,6 +228,12 @@ export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 	const hasHandler = command.handler !== undefined;
 	const validHandler = typeof command.handler === "function";
 	const hasStatusPanel = command.statusPanelId !== undefined;
+	if (
+		command.getArgumentCompletions !== undefined &&
+		typeof command.getArgumentCompletions !== "function"
+	) {
+		throw new Error("Plugin Command argument completions must be a function.");
+	}
 	const validStatusPanel =
 		typeof command.statusPanelId === "string" &&
 		pluginStatusPanelIdPattern.test(command.statusPanelId);
@@ -242,6 +248,9 @@ export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 	}
 	return Object.freeze({
 		description: command.description,
+		...(command.getArgumentCompletions === undefined
+			? {}
+			: { getArgumentCompletions: command.getArgumentCompletions }),
 		...(command.handler === undefined ? {} : { handler: command.handler }),
 		name: command.name,
 		...(command.statusPanelId === undefined
