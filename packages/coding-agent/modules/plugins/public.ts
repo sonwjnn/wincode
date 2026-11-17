@@ -5,6 +5,7 @@ import type {
 	AgentTurnId,
 	ToolCallId,
 	ToolCallOutput,
+	ToolCallRequest,
 	ToolExecutionMode,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
@@ -100,6 +101,38 @@ export class PluginSessionHistoryWriteError extends Error {
 /** The outcome a Plugin Tool returns to Wincode. */
 export type PluginToolResult = ToolCallOutput;
 export type PluginInputSchema = z.ZodType | ToolJsonSchema;
+
+export type PluginToolCallState =
+	| "input-streaming"
+	| "input-available"
+	| "output-available"
+	| "output-error"
+	| "output-denied";
+
+/** The current public Tool Call data shown while a Plugin Tool runs. */
+export type PluginToolCall = ToolCallRequest &
+	Readonly<{
+		rawInput?: unknown;
+		state: PluginToolCallState;
+		toolName: string;
+	}>;
+
+export type PluginToolRenderContext = Readonly<{
+	call: PluginToolCall;
+	expanded: boolean;
+	height: number;
+	onToggleExpanded: () => void;
+	theme: Theme;
+	width: number;
+}>;
+
+/** A React presentation for one Plugin Tool Call, including its live state. */
+export type PluginToolCallRenderer = ComponentType<PluginToolRenderContext>;
+
+/** A React presentation for the current Plugin Tool result. */
+export type PluginToolResultRenderer = ComponentType<
+	PluginToolRenderContext & Readonly<{ result: PluginToolResult }>
+>;
 
 /** Timeout and caller cancellation options for a blocking Plugin UI request. */
 export type PluginUIDialogOptions = Readonly<{
@@ -489,6 +522,9 @@ export type PluginToolRegistration<Schema extends PluginInputSchema> =
 		inputSchema: Schema;
 		modelName?: string;
 		name: string;
+		ownsRowShell?: boolean;
+		renderCall?: PluginToolCallRenderer;
+		renderResult?: PluginToolResultRenderer;
 	}>;
 
 export type PluginCommandHandler = (

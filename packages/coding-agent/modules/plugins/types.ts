@@ -2,7 +2,9 @@ import type { ToolExecutionMode } from "@wincode/agent-core";
 import type {
 	PluginCommandHandler,
 	PluginInputSchema,
+	PluginToolCallRenderer,
 	PluginToolRegistration,
+	PluginToolResultRenderer,
 } from "./public";
 
 export type PluginTool = Readonly<{
@@ -13,6 +15,9 @@ export type PluginTool = Readonly<{
 	inputSchema: PluginInputSchema;
 	modelName?: string;
 	name: string;
+	ownsRowShell?: boolean;
+	renderCall?: PluginToolCallRenderer;
+	renderResult?: PluginToolResultRenderer;
 }>;
 
 export type PluginCommand = Readonly<{

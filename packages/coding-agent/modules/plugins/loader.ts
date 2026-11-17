@@ -663,6 +663,11 @@ const loadedPluginFromDraft = (
 			inputSchema: tool.inputSchema,
 			localName: tool.name,
 			name: tool.modelName ?? `plugin_${draft.id}_${tool.name}`,
+			...omitUndefined({
+				ownsRowShell: tool.ownsRowShell,
+				renderCall: tool.renderCall,
+				renderResult: tool.renderResult,
+			}),
 			pluginId: draft.id,
 			sourcePath: draft.sourcePath,
 		})

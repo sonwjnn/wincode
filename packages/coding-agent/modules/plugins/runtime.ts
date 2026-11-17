@@ -101,9 +101,25 @@ export type PluginToolDescriptor = Readonly<{
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
 	name: string;
+	ownsRowShell?: boolean;
+	renderCall?: PluginTool["renderCall"];
+	renderResult?: PluginTool["renderResult"];
 	pluginId: string;
 	sourcePath: string;
 }>;
+
+export type PluginToolPresentationDescriptor = Readonly<
+	Pick<
+		PluginToolDescriptor,
+		| "localName"
+		| "name"
+		| "ownsRowShell"
+		| "renderCall"
+		| "renderResult"
+		| "pluginId"
+		| "sourcePath"
+	>
+>;
 
 export type PluginResourceDescriptor = Readonly<{
 	name: string;
@@ -177,7 +193,17 @@ export type PluginRuntime = Readonly<{
 		sessionId?: string
 	) => readonly PluginProviderDescriptor[];
 	getCommands: (sessionId?: string) => readonly PluginCommandDescriptor[];
-	getToolDescriptors: (sessionId: string) => readonly PluginToolDescriptor[];
+	getToolDescriptors: {
+		(sessionId: string): readonly PluginToolDescriptor[];
+		(
+			sessionId: string,
+			options: Readonly<{ includeTurnRenderers: true }>
+		): readonly PluginToolPresentationDescriptor[];
+	};
+	recordToolPresentationDescriptors?: (
+		sessionId: string,
+		tools: readonly PluginToolDescriptor[]
+	) => void;
 	bindPromptSelectionTarget: (
 		target: PluginPromptSelectionTarget
 	) => () => void;
@@ -261,6 +287,7 @@ type SessionPluginState = {
 	startPromise: Promise<void>;
 	storageError?: Error;
 	stopPromise?: Promise<void>;
+	toolPresentationDescriptors: Map<string, PluginToolPresentationDescriptor>;
 	tools: Map<string, PluginToolDescriptor>;
 };
 
@@ -306,8 +333,28 @@ const descriptorForTool = (
 		inputSchema: tool.inputSchema,
 		localName: tool.name,
 		name: tool.modelName ?? toolNameFor(plugin.id, tool.name),
+		...omitUndefined({
+			ownsRowShell: tool.ownsRowShell,
+			renderCall: tool.renderCall,
+			renderResult: tool.renderResult,
+		}),
 		pluginId: plugin.id,
 		sourcePath: plugin.sourcePath,
+	});
+
+const presentationDescriptorForTool = (
+	tool: PluginToolDescriptor
+): PluginToolPresentationDescriptor =>
+	Object.freeze({
+		localName: tool.localName,
+		name: tool.name,
+		...omitUndefined({
+			ownsRowShell: tool.ownsRowShell,
+			renderCall: tool.renderCall,
+			renderResult: tool.renderResult,
+		}),
+		pluginId: tool.pluginId,
+		sourcePath: tool.sourcePath,
 	});
 
 const descriptorForCommand = (
@@ -1014,6 +1061,7 @@ export const createPluginRuntime = (
 			maskedTools: new Set(),
 			started: new Set(),
 			startPromise: deferred.promise,
+			toolPresentationDescriptors: new Map(),
 			tools: new Map(),
 		};
 		sessionStates.set(context.sessionId, state);
@@ -1356,6 +1404,66 @@ export const createPluginRuntime = (
 		}
 	};
 
+	function getToolDescriptors(
+		sessionId: string
+	): readonly PluginToolDescriptor[];
+	function getToolDescriptors(
+		sessionId: string,
+		options: Readonly<{ includeTurnRenderers: true }>
+	): readonly PluginToolPresentationDescriptor[];
+	function getToolDescriptors(
+		sessionId: string,
+		options?: Readonly<{ includeTurnRenderers?: true }>
+	): readonly (PluginToolDescriptor | PluginToolPresentationDescriptor)[] {
+		const availableTools = plugins
+			.filter((plugin) => isEnabledForSession(plugin, sessionId))
+			.flatMap((plugin) => pluginToolsForSession(plugin, sessionId));
+		if (options?.includeTurnRenderers !== true) {
+			return Object.freeze(availableTools);
+		}
+		const presentationDescriptors = new Map<
+			string,
+			PluginToolPresentationDescriptor
+		>(
+			availableTools.map((tool) => [
+				tool.name,
+				presentationDescriptorForTool(tool),
+			])
+		);
+		const state = sessionStates.get(sessionId);
+		for (const descriptor of state?.toolPresentationDescriptors.values() ??
+			[]) {
+			if (
+				!(
+					disabledPlugins.has(descriptor.pluginId) ||
+					state?.disabled.has(descriptor.pluginId)
+				)
+			) {
+				presentationDescriptors.set(descriptor.name, descriptor);
+			}
+		}
+		return Object.freeze([...presentationDescriptors.values()]);
+	}
+	const recordToolPresentationDescriptors = (
+		sessionId: string,
+		tools: readonly PluginToolDescriptor[]
+	): void => {
+		const state = sessionStates.get(sessionId);
+		if (state === undefined || state.closed) {
+			return;
+		}
+		for (const tool of tools) {
+			const plugin = plugins.find(({ id }) => id === tool.pluginId);
+			if (plugin === undefined || !isEnabledForSession(plugin, sessionId)) {
+				continue;
+			}
+			state.toolPresentationDescriptors.set(
+				tool.name,
+				presentationDescriptorForTool(tool)
+			);
+		}
+	};
+
 	const shutdownStartedPlugins = async (): Promise<void> => {
 		for (const plugin of [...plugins].reverse()) {
 			if (
@@ -1411,6 +1519,13 @@ export const createPluginRuntime = (
 				return;
 			}
 			disabledPlugins.add(pluginId);
+			for (const state of sessionStates.values()) {
+				for (const [name, descriptor] of state.toolPresentationDescriptors) {
+					if (descriptor.pluginId === pluginId) {
+						state.toolPresentationDescriptors.delete(name);
+					}
+				}
+			}
 			for (const sessionId of pluginUIHandles.keys()) {
 				closePluginUIHandles(sessionId, undefined, pluginId);
 			}
@@ -1513,13 +1628,8 @@ export const createPluginRuntime = (
 		getCommands(sessionId) {
 			return Object.freeze(allCommands(sessionId));
 		},
-		getToolDescriptors(sessionId) {
-			return Object.freeze(
-				plugins
-					.filter((plugin) => isEnabledForSession(plugin, sessionId))
-					.flatMap((plugin) => pluginToolsForSession(plugin, sessionId ?? ""))
-			);
-		},
+		getToolDescriptors,
+		recordToolPresentationDescriptors,
 		getResource<Resource>(pluginId: string, name: string) {
 			const resource = plugins
 				.find((plugin) => plugin.id === pluginId)

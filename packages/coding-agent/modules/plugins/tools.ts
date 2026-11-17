@@ -184,12 +184,19 @@ export const createPluginTools = (
 	}
 	const reserved = new Set(context.existingToolNames ?? []);
 	const resolved: ResolvedTool[] = [];
+	const selectedPluginTools: PluginToolDescriptor[] = [];
 	for (const tool of context.pluginTools) {
 		if (reserved.has(tool.name)) {
 			continue;
 		}
 		reserved.add(tool.name);
 		resolved.push(pluginTool(tool, context));
+		selectedPluginTools.push(tool);
 	}
+	// Only admitted Tools can own renderer metadata for their Session rows.
+	context.pluginRuntime?.recordToolPresentationDescriptors?.(
+		context.sessionId,
+		selectedPluginTools
+	);
 	return resolved;
 };

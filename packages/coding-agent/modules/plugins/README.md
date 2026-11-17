@@ -186,6 +186,16 @@ An explicitly selected Plugin Command opens directly. Requests from Tools or oth
 
 In RPC, JSON, and Print execution, `custom()` resolves to `undefined` without invoking the component factory or producing terminal controls. The focused host contract and a runnable React example are in [custom-editor-plugin.tsx](../../examples/custom-editor-plugin.tsx).
 
+## Plugin Tool renderers
+
+A Plugin Tool may register optional React components as `renderCall` and `renderResult` on its own `registerTool()` definition. `renderCall` receives the current `call` (`toolCallId`, tool name, input, and live call state); `renderResult` receives the same row context and the current `PluginToolResult`. Both receive the shared `theme`, terminal `width` and `height`, and host-managed `expanded` state with `onToggleExpanded()`. Call components update when the call state changes; result components mount when a result is available. The host's `Ctrl+O` shortcut toggles expansion while preserving its reserved keyboard handling.
+
+By default, Wincode supplies the row shell around each renderer. Set `ownsRowShell: true` when the Plugin's call and result components provide their own row layout. This changes presentation only: the Plugin renderer does not receive the Tool handler, permission controls, Session writer, or a way to replace results. The host snapshots call/result data before rendering so presentation mutations cannot rewrite Session data.
+
+Renderers run only in Interactive Mode. Print, JSON, RPC, and other noninteractive consumers keep their existing data output and never execute these React components. If a component throws while rendering, the host React boundary logs a diagnostic and replaces the complete Plugin presentation with the default host Tool row; the Tool is neither failed nor rerun.
+
+The verified authoring example is [plugin-tool-renderer.tsx](../../examples/plugin-tool-renderer.tsx). It uses only public `@wincode/coding-agent` types and the Plugin Tool result contract.
+
 ## Status Panels
 
 Plugins may register a status panel with `registerStatusPanel`. The host renders its snapshot in the session sidebar and indicator, routes refresh and item actions through the Plugin Runtime, and lets a command open the same panel with `statusPanelId`. When a panel supplies `refresh`, its dialog exposes `Ctrl+R`; `Space` runs the selected item action. A panel owns its status values and action behavior; its `runAction` context also receives the Plugin UI API. The host does not need domain-specific UI or imports.

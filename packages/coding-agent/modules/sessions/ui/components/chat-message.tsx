@@ -3,6 +3,7 @@ import type { SessionMessageId, SessionRecordId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
 import { buildAgent } from "@/modules/agents";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -10,6 +11,7 @@ import type {
 	UiNotification,
 	UiNotificationLevel,
 } from "@/shared/providers/toast/types";
+import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import {
 	BotMessageContent,
 	BotMessageFooter,
@@ -23,9 +25,13 @@ import { SessionWriterAction } from "./session-writer-controls";
 
 function AssistantTranscriptContent({
 	message,
+	pluginRuntime,
+	sessionId,
 	streaming,
 }: {
 	message: SessionMessage;
+	pluginRuntime: PluginRuntime | undefined;
+	sessionId?: string;
 	streaming: boolean;
 }) {
 	const failureText = getAssistantFailureText(message);
@@ -34,6 +40,8 @@ function AssistantTranscriptContent({
 			<BotMessageContent
 				agent={message.metadata?.agent ?? buildAgent.id}
 				parts={message.parts}
+				pluginRuntime={pluginRuntime}
+				sessionId={sessionId}
 				streaming={streaming}
 			/>
 		);
@@ -44,6 +52,8 @@ function AssistantTranscriptContent({
 			<BotMessageContent
 				agent={message.metadata?.agent ?? buildAgent.id}
 				parts={message.parts.filter((part) => part.type !== "text")}
+				pluginRuntime={pluginRuntime}
+				sessionId={sessionId}
 			/>
 		</>
 	);
@@ -51,6 +61,7 @@ function AssistantTranscriptContent({
 
 export function ChatMessage({
 	footerMessage,
+	sessionId,
 	forkCheckpoints,
 	isRewindDisabled = false,
 	messages,
@@ -62,6 +73,7 @@ export function ChatMessage({
 	streaming = false,
 }: {
 	footerMessage?: SessionMessage;
+	sessionId?: string;
 	forkCheckpoints?: ReadonlyMap<
 		SessionMessageId,
 		SessionForkCheckpointAssessment
@@ -76,6 +88,7 @@ export function ChatMessage({
 	streaming?: boolean;
 }) {
 	const { colors } = useTheme();
+	const pluginRuntime = getInteractivePluginRuntime();
 	const retryMessageId = resolveRetryMessageId(messages);
 	const latestAssistant = messages.findLast(
 		(message) => message.role === "assistant"
@@ -167,6 +180,8 @@ export function ChatMessage({
 						) : (
 							<AssistantTranscriptContent
 								message={message}
+								pluginRuntime={pluginRuntime}
+								sessionId={sessionId}
 								streaming={streaming && message === latestAssistant}
 							/>
 						)}

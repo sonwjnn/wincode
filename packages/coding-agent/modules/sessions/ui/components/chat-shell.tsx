@@ -602,6 +602,7 @@ export function ChatShell({
 									onRetry={canRetryTurn ? onRetry : undefined}
 									onRewindCheckpoint={onRewindCheckpoint}
 									rewindingCheckpointId={rewindingCheckpointId}
+									sessionId={viewId}
 									showActions={showActions && !isBusy}
 									streaming={isBusy && turn.id === turns.at(-1)?.id}
 								/>

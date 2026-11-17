@@ -1,4 +1,5 @@
 import type { BoxRenderable } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
 import type { AgentId } from "@wincode/agent-core";
 import {
 	isArray,
@@ -7,10 +8,29 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
+	logger,
+	omitUndefined,
 } from "@wincode/utils";
-import { memo, type ReactNode, useMemo, useRef, useState } from "react";
+import {
+	Component,
+	createElement,
+	memo,
+	type ReactNode,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
+import type {
+	PluginToolCall,
+	PluginToolRenderContext,
+	PluginToolResult,
+} from "@/modules/plugins/public";
+import type {
+	PluginRuntime,
+	PluginToolPresentationDescriptor,
+} from "@/modules/plugins/runtime";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useHideThinking } from "@/modules/settings/hide-thinking-settings";
 import {
@@ -385,7 +405,13 @@ const ToolFailureMessage = ({
 	);
 };
 
-function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
+function HostToolMessagePart({
+	agent,
+	part,
+}: {
+	agent: AgentId;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const fallbackError = getFallbackError(part);
 	const isSkillCall =
@@ -432,6 +458,183 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 			)}
 		</>
 	);
+}
+
+type PluginToolRendererErrorBoundaryProps = Readonly<{
+	children: ReactNode;
+	fallback: ReactNode;
+	tool: PluginToolPresentationDescriptor;
+}>;
+
+class PluginToolRendererErrorBoundary extends Component<
+	PluginToolRendererErrorBoundaryProps,
+	Readonly<{ failed: boolean }>
+> {
+	override state = { failed: false };
+
+	static getDerivedStateFromError(): Readonly<{ failed: boolean }> {
+		return { failed: true };
+	}
+
+	override componentDidCatch(error: Error): void {
+		void logger.error("Plugin Tool presentation failed; using host renderer", {
+			cause: error.message,
+			operation: "plugin.tool.presentation",
+			pluginId: this.props.tool.pluginId,
+			sourcePath: this.props.tool.sourcePath,
+			toolName: this.props.tool.name,
+		});
+	}
+
+	override render(): ReactNode {
+		return this.state.failed ? this.props.fallback : this.props.children;
+	}
+}
+
+const pluginToolCallFor = (
+	part: Extract<ToolPart, { type: "dynamic-tool" }>
+): PluginToolCall =>
+	Object.freeze({
+		input: structuredClone(part.input),
+		...omitUndefined({
+			rawInput:
+				part.rawInput === undefined
+					? undefined
+					: structuredClone(part.rawInput),
+		}),
+		state: part.state,
+		toolCallId: part.toolCallId,
+		toolName: part.toolName,
+	});
+
+const pluginToolResultFor = (
+	part: Extract<ToolPart, { type: "dynamic-tool" }>
+): PluginToolResult | undefined => {
+	if (part.state === "output-available") {
+		return Object.freeze(
+			structuredClone({ type: "success" as const, output: part.output })
+		);
+	}
+	if (part.state === "output-error") {
+		return Object.freeze(
+			structuredClone({
+				errorText: part.errorText ?? "Tool call failed.",
+				...omitUndefined({ failure: part.failure }),
+				type: "failure" as const,
+			})
+		);
+	}
+	return;
+};
+
+function PluginToolPresentation({
+	agent,
+	part,
+	tool,
+}: {
+	agent: AgentId;
+	part: Extract<ToolPart, { type: "dynamic-tool" }>;
+	tool: PluginToolPresentationDescriptor;
+}) {
+	const { colors, currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const [expanded, setExpanded] = useState(false);
+	const onToggleExpanded = () => setExpanded((value) => !value);
+	const call = useMemo(() => pluginToolCallFor(part), [part]);
+	const result = useMemo(() => pluginToolResultFor(part), [part]);
+	useToggleShortcut(
+		"ctrl+o",
+		onToggleExpanded,
+		tool.renderResult !== undefined && result !== undefined
+	);
+	const context: PluginToolRenderContext = Object.freeze({
+		call,
+		expanded,
+		height: dimensions.height,
+		onToggleExpanded,
+		theme: currentTheme,
+		width: dimensions.width,
+	});
+	const callContent =
+		tool.renderCall === undefined ? (
+			<ToolCallLine agent={agent} colors={colors} part={part} />
+		) : (
+			createElement(tool.renderCall, context)
+		);
+	const resultContent =
+		tool.renderResult === undefined || result === undefined
+			? null
+			: createElement(tool.renderResult, { ...context, result });
+	const fallbackError =
+		tool.renderResult === undefined ? getFallbackError(part) : "";
+	const shell = (content: ReactNode): ReactNode =>
+		tool.ownsRowShell === true ? (
+			content
+		) : (
+			<box marginBottom={1} paddingX={1} width="100%">
+				{content}
+			</box>
+		);
+	let renderedResult: ReactNode = null;
+	if (resultContent !== null) {
+		renderedResult = shell(resultContent);
+	} else if (fallbackError !== "") {
+		renderedResult = (
+			<ToolFailureMessage
+				colors={colors}
+				errorText={fallbackError}
+				part={part}
+			/>
+		);
+	}
+
+	return (
+		<>
+			{tool.renderCall === undefined ? callContent : shell(callContent)}
+			{renderedResult}
+		</>
+	);
+}
+
+function PluginToolMessagePart({
+	agent,
+	part,
+	tool,
+}: {
+	agent: AgentId;
+	part: Extract<ToolPart, { type: "dynamic-tool" }>;
+	tool: PluginToolPresentationDescriptor;
+}) {
+	return (
+		<PluginToolRendererErrorBoundary
+			fallback={<HostToolMessagePart agent={agent} part={part} />}
+			tool={tool}
+		>
+			<PluginToolPresentation agent={agent} part={part} tool={tool} />
+		</PluginToolRendererErrorBoundary>
+	);
+}
+
+function ToolMessagePart({
+	agent,
+	part,
+	pluginTool,
+}: {
+	agent: AgentId;
+	part: ToolPart;
+	pluginTool?: PluginToolPresentationDescriptor;
+}) {
+	if (
+		part.type === "dynamic-tool" &&
+		pluginTool !== undefined &&
+		(pluginTool.renderCall !== undefined ||
+			pluginTool.renderResult !== undefined)
+	) {
+		return (
+			<PluginToolMessagePart agent={agent} part={part} tool={pluginTool} />
+		);
+	}
+	return <HostToolMessagePart agent={agent} part={part} />;
 }
 
 const MemoizedToolMessagePart = memo(ToolMessagePart);
@@ -653,15 +856,29 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 export function BotMessageContent({
 	agent = buildAgent.id,
 	parts,
+	pluginRuntime,
+	sessionId,
 	streaming = false,
 }: {
 	/** The agent that produced the message; drives the running-tool spinner color. */
 	agent?: AgentId;
 	parts: SessionMessage["parts"];
+	pluginRuntime?: PluginRuntime;
+	sessionId?: string;
 	streaming?: boolean;
 }) {
 	const { colors } = useTheme();
 	const hideThinking = useHideThinking();
+	const pluginToolsByName = new Map<string, PluginToolPresentationDescriptor>();
+	if (pluginRuntime !== undefined && sessionId !== undefined) {
+		for (const tool of pluginRuntime.getToolDescriptors(sessionId, {
+			includeTurnRenderers: true,
+		})) {
+			if (!pluginToolsByName.has(tool.name)) {
+				pluginToolsByName.set(tool.name, tool);
+			}
+		}
+	}
 	const groups = groupConsecutiveParts(parts).filter(
 		(group) => group.type !== "step-start"
 	);
@@ -707,6 +924,11 @@ export function BotMessageContent({
 										agent={agent}
 										key={getToolKey(part, index)}
 										part={part}
+										pluginTool={
+											part.type === "dynamic-tool"
+												? pluginToolsByName.get(part.toolName)
+												: undefined
+										}
 									/>
 								);
 							}

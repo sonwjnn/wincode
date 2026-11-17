@@ -23,6 +23,11 @@ import type { PluginCommand, PluginTool } from "./types";
 
 const pluginToolNamePattern = /^[a-z0-9_-]+$/u;
 const pluginCommandNamePattern = /^[a-z0-9_-]+$/u;
+const isPluginToolRenderer = (value: unknown): boolean =>
+	typeof value === "function" ||
+	(isObjectLike(value) &&
+		"$$typeof" in value &&
+		typeof value.$$typeof === "symbol");
 const pluginStatusPanelIdPattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const pluginProviderIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const pluginModelNamePattern = /^[a-zA-Z0-9_-]+$/u;
@@ -108,7 +113,13 @@ const isPluginToolCandidate = (
 			candidate.exclusiveInBatch === true) &&
 		(candidate.executionMode === undefined ||
 			candidate.executionMode === "parallel" ||
-			candidate.executionMode === "sequential")
+			candidate.executionMode === "sequential") &&
+		(candidate.ownsRowShell === undefined ||
+			typeof candidate.ownsRowShell === "boolean") &&
+		(candidate.renderCall === undefined ||
+			isPluginToolRenderer(candidate.renderCall)) &&
+		(candidate.renderResult === undefined ||
+			isPluginToolRenderer(candidate.renderResult))
 	);
 };
 
@@ -184,6 +195,11 @@ export const validatePluginTool = (candidate: unknown): PluginTool => {
 		inputSchema: tool.inputSchema,
 		...(modelName === undefined ? {} : { modelName }),
 		name: tool.name,
+		...omitUndefined({
+			ownsRowShell: tool.ownsRowShell,
+			renderCall: tool.renderCall,
+			renderResult: tool.renderResult,
+		}),
 	});
 };
 
