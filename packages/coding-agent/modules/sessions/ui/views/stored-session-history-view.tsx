@@ -227,6 +227,7 @@ export function StoredSessionHistoryView({
 									<ChatMessage
 										footerMessage={footerMessages.get(item.turn.id)}
 										messages={item.turn.messages}
+										sessionId={sessionId}
 									/>
 								</box>
 							);

@@ -21,6 +21,7 @@ import type { Theme } from "../../shared/providers/theme/themes";
 export type { Theme, ThemeColors } from "../../shared/providers/theme/themes";
 
 import type { SessionHistoryEntryId } from "../../shared/identifiers";
+import type { SessionMessage } from "../sessions/message";
 import type {
 	SessionSdkAgentSource,
 	SessionSdkCapabilityCeiling,
@@ -28,6 +29,7 @@ import type {
 } from "../sessions/sdk-contract";
 import type {
 	PluginSessionHistory,
+	PluginSessionHistoryEntry,
 	PluginSessionHistoryReader,
 } from "../sessions/session-plugin-history";
 import type {
@@ -36,8 +38,10 @@ import type {
 } from "../sessions/session-plugin-state";
 import type { SessionWriteOutcome } from "../sessions/session-write-outcome";
 
+export type { SessionMessage } from "../sessions/message";
 export type {
 	PluginSessionHistory,
+	PluginSessionHistoryEntry,
 	PluginSessionHistoryReader,
 } from "../sessions/session-plugin-history";
 
@@ -172,6 +176,35 @@ export type PluginUICustomOptions = Readonly<{ title?: string }>;
 export type PluginThemeChangeResult =
 	| Readonly<{ success: true }>
 	| Readonly<{ success: false; error: string }>;
+
+export type PluginUIContributionResult =
+	| Readonly<{ success: true }>
+	| Readonly<{
+			code: "plugin_ui_contribution_conflict";
+			success: false;
+			surface: "entry" | "message";
+	  }>;
+
+export type PluginUIDimensions = Readonly<{ height: number; width: number }>;
+export type PluginMessageRole = "assistant" | "system" | "user";
+
+export type PluginMessageRendererProps = Readonly<{
+	dimensions: PluginUIDimensions;
+	message: SessionMessage;
+	options: Readonly<{ streaming: boolean }>;
+	theme: Theme;
+}>;
+
+export type PluginMessageRenderer = ComponentType<PluginMessageRendererProps>;
+
+export type PluginEntryRendererProps = Readonly<{
+	dimensions: PluginUIDimensions;
+	entry: PluginSessionHistoryEntry;
+	options: Readonly<{ selectedPath: boolean }>;
+	theme: Theme;
+}>;
+
+export type PluginEntryRenderer = ComponentType<PluginEntryRendererProps>;
 
 /** UI-neutral operations the host makes available to a Plugin callback. */
 export type PluginUI = Readonly<{
@@ -597,6 +630,14 @@ export type PluginAPI = Readonly<{
 	definePlugin: (
 		identity: Readonly<{ id: string; sessionStateVersion?: number }>
 	) => PluginDefinitionAPI;
+	registerEntryRenderer: (
+		type: string,
+		renderer: PluginEntryRenderer
+	) => PluginUIContributionResult;
+	registerMessageRenderer: (
+		role: PluginMessageRole,
+		renderer: PluginMessageRenderer
+	) => PluginUIContributionResult;
 	/** Set the focused Interactive composer model for future Submissions. */
 	setModel: (model: ProviderModelSelection) => Promise<boolean>;
 	/** Set or clear the focused composer ThinkingLevel for future Submissions; unsupported levels are ignored. */
