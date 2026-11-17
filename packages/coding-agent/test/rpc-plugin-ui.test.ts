@@ -13,7 +13,10 @@ import {
 	isRpcPluginUIUpdate,
 	type RpcPluginUIRequest,
 } from "../modules/application/rpc/plugin-ui";
-import { createRpcPluginUIChannel } from "../modules/application/rpc/plugin-ui-channel";
+import {
+	createRpcPluginUIChannel,
+	nextRpcPluginUITimeoutChunk,
+} from "../modules/application/rpc/plugin-ui-channel";
 import { runRpc } from "../modules/application/rpc/runner";
 import type { RpcAssembly } from "../modules/application/rpc/types";
 import type { PluginUICustomFactory } from "../modules/plugins/public";
@@ -434,6 +437,77 @@ test("RPC UI preserves and cancels caller timeouts above the maximum timer delay
 		}
 	}));
 
+test("RPC UI response and cancellation clear their scheduled timer chunks", () =>
+	withMockedRpcUITimers(async (scheduledTimers) => {
+		const requestIds: string[] = [];
+		const channel = createRpcPluginUIChannel({
+			sendCancellation: () => undefined,
+			sendNotification: () => undefined,
+			sendRequest: (id) => requestIds.push(id),
+		});
+		try {
+			const resolved = channel.transport.request({
+				kind: "input",
+				pluginId: "rpc_ui_test",
+				title: "Resolve before timeout",
+				timeoutMs: 2_147_483_648,
+			});
+			const resolvedId = requestIds[0];
+			if (resolvedId === undefined) {
+				throw new Error("RPC UI did not send the resolvable request.");
+			}
+			expect(channel.receiveResponse(resolvedId, "answer", false, true)).toBe(
+				true
+			);
+			expect(await resolved).toBe("answer");
+			expect(scheduledTimers[0]?.cancelled).toBe(true);
+
+			const cancelled = channel.transport.request({
+				kind: "confirm",
+				pluginId: "rpc_ui_test",
+				title: "Cancel before timeout",
+				timeoutMs: 2_147_483_648,
+			});
+			const cancelledId = requestIds[1];
+			if (cancelledId === undefined) {
+				throw new Error("RPC UI did not send the cancellable request.");
+			}
+			expect(channel.cancelRequest(cancelledId)).toBe(true);
+			expect(await cancelled).toBe(false);
+			expect(scheduledTimers[1]?.cancelled).toBe(true);
+		} finally {
+			channel.close();
+		}
+	}));
+
+test("RPC UI timeout chunks progress exactly beyond Number precision", () => {
+	const maximumTimerDelayMs = 2_147_483_647;
+	const timeoutMs = 2 ** 85;
+	const timeout = BigInt(timeoutMs);
+	const firstChunk = nextRpcPluginUITimeoutChunk(timeout);
+	const secondChunk = nextRpcPluginUITimeoutChunk(firstChunk.remainingMs);
+
+	// Number subtraction cannot represent this decrement, so a numeric countdown
+	// would schedule the same chunk forever.
+	expect(timeoutMs - maximumTimerDelayMs).toBe(timeoutMs);
+	expect(firstChunk).toEqual({
+		delayMs: maximumTimerDelayMs,
+		remainingMs: timeout - BigInt(maximumTimerDelayMs),
+	});
+	expect(secondChunk.remainingMs).toBe(
+		timeout - 2n * BigInt(maximumTimerDelayMs)
+	);
+	expect(secondChunk.remainingMs).toBeLessThan(firstChunk.remainingMs);
+	expect(nextRpcPluginUITimeoutChunk(BigInt(maximumTimerDelayMs))).toEqual({
+		delayMs: maximumTimerDelayMs,
+		remainingMs: 0n,
+	});
+	expect(nextRpcPluginUITimeoutChunk(BigInt(maximumTimerDelayMs + 1))).toEqual({
+		delayMs: maximumTimerDelayMs,
+		remainingMs: 1n,
+	});
+});
+
 test("RPC UI cancellation, timeouts and disconnects settle to method defaults", async () => {
 	const requests: Array<{ id: string; params: RpcPluginUIRequest }> = [];
 	const cancellations: string[] = [];
@@ -496,6 +570,176 @@ test("RPC UI cancellation, timeouts and disconnects settle to method defaults", 
 	expect(await disconnected).toBeUndefined();
 	expect(cancellations).toEqual([abortRequest.id, timeoutRequest.id]);
 	host.close();
+});
+
+test("RPC without Plugin UI negotiation invokes Plugin UI defaults without terminal methods", async () => {
+	const workspace = await fs.mkdtemp(
+		path.join("/tmp", "wincode-rpc-ui-no-capability-")
+	);
+	const model: ProviderModel = {
+		capabilities: ["reasoning", "text", "tools"],
+		modelId: "gpt-5.6-luna",
+		protocolId: "fake-e2e-provider",
+		providerId: "openai",
+		reasoningEfforts: ["high"],
+	};
+	const recorder = createFakeProviderRecorder();
+	let providerStep = 0;
+	recorder.stepScript = async function* (_request, _recorder, _signal) {
+		providerStep += 1;
+		if (providerStep === 1) {
+			yield {
+				input: {},
+				toolCallId: "rpc-ui-no-capability-tool-call",
+				toolName: "plugin_rpc_no_ui_prompt",
+				type: "tool-call",
+			};
+		} else {
+			yield { delta: "Unsupported Plugin UI completed.", type: "text-delta" };
+		}
+		yield { completion: { kind: "completed" }, type: "finish" };
+	} satisfies FakeProviderStepScript;
+	let confirmResult: boolean | undefined;
+	let customResult: string | undefined;
+	let customFactoryCalls = 0;
+	const factory: PluginUICustomFactory<string> = () => {
+		customFactoryCalls += 1;
+		throw new Error(
+			"An RPC client without UI capability must not run custom UI."
+		);
+	};
+	const sourcePath = path.join(workspace, "rpc-ui-no-capability-plugin.ts");
+	const plugin: LoadedPlugin = {
+		commands: [],
+		id: "rpc_ui_no_capability",
+		sourcePath,
+		tools: [
+			{
+				description: "Use Plugin UI with a client that did not negotiate it.",
+				handler: async (_input, { ui }) => {
+					confirmResult = await ui.confirm("Unsupported confirmation");
+					customResult = await ui.custom(factory);
+					return {
+						output: `${confirmResult}:${customResult ?? "undefined"}`,
+						type: "success",
+					};
+				},
+				inputSchema: z.object({}),
+				localName: "prompt",
+				name: "plugin_rpc_no_ui_prompt",
+				pluginId: "rpc_ui_no_capability",
+				sourcePath,
+			},
+		],
+		workspace,
+	};
+	const pluginRuntime = createPluginRuntime([plugin], []);
+	const assembly = await openSessionServices({
+		policy: {
+			cwd: workspace,
+			databasePath: path.join(workspace, "sessions.sqlite"),
+			plugins: { paths: [] },
+			workspace,
+		},
+		sources: {
+			createProviderCollection: () =>
+				createFakeProviderCollection(recorder, model),
+			pluginRuntime: () => pluginRuntime,
+		},
+	});
+	const initialized = Promise.withResolvers<void>();
+	const created = Promise.withResolvers<void>();
+	const unexpectedUIRequest = Promise.withResolvers<string>();
+	const turnCompleted = Promise.withResolvers<void>();
+	const output: string[] = [];
+	const frame = (
+		id: string,
+		method: string,
+		params: Record<string, unknown>
+	): string => `${JSON.stringify({ id, jsonrpc: "2.0", method, params })}\n`;
+	const input = (async function* (): AsyncGenerator<Uint8Array> {
+		yield new TextEncoder().encode(
+			frame("initialize", "initialize", {
+				capabilities: {},
+				clientInfo: { name: "rpc-plugin-ui-without-capability" },
+				cwd: workspace,
+				protocolVersion: 4,
+			})
+		);
+		await initialized.promise;
+		yield new TextEncoder().encode(
+			frame("create", "session/create", {
+				initialSubmission: { text: "Request unsupported Plugin UI." },
+				selection: {
+					agentId: "build",
+					model: { modelId: model.modelId, providerId: model.providerId },
+					thinkingLevel: "high",
+				},
+			})
+		);
+		await created.promise;
+		const unexpectedRequestId = await Promise.race([
+			turnCompleted.promise.then(() => undefined),
+			unexpectedUIRequest.promise,
+		]);
+		if (unexpectedRequestId !== undefined) {
+			yield new TextEncoder().encode(
+				`${JSON.stringify({ id: unexpectedRequestId, jsonrpc: "2.0", result: "unexpected" })}\n`
+			);
+		}
+		await turnCompleted.promise;
+		yield new TextEncoder().encode(frame("shutdown", "server/shutdown", {}));
+	})();
+	try {
+		const exitCode = await runRpc({
+			composeServices: async () => assembly,
+			input,
+			stderr: { write: () => undefined },
+			stdout: {
+				write: (text) => {
+					output.push(text);
+					const emitted = JSON.parse(text) as Record<string, unknown>;
+					if (emitted.id === "initialize") {
+						initialized.resolve();
+					}
+					if (emitted.id === "create") {
+						created.resolve();
+					}
+					if (emitted.method === "plugin/ui/request") {
+						unexpectedUIRequest.resolve(emitted.id as string);
+					}
+					if (emitted.method === "session/event") {
+						const params = emitted.params as Record<string, unknown>;
+						const eventRecord = params.event as Record<string, unknown>;
+						const event = eventRecord.event as Record<string, unknown>;
+						if (event.type === "agent-turn-completed") {
+							turnCompleted.resolve();
+						}
+					}
+				},
+			},
+		});
+		const frames = output.map((value) => JSON.parse(value) as RpcFrame);
+		const initializeResult = frames.find(
+			(emitted) => emitted.id === "initialize"
+		)?.result as { capabilities?: Record<string, unknown> } | undefined;
+
+		expect(exitCode).toBe(0);
+		expect(initializeResult?.capabilities?.pluginUi).toBeUndefined();
+		expect(
+			frames.some(
+				(emitted) =>
+					typeof emitted.method === "string" &&
+					emitted.method.startsWith("plugin/ui/")
+			)
+		).toBe(false);
+		expect(confirmResult).toBe(false);
+		expect(customResult).toBeUndefined();
+		expect(customFactoryCalls).toBe(0);
+	} finally {
+		await Promise.all([assembly.shutdown(), pluginRuntime.shutdown()]);
+		await fs.rm(workspace, { force: true, recursive: true });
+	}
 });
 
 test("RPC without a negotiated UI capability uses the documented no-op defaults", async () => {

@@ -44,6 +44,23 @@ export type RpcPluginUIChannelOptions = Readonly<{
 }>;
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MAX_TIMER_DELAY_BIGINT = BigInt(MAX_TIMER_DELAY_MS);
+
+export type RpcPluginUITimeoutChunk = Readonly<{
+	delayMs: number;
+	remainingMs: bigint;
+}>;
+
+export const nextRpcPluginUITimeoutChunk = (
+	remainingMs: bigint
+): RpcPluginUITimeoutChunk => {
+	const delay =
+		remainingMs > MAX_TIMER_DELAY_BIGINT ? MAX_TIMER_DELAY_BIGINT : remainingMs;
+	return {
+		delayMs: Number(delay),
+		remainingMs: remainingMs - delay,
+	};
+};
 
 const defaultValueFor = (
 	kind: RpcPluginUIRequest["kind"]
@@ -144,20 +161,20 @@ export const createRpcPluginUIChannel = (
 			return deferred.promise;
 		}
 		if (requestValue.timeoutMs !== undefined) {
-			let remainingMs = requestValue.timeoutMs;
+			let remainingMs = BigInt(Math.ceil(requestValue.timeoutMs));
 			const scheduleTimeout = (): void => {
-				const delayMs = Math.min(remainingMs, MAX_TIMER_DELAY_MS);
+				const chunk = nextRpcPluginUITimeoutChunk(remainingMs);
 				active.timeout = setTimeout(() => {
 					if (pending.get(id) !== active) {
 						return;
 					}
-					remainingMs -= delayMs;
-					if (remainingMs > 0) {
+					remainingMs = chunk.remainingMs;
+					if (remainingMs > 0n) {
 						scheduleTimeout();
 						return;
 					}
 					finish(id, active, defaultValue, true);
-				}, delayMs);
+				}, chunk.delayMs);
 			};
 			scheduleTimeout();
 		}
