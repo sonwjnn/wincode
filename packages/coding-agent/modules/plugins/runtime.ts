@@ -827,6 +827,7 @@ export const createPluginRuntime = (
 			binding.shortcutUnsubscribers.has(plugin.id) ||
 			state === undefined ||
 			state.closed ||
+			closingPluginUISessions.has(sessionId) ||
 			!state.started.has(plugin.id) ||
 			!isEnabledForSession(plugin, sessionId) ||
 			(state.context.executionMode !== undefined &&
@@ -847,6 +848,7 @@ export const createPluginRuntime = (
 								pluginUIHosts.get(sessionId) !== binding ||
 								activeState !== state ||
 								activeState.closed ||
+								closingPluginUISessions.has(sessionId) ||
 								!activeState.started.has(plugin.id) ||
 								!isEnabledForSession(plugin, sessionId)
 							) {
