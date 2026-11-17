@@ -8,7 +8,10 @@ import type {
 } from "@/modules/commands/command-controller";
 import type { TrackedSubmissionIntent } from "@/modules/commands/submission-resolution";
 import type { FileMentionOption } from "@/modules/file-mentions";
-import type { PluginAutocompleteProviderFactory } from "@/modules/plugins/public";
+import type {
+	PluginAutocompleteProviderFactory,
+	PluginAutocompleteResult,
+} from "@/modules/plugins/public";
 import type { PromptHistoryEntry } from "@/modules/sessions/hooks/input-controller/history";
 import type { SubmitSnapshot } from "@/modules/sessions/hooks/input-controller/submit";
 import type { ChatInputController } from "@/modules/sessions/hooks/input-controller/types";
@@ -155,8 +158,12 @@ const renderController = async (setup: TestRendererSetup): Promise<void> => {
 const waitForControllerEffects = async (
 	setup: TestRendererSetup
 ): Promise<void> => {
-	await Bun.sleep(10);
-	await renderController(setup);
+	await act(async () => {
+		await Promise.resolve();
+		await setup.renderOnce();
+		await Promise.resolve();
+		await setup.renderOnce();
+	});
 };
 
 describe("composer autocomplete", () => {
@@ -248,6 +255,7 @@ describe("composer autocomplete", () => {
 	});
 
 	test("delegates file-mention completion through a Plugin provider", async () => {
+		const fileMentionOptions = Promise.withResolvers<FileMentionOption[]>();
 		const provider: PluginAutocompleteProviderFactory = (current) => current;
 		const holder: { current: ChatInputController | null } = { current: null };
 		const documentHolder: { current: ComposerDocument | null } = {
@@ -257,14 +265,7 @@ describe("composer autocomplete", () => {
 			<ControllerProbe
 				commandController={createCommandController([])}
 				documentHolder={documentHolder}
-				getFileMentionOptions={async () => [
-					{ label: "src", path: "src", type: "directory" },
-					{
-						label: "src/main.tsx",
-						path: "src/main.tsx",
-						type: "file",
-					},
-				]}
+				getFileMentionOptions={() => fileMentionOptions.promise}
 				holder={holder}
 				onSubmit={() => true}
 				pluginAutocompleteProviders={[provider]}
@@ -293,6 +294,18 @@ describe("composer autocomplete", () => {
 				await waitForControllerEffects(setup);
 			};
 
+			await act(async () => {
+				fileMentionOptions.resolve([
+					{ label: "src", path: "src", type: "directory" },
+					{
+						label: "src/main.tsx",
+						path: "src/main.tsx",
+						type: "file",
+					},
+				]);
+				await fileMentionOptions.promise;
+			});
+			await waitForControllerEffects(setup);
 			await setText("See @src");
 			let overlay = holder.current?.state.overlay;
 			if (overlay?.kind !== "plugin-autocomplete") {
@@ -342,6 +355,7 @@ describe("composer autocomplete", () => {
 	});
 
 	test("moving the caret away from a file mention prevents Enter replacing it", async () => {
+		const fileMentionOptions = Promise.withResolvers<FileMentionOption[]>();
 		const holder: { current: ChatInputController | null } = { current: null };
 		const documentHolder: { current: ComposerDocument | null } = {
 			current: null,
@@ -350,9 +364,7 @@ describe("composer autocomplete", () => {
 			<ControllerProbe
 				commandController={createCommandController([])}
 				documentHolder={documentHolder}
-				getFileMentionOptions={async () => [
-					{ label: "src/main.tsx", path: "src/main.tsx", type: "file" },
-				]}
+				getFileMentionOptions={() => fileMentionOptions.promise}
 				holder={holder}
 				onSubmit={() => true}
 				promptHistoryStore={createPromptHistoryStore([])}
@@ -361,6 +373,13 @@ describe("composer autocomplete", () => {
 		);
 
 		try {
+			await waitForControllerEffects(setup);
+			await act(async () => {
+				fileMentionOptions.resolve([
+					{ label: "src/main.tsx", path: "src/main.tsx", type: "file" },
+				]);
+				await fileMentionOptions.promise;
+			});
 			await waitForControllerEffects(setup);
 			const text = "See @src now";
 			const mentionCursorOffset = text.indexOf("@src") + "@src".length;
@@ -390,6 +409,98 @@ describe("composer autocomplete", () => {
 
 			expect(holder.current?.state.text).toBe(text);
 			expect(overlayAfterMovingCaret?.kind).toBe(null);
+		} finally {
+			await act(async () => setup.renderer.destroy());
+		}
+	});
+
+	test("ignores a late file-mention Plugin completion after the caret leaves its range", async () => {
+		const fileMentionOptions = Promise.withResolvers<FileMentionOption[]>();
+		const providerStarted = Promise.withResolvers<void>();
+		const deferredCompletion =
+			Promise.withResolvers<PluginAutocompleteResult | null>();
+		const provider: PluginAutocompleteProviderFactory = (current) => ({
+			...current,
+			getSuggestions(context) {
+				if (context.text.slice(0, context.cursorOffset).endsWith("@src")) {
+					providerStarted.resolve();
+					return deferredCompletion.promise;
+				}
+				return current.getSuggestions(context);
+			},
+		});
+		const holder: { current: ChatInputController | null } = { current: null };
+		const documentHolder: { current: ComposerDocument | null } = {
+			current: null,
+		};
+		const setup = await testRenderWithClipboard(
+			<ControllerProbe
+				commandController={createCommandController([])}
+				documentHolder={documentHolder}
+				getFileMentionOptions={() => fileMentionOptions.promise}
+				holder={holder}
+				onSubmit={() => true}
+				pluginAutocompleteProviders={[provider]}
+				promptHistoryStore={createPromptHistoryStore([])}
+				sessionId="session-1"
+			/>,
+			{ height: 12, width: 80 }
+		);
+
+		try {
+			await waitForControllerEffects(setup);
+			await act(async () => {
+				fileMentionOptions.resolve([
+					{ label: "src/main.tsx", path: "src/main.tsx", type: "file" },
+				]);
+				await fileMentionOptions.promise;
+			});
+			await waitForControllerEffects(setup);
+
+			const text = "Mention @src here";
+			const mentionCursorOffset = "Mention @src".length;
+			await act(async () => {
+				const document = documentHolder.current;
+				if (document === null) {
+					throw new Error("expected the composer document");
+				}
+				const snapshot = document.replaceText(text, mentionCursorOffset);
+				holder.current?.actions.onTextChange(snapshot, mentionCursorOffset, "");
+			});
+			await waitForControllerEffects(setup);
+			await act(async () => {
+				await providerStarted.promise;
+			});
+			expect(holder.current?.state.overlay.kind).toBe("file-mention");
+
+			await act(async () => {
+				const document = documentHolder.current;
+				if (document === null) {
+					throw new Error("expected the composer document");
+				}
+				document.replaceText(text, text.indexOf("@"));
+				holder.current?.actions.onCursorChange();
+			});
+			await waitForControllerEffects(setup);
+			expect(holder.current?.state.overlay.kind).toBe(null);
+
+			await act(async () => {
+				deferredCompletion.resolve({
+					items: [{ label: "src/main.tsx", value: "src/main.tsx" }],
+					prefix: "@src",
+				});
+				await deferredCompletion.promise;
+				await Promise.resolve();
+				await setup.renderOnce();
+				await Promise.resolve();
+				await setup.renderOnce();
+			});
+			expect(holder.current?.state.overlay.kind).toBe(null);
+
+			await act(async () => holder.current?.actions.onEnter());
+			await renderController(setup);
+			expect(holder.current?.state.text).toBe(text);
+			expect(holder.current?.state.overlay.kind).toBe(null);
 		} finally {
 			await act(async () => setup.renderer.destroy());
 		}
