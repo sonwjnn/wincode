@@ -43,18 +43,28 @@ const ReplyEditor: PluginUICustomComponent<string> = ({
 const replyEditorFactory: PluginUICustomFactory<string> = async () =>
 	ReplyEditor;
 
+const replyCommands = [
+	{ name: "reply-editor", presentation: undefined },
+	{ name: "reply-overlay", presentation: "overlay" },
+	{ name: "reply-full-screen", presentation: "full-screen" },
+] as const;
+
 const customEditorPlugin: PluginFactory = (api) => {
 	const plugin = api.definePlugin({ id: "custom_editor" });
-	plugin.registerCommand({
-		description: "Open a temporary editor for a reply.",
-		name: "reply-editor",
-		handler: async ({ ui }) => {
-			const reply = await ui.custom(replyEditorFactory, {
-				title: "Compose reply",
-			});
-			return reply === undefined ? "Reply editor dismissed." : reply;
-		},
-	});
+	for (const { name, presentation } of replyCommands) {
+		plugin.registerCommand({
+			description: `Open a temporary ${presentation ?? "editor"} for a reply.`,
+			name,
+			handler: async ({ ui }) => {
+				const options =
+					presentation === undefined
+						? { title: "Compose reply" }
+						: { presentation, title: "Compose reply" };
+				const reply = await ui.custom(replyEditorFactory, options);
+				return reply === undefined ? "Reply editor dismissed." : reply;
+			},
+		});
+	}
 };
 
 export default customEditorPlugin;

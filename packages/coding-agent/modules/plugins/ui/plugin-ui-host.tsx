@@ -3,7 +3,9 @@ import type {
 	SelectRenderable,
 	TextareaRenderable,
 } from "@opentui/core";
+import { RGBA } from "@opentui/core";
 import {
+	createPortal,
 	useKeyboard,
 	useRenderer,
 	useTerminalDimensions,
@@ -78,6 +80,7 @@ type PluginUICustomHostRequest = Readonly<{
 	sessionId: string;
 	signal: AbortSignal;
 	title: string;
+	presentation: NonNullable<PluginUICustomOptions["presentation"]>;
 }>;
 
 type PluginUICustomStore = Readonly<{
@@ -420,11 +423,62 @@ const CUSTOM_UI_KEYBINDINGS = Object.freeze({
 	reclaim: "ctrl+c",
 } as const);
 
-type PluginUICustomEditorProps = Readonly<{
+type PluginUICustomBounds = Readonly<{
+	height: number;
+	left: number;
+	top: number;
+	width: number;
+}>;
+
+type PluginUICustomPresentationProps = Readonly<{
 	children: ReactNode;
 	pluginRuntime?: PluginRuntime;
 	sessionId: string;
 }>;
+
+type PluginUICustomPresentationLayerProps = Readonly<{
+	component: PluginUICustomComponent<unknown> | null;
+	context: PluginUICustomContext<unknown>;
+	height: number;
+	request: PluginUICustomHostRequest;
+	theme: Theme;
+	width: number;
+}>;
+
+const CUSTOM_UI_OVERLAY_MAX_WIDTH = 80;
+const CUSTOM_UI_OVERLAY_MAX_HEIGHT = 24;
+const CUSTOM_UI_OVERLAY_MARGIN = 2;
+
+const getCustomUIFooterHint = (
+	presentation: PluginUICustomHostRequest["presentation"]
+): string =>
+	presentation === "editor"
+		? "Escape dismiss · Ctrl+C reclaim editor"
+		: "Escape dismiss · Ctrl+C reclaim app";
+
+const getPluginUICustomBounds = (
+	presentation: PluginUICustomHostRequest["presentation"],
+	width: number,
+	height: number
+): PluginUICustomBounds => {
+	if (presentation === "overlay") {
+		const boundedWidth = Math.min(
+			CUSTOM_UI_OVERLAY_MAX_WIDTH,
+			Math.max(1, width - CUSTOM_UI_OVERLAY_MARGIN * 2)
+		);
+		const boundedHeight = Math.min(
+			CUSTOM_UI_OVERLAY_MAX_HEIGHT,
+			Math.max(1, height - CUSTOM_UI_OVERLAY_MARGIN * 2)
+		);
+		return {
+			height: boundedHeight,
+			left: Math.floor((width - boundedWidth) / 2),
+			top: Math.floor((height - boundedHeight) / 2),
+			width: boundedWidth,
+		};
+	}
+	return { height, left: 0, top: 0, width };
+};
 
 const customUIContext = (
 	request: PluginUICustomHostRequest,
@@ -432,26 +486,91 @@ const customUIContext = (
 	width: number,
 	height: number,
 	theme: Theme
-): PluginUICustomContext<unknown> =>
-	Object.freeze({
+): PluginUICustomContext<unknown> => {
+	const bounds = getPluginUICustomBounds(request.presentation, width, height);
+	return Object.freeze({
 		done: request.done,
 		environment: Object.freeze({
 			executionMode: "interactive",
 			sessionId,
 		}),
-		height,
+		height: bounds.height,
 		keybindings: CUSTOM_UI_KEYBINDINGS,
 		signal: request.signal,
 		theme,
-		width,
+		width: bounds.width,
 	});
+};
 
-/** Replaces one Session's composer region without owning its renderer or transcript. */
-export function PluginUICustomEditor({
+function PluginUICustomPresentationLayer({
+	component,
+	context,
+	height,
+	request,
+	theme,
+	width,
+}: PluginUICustomPresentationLayerProps) {
+	const bounds = getPluginUICustomBounds(request.presentation, width, height);
+	const content =
+		component === null ? (
+			<text fg={theme.colors.textMuted}>Loading custom Plugin UI…</text>
+		) : (
+			<PluginUICustomErrorBoundary key={request.id} onError={request.fail}>
+				{createElement(component, context)}
+			</PluginUICustomErrorBoundary>
+		);
+	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes receive terminal mouse events.
+		<box
+			height={height}
+			left={0}
+			onMouseDown={(event) => event.stopPropagation()}
+			position="absolute"
+			top={0}
+			width={width}
+			zIndex={100}
+		>
+			{request.presentation === "overlay" ? (
+				<box
+					backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
+					height={height}
+					left={0}
+					position="absolute"
+					top={0}
+					width={width}
+				/>
+			) : null}
+			<box
+				backgroundColor={
+					request.presentation === "full-screen"
+						? theme.colors.background
+						: theme.colors.backgroundElement
+				}
+				height={bounds.height}
+				left={bounds.left}
+				overflow="hidden"
+				position="absolute"
+				top={bounds.top}
+				width={bounds.width}
+				zIndex={1}
+			>
+				<box flexDirection="column" height="100%" width="100%">
+					{content}
+					<text fg={theme.colors.textMuted} wrapMode="word">
+						{getCustomUIFooterHint(request.presentation)}
+					</text>
+				</box>
+			</box>
+		</box>
+	);
+}
+
+/** Mounts host-mediated custom UI without taking ownership of the renderer. */
+export function PluginUICustomPresentation({
 	children,
 	pluginRuntime: providedPluginRuntime,
 	sessionId,
-}: PluginUICustomEditorProps) {
+}: PluginUICustomPresentationProps) {
 	const host = useOptionalPluginUIHost();
 	const pluginRuntime = providedPluginRuntime ?? getInteractivePluginRuntime();
 	const request = useSyncExternalStore(
@@ -579,14 +698,14 @@ export function PluginUICustomEditor({
 						currentTheme
 					),
 				};
-	return (
-		<>
-			<box flexShrink={0} visible={activeRequest === null} width="100%">
-				{children}
-			</box>
-			{activeRequest === null ? null : (
+	if (activeRequest?.presentation === "editor") {
+		return (
+			<>
+				<box flexShrink={0} visible={false} width="100%">
+					{children}
+				</box>
 				<box flexDirection="column" flexShrink={0} width="100%">
-					{customContent === null || customContent.component === null ? (
+					{customContent?.component === null || customContent === null ? (
 						<text fg={currentTheme.colors.textMuted}>
 							Loading custom Plugin UI…
 						</text>
@@ -599,10 +718,35 @@ export function PluginUICustomEditor({
 						</PluginUICustomErrorBoundary>
 					)}
 					<text fg={currentTheme.colors.textMuted} wrapMode="word">
-						Escape dismiss · Ctrl+C reclaim editor
+						{getCustomUIFooterHint(activeRequest.presentation)}
 					</text>
 				</box>
-			)}
+			</>
+		);
+	}
+
+	const portal =
+		activeRequest === null || customContent === null || renderer.isDestroyed
+			? null
+			: createPortal(
+					<PluginUICustomPresentationLayer
+						component={customContent.component}
+						context={customContent.context}
+						height={dimensions.height}
+						request={activeRequest}
+						theme={currentTheme}
+						width={dimensions.width}
+					/>,
+					renderer.root,
+					null,
+					activeRequest.id
+				);
+	return (
+		<>
+			<box flexShrink={0} width="100%">
+				{children}
+			</box>
+			{portal}
 		</>
 	);
 }
@@ -772,6 +916,7 @@ const createPluginUIHost = ({
 				const requestId = `plugin-custom-${crypto.randomUUID()}`;
 				const invitationLayerId = `${requestId}-invitation`;
 				const title = options?.title ?? "Custom Plugin UI";
+				const presentationMode = options?.presentation ?? "editor";
 				let accepted = invocation === "command";
 				let settled = false;
 				let invitationOpen = false;
@@ -859,6 +1004,7 @@ const createPluginUIHost = ({
 					sessionId: owner.sessionId,
 					signal: controller.signal,
 					title,
+					presentation: presentationMode,
 				});
 				activeCustomRequest = cancel;
 				activeRequests.add(cancel);

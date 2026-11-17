@@ -142,9 +142,15 @@ Prompt observers can use `onUIPromptStart` and `onUIPromptEnd`. Their context id
 
 One-Shot, JSON, Print, and RPC execution do not render Plugin UI. If there is no Interactive Session host, methods use terminal-free defaults: selection/input/editor return `undefined`, confirmation returns `false`, notifications do nothing, theme listing is empty, theme lookup returns `undefined`, and theme changes return a failure result. This keeps noninteractive and RPC execution React-free; it does not imply that an RPC UI capability is available.
 
-### Temporary React editor
+### Temporary React UI
 
-A Plugin Command can temporarily replace the composer through `ui.custom()`. Its factory may be asynchronous and returns a React component; the host supplies the current theme, composer keybindings, an `AbortSignal`, `done(value)`, terminal dimensions, and the Interactive Session environment. The composer binding list and entries are read-only snapshots; copy them before passing them to mutable OpenTUI options. The Plugin uses the existing renderer and does not own terminal or renderer lifecycle. The transcript and Session view remain live while the editor is open.
+A Plugin Command can present a React component through `ui.custom(factory, options)`. `options.presentation` selects one of three host-managed placements and defaults to `"editor"`:
+
+- `"editor"` temporarily replaces the composer while leaving the transcript visible.
+- `"overlay"` places a bounded panel over the existing application; the remaining application stays visible.
+- `"full-screen"` covers the visible application region while it remains mounted and continues updating.
+
+Overlay geometry is centered and constrained to the current terminal; a resize updates the component's available `width` and `height`. Every mode uses the existing renderer and React root. Plugins contribute a React component but never create or own a renderer or terminal. The host supplies the current theme, composer keybindings, an `AbortSignal`, `done(value)`, presentation bounds, and the Interactive Session environment. The composer binding list and entries are read-only snapshots; copy them before passing them to mutable OpenTUI options.
 
 ```tsx
 import { useKeyboard } from "@opentui/react";
@@ -180,9 +186,11 @@ const replyPlugin: PluginFactory = (api) => {
 export default replyPlugin;
 ```
 
+The example above omits `presentation` to use editor replacement. The same component can be presented with `{ title: "Reply", presentation: "overlay" }` or `{ title: "Reply", presentation: "full-screen" }`.
+
 An explicitly selected Plugin Command opens directly. Requests from Tools or other event-originated callbacks show a new host invitation every time and cannot mount or take focus until accepted. One request at a time is admitted per Interactive UI host; a competing request rejects with `PluginUICustomError` and code `plugin_ui_custom_busy`. Factory or React component failures reject with code `plugin_ui_custom_failed` and are recovered by the host's React error boundary.
 
-`ui.custom()` returns `Promise<T | undefined>`. `done(value)` settles it once; Escape dismisses and Ctrl+C reclaims the composer. `undefined` deliberately does not distinguish dismissal, cancellation, declined consent, unsupported execution mode, or `done(undefined)`. Return a non-`undefined` value when the Plugin needs to distinguish successful completion. Session/view replacement, Plugin reload or disable, and renderer teardown abort the provided signal, unmount the component, release admission, and restore the composer and focus. Agent Turn completion or interruption alone does not close the editor.
+`ui.custom()` returns `Promise<T | undefined>`. `done(value)` settles it once; Escape dismisses and Ctrl+C cancels the UI and reclaims the host. `undefined` deliberately does not distinguish dismissal, cancellation, declined consent, unsupported execution mode, or `done(undefined)`. Return a non-`undefined` value when the Plugin needs to distinguish successful completion. Session/view replacement, Plugin reload or disable, and renderer teardown abort the provided signal, unmount the component, release admission, and restore the previous composer, focus, and current application content. Agent Turn completion or interruption alone does not close custom UI.
 
 In RPC, JSON, and Print execution, `custom()` resolves to `undefined` without invoking the component factory or producing terminal controls. The focused host contract and a runnable React example are in [custom-editor-plugin.tsx](../../examples/custom-editor-plugin.tsx).
 

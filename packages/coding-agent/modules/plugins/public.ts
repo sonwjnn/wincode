@@ -150,14 +150,16 @@ export type PluginUICustomContext<Value> = Readonly<{
 		executionMode: "interactive";
 		sessionId: string;
 	}>;
+	/** Available presentation height, updated when the terminal is resized. */
 	height: number;
 	keybindings: PluginUICustomKeybindings;
 	signal: AbortSignal;
 	theme: Theme;
+	/** Available presentation width, updated when the terminal is resized. */
 	width: number;
 }>;
 
-/** A React component mounted by the host in the existing editor region. */
+/** A React component mounted by the host in the requested custom UI presentation. */
 export type PluginUICustomComponent<Value> = ComponentType<
 	PluginUICustomContext<Value>
 >;
@@ -167,7 +169,15 @@ export type PluginUICustomFactory<Value> = (
 	context: PluginUICustomContext<Value>
 ) => PluginUICustomComponent<Value> | Promise<PluginUICustomComponent<Value>>;
 
-export type PluginUICustomOptions = Readonly<{ title?: string }>;
+export type PluginUICustomOptions = Readonly<{
+	/**
+	 * Selects where the host presents custom UI: `editor` replaces the composer,
+	 * `overlay` uses a centered bounded layer, and `full-screen` covers the app.
+	 * All modes use the host's renderer and root. Defaults to `editor`.
+	 */
+	presentation?: "editor" | "overlay" | "full-screen";
+	title?: string;
+}>;
 
 export type PluginThemeChangeResult =
 	| Readonly<{ success: true }>

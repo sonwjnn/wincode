@@ -118,6 +118,32 @@ const pluginUiFixture: PluginFactory = (api) => {
 		}),
 	});
 	plugin.registerTool({
+		description: "Request an overlay through host-mediated Plugin UI.",
+		inputSchema: z.object({}),
+		name: "ui_custom_overlay",
+		handler: async (_input, { ui }) => ({
+			output:
+				(await ui.custom(customFactory, {
+					presentation: "overlay",
+					title: "Fixture event custom overlay",
+				})) ?? "undefined",
+			type: "success",
+		}),
+	});
+	plugin.registerTool({
+		description: "Request a full-screen custom UI through host mediation.",
+		inputSchema: z.object({}),
+		name: "ui_custom_full_screen",
+		handler: async (_input, { ui }) => ({
+			output:
+				(await ui.custom(customFactory, {
+					presentation: "full-screen",
+					title: "Fixture event full-screen UI",
+				})) ?? "undefined",
+			type: "success",
+		}),
+	});
+	plugin.registerTool({
 		description: "Request input through host-mediated Plugin UI.",
 		inputSchema: z.object({}),
 		name: "ui_input",
@@ -249,6 +275,24 @@ const pluginUiFixture: PluginFactory = (api) => {
 			"undefined",
 	});
 	plugin.registerCommand({
+		description: "Open a custom React overlay directly from a user command.",
+		name: "custom-overlay",
+		handler: async ({ ui }) =>
+			(await ui.custom(customFactory, {
+				presentation: "overlay",
+				title: "Fixture custom overlay",
+			})) ?? "undefined",
+	});
+	plugin.registerCommand({
+		description: "Open full-screen custom React UI from a user command.",
+		name: "custom-full-screen",
+		handler: async ({ ui }) =>
+			(await ui.custom(customFactory, {
+				presentation: "full-screen",
+				title: "Fixture full-screen custom UI",
+			})) ?? "undefined",
+	});
+	plugin.registerCommand({
 		description: "Return the stable busy error for a competing custom UI.",
 		name: "custom-busy",
 		handler: async ({ ui }) => {
@@ -267,6 +311,19 @@ const pluginUiFixture: PluginFactory = (api) => {
 			customUIState.throwComponent = true;
 			try {
 				await ui.custom(customFactory);
+				return "unexpected-success";
+			} catch (error) {
+				return errorCode(error);
+			}
+		},
+	});
+	plugin.registerCommand({
+		description: "Return the stable error for a failing full-screen component.",
+		name: "custom-full-screen-component-failure",
+		handler: async ({ ui }) => {
+			customUIState.throwComponent = true;
+			try {
+				await ui.custom(customFactory, { presentation: "full-screen" });
 				return "unexpected-success";
 			} catch (error) {
 				return errorCode(error);
