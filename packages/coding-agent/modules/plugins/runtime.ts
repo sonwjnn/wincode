@@ -485,6 +485,13 @@ export const createPluginRuntime = (
 			pluginUIHandles.delete(sessionId);
 		}
 	};
+	const clearPluginUIContributions = (pluginId: string): void => {
+		for (const host of new Set(
+			[...pluginUIHosts.values()].map(({ host }) => host)
+		)) {
+			host.clearPlugin(pluginId);
+		}
+	};
 	const getPluginUI = (
 		pluginId: string,
 		sessionId?: string,
@@ -1414,6 +1421,7 @@ export const createPluginRuntime = (
 			for (const sessionId of pluginUIHandles.keys()) {
 				closePluginUIHandles(sessionId, undefined, pluginId);
 			}
+			clearPluginUIContributions(pluginId);
 			addDiagnostic(plugin, message);
 		},
 		async executeCommand(pluginId, name, context) {
@@ -1664,9 +1672,17 @@ export const createPluginRuntime = (
 						sessionStates.delete(sessionId);
 					}
 				}
+				const hosts = new Set(
+					[...pluginUIHosts.values()].map(({ host }) => host)
+				);
 				for (const [sessionId, binding] of pluginUIHosts) {
 					pluginUIHosts.delete(sessionId);
 					closePluginUIHandles(sessionId, binding);
+				}
+				for (const host of hosts) {
+					for (const plugin of plugins) {
+						host.clearPlugin(plugin.id);
+					}
 				}
 				await shutdownStartedPlugins();
 			})();

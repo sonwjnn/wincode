@@ -8,9 +8,20 @@ import {
 	isString,
 	isUndefined,
 } from "@wincode/utils";
-import { memo, type ReactNode, useMemo, useRef, useState } from "react";
+import {
+	memo,
+	type ReactNode,
+	useCallback,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
+import {
+	useOptionalPluginUIHost,
+	usePluginUIContributions,
+} from "@/modules/plugins/ui/plugin-ui-host";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useHideThinking } from "@/modules/settings/hide-thinking-settings";
 import {
@@ -385,7 +396,17 @@ const ToolFailureMessage = ({
 	);
 };
 
-function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
+function ToolMessagePart({
+	agent,
+	expanded,
+	onExpandedChange,
+	part,
+}: {
+	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const fallbackError = getFallbackError(part);
 	const isSkillCall =
@@ -418,7 +439,13 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	return (
 		<>
 			{toolLine}
-			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
+			{isShellOutput ? (
+				<ShellOutputBlock
+					expanded={expanded}
+					onExpandedChange={onExpandedChange}
+					part={part}
+				/>
+			) : null}
 			{isEditPreview && part.type === "tool-edit" ? (
 				<EditDiffBlock agent={agent} part={part} />
 			) : null}
@@ -436,6 +463,34 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 
 const MemoizedToolMessagePart = memo(ToolMessagePart);
 
+const renderReasoningGroup = (
+	group: PartGroup,
+	hideThinking: boolean,
+	hiddenThinkingLabel: string | undefined,
+	streaming: boolean,
+	colors: ThemeColors
+): ReactNode => {
+	if (hideThinking) {
+		return (
+			<box marginBottom={1} width="100%">
+				<box paddingX={1} width="100%">
+					<text fg={colors.thinkingText}>
+						<em>{hiddenThinkingLabel ?? "Thinking..."}</em>
+					</text>
+				</box>
+			</box>
+		);
+	}
+	return (
+		<box marginBottom={1} width="100%">
+			<ReasoningMessagePart
+				streaming={streaming}
+				text={getReasoningText(group.parts)}
+			/>
+		</box>
+	);
+};
+
 /**
  * The themed session block for a completed `shell` call: the bounded
  * command header, execution status, and a preview of the beginning of the
@@ -446,11 +501,20 @@ const MemoizedToolMessagePart = memo(ToolMessagePart);
  * output and the measured width, so streamed updates of neighboring parts
  * never re-sanitize or re-lay-out settled results.
  */
-function ShellOutputBlock({ part }: { part: ToolPart }) {
+function ShellOutputBlock({
+	expanded: expandedOverride,
+	onExpandedChange,
+	part,
+}: {
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
 	const [contentWidth, setContentWidth] = useState(0);
-	const [expanded, setExpanded] = useState(false);
+	const [localExpanded, setLocalExpanded] = useState(false);
+	const expanded = expandedOverride ?? localExpanded;
 	const output = getToolOutputRecord(part);
 	const rawText = formatUnknown(output.output);
 	const exitCode = isNumber(output.exitCode) ? output.exitCode : null;
@@ -475,7 +539,15 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	);
 	const indicator = resolveOverflowIndicator(preview);
 	const canExpand = preview.hasOverflow;
-	useToggleShortcut("ctrl+o", () => setExpanded((value) => !value), canExpand);
+	const toggleExpanded = useCallback(() => {
+		const next = !expanded;
+		if (onExpandedChange === undefined) {
+			setLocalExpanded(next);
+		} else {
+			onExpandedChange(next);
+		}
+	}, [expanded, onExpandedChange]);
+	useToggleShortcut("ctrl+o", toggleExpanded, canExpand);
 
 	// The measured content width drives preview wrapping and the header bound.
 	// Reflowing on real size changes (terminal resize, sidebar toggle) keeps the
@@ -653,15 +725,33 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 export function BotMessageContent({
 	agent = buildAgent.id,
 	parts,
+	sessionId,
 	streaming = false,
 }: {
 	/** The agent that produced the message; drives the running-tool spinner color. */
 	agent?: AgentId;
 	parts: SessionMessage["parts"];
+	sessionId?: string;
 	streaming?: boolean;
 }) {
 	const { colors } = useTheme();
 	const hideThinking = useHideThinking();
+	const pluginUIHost = useOptionalPluginUIHost();
+	const contributions = usePluginUIContributions(sessionId ?? "");
+	const hasHostedToolExpansion =
+		pluginUIHost !== null && sessionId !== undefined;
+	const expandedTools = contributions.toolsExpanded;
+	const onExpandedToolsChange = useCallback(
+		(expanded: boolean) => {
+			if (sessionId !== undefined) {
+				pluginUIHost?.setToolsExpanded(sessionId, expanded);
+			}
+		},
+		[pluginUIHost, sessionId]
+	);
+	const shellOutputExpanded = hasHostedToolExpansion
+		? expandedTools
+		: undefined;
 	const groups = groupConsecutiveParts(parts).filter(
 		(group) => group.type !== "step-start"
 	);
@@ -680,50 +770,47 @@ export function BotMessageContent({
 					}
 					width="100%"
 				>
-					{group.type === "reasoning" ? (
-						<box marginBottom={1} width="100%">
-							{hideThinking ? (
-								<box paddingX={1} width="100%">
-									<text fg={colors.thinkingText}>
-										<em>Thinking...</em>
-									</text>
-								</box>
-							) : (
-								<ReasoningMessagePart
-									streaming={streaming}
-									text={getReasoningText(group.parts)}
-								/>
-							)}
-						</box>
-					) : (
-						group.parts.map((part, index) => {
-							if (part.type === "reasoning") {
+					{group.type === "reasoning"
+						? renderReasoningGroup(
+								group,
+								hideThinking,
+								contributions.hiddenThinkingLabel,
+								streaming,
+								colors
+							)
+						: group.parts.map((part, index) => {
+								if (part.type === "reasoning") {
+									return null;
+								}
+
+								if (isToolPart(part)) {
+									return (
+										<MemoizedToolMessagePart
+											agent={agent}
+											expanded={shellOutputExpanded}
+											key={getToolKey(part, index)}
+											onExpandedChange={
+												hasHostedToolExpansion
+													? onExpandedToolsChange
+													: undefined
+											}
+											part={part}
+										/>
+									);
+								}
+
+								if (part.type === "text") {
+									return (
+										<MarkdownMessagePart
+											key={getContentPartKey(part, index)}
+											streaming={streaming}
+											text={part.text}
+										/>
+									);
+								}
+
 								return null;
-							}
-
-							if (isToolPart(part)) {
-								return (
-									<MemoizedToolMessagePart
-										agent={agent}
-										key={getToolKey(part, index)}
-										part={part}
-									/>
-								);
-							}
-
-							if (part.type === "text") {
-								return (
-									<MarkdownMessagePart
-										key={getContentPartKey(part, index)}
-										streaming={streaming}
-										text={part.text}
-									/>
-								);
-							}
-
-							return null;
-						})
-					)}
+							})}
 				</box>
 			))}
 		</box>

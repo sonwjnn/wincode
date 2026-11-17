@@ -8,6 +8,7 @@ import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type {
 	PluginUICustomComponent,
 	PluginUICustomContext,
+	PluginUIUpdate,
 	SessionSdk,
 	SessionSdkEvent,
 	SessionSdkHandle,
@@ -18,7 +19,10 @@ import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginTools } from "@/modules/plugins/tools";
 import type { PluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
 import {
+	PluginUIContributionStatus,
 	PluginUICustomEditor,
+	PluginUIFooter,
+	PluginUIHeader,
 	PluginUIHostProvider,
 	usePluginUIHost,
 } from "@/modules/plugins/ui/plugin-ui-host";
@@ -39,6 +43,7 @@ import {
 } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import customEditorPlugin from "../../examples/custom-editor-plugin";
+import pluginUIContributionsPlugin from "../../examples/plugin-ui-contributions-plugin";
 import pluginUiFixture from "../fixtures/plugin-ui-fixture";
 import pluginUiOtherFixture from "../fixtures/plugin-ui-other-fixture";
 import {
@@ -102,6 +107,10 @@ const pluginUiTestEnvironment = async (
 				id: "plugin_ui_other_fixture",
 			},
 			{ factory: customEditorPlugin, id: "custom_editor" },
+			{
+				factory: pluginUIContributionsPlugin,
+				id: "issue_tracker_ui",
+			},
 		],
 		cliPaths: [],
 		config: {
@@ -114,6 +123,7 @@ const pluginUiTestEnvironment = async (
 		userDataDir: root,
 	});
 	let pluginUIHost: PluginUIHost | undefined;
+	const uiUpdates: PluginUIUpdate[] = [];
 	let isTopLayer: (id: string) => boolean = () => false;
 	const transcriptState: {
 		advance: () => void;
@@ -169,12 +179,15 @@ const pluginUiTestEnvironment = async (
 			return <FixtureComposer />;
 		}
 		return (
-			<PluginUICustomEditor
-				{...(bindPluginUIHostInEditor ? { pluginRuntime: runtime } : {})}
-				sessionId={sessionId}
-			>
-				<FixtureComposer />
-			</PluginUICustomEditor>
+			<>
+				<PluginUIContributionStatus sessionId={sessionId} />
+				<PluginUICustomEditor
+					{...(bindPluginUIHostInEditor ? { pluginRuntime: runtime } : {})}
+					sessionId={sessionId}
+				>
+					<FixtureComposer />
+				</PluginUICustomEditor>
+			</>
 		);
 	}
 	const openAgentSession = async (
@@ -240,14 +253,20 @@ const pluginUiTestEnvironment = async (
 			<ToastProvider>
 				<KeyboardLayerProvider>
 					<DialogProvider>
-						<PluginUIHostProvider>
+						<PluginUIHostProvider onUpdate={(update) => uiUpdates.push(update)}>
 							<CapturePluginUIHost />
+							<PluginUIHeader>
+								<text>Host default header</text>
+							</PluginUIHeader>
 							<TestTranscript />
 							<CustomEditorRegion />
 							<ThemeProbe label="global" />
 							<LocalStyleProvider colors={{ primary: "#123456" }}>
 								<ThemeProbe label="local" />
 							</LocalStyleProvider>
+							<PluginUIFooter branch="main" sessionId={sessionId}>
+								<text>Host default footer</text>
+							</PluginUIFooter>
 						</PluginUIHostProvider>
 					</DialogProvider>
 				</KeyboardLayerProvider>
@@ -265,13 +284,14 @@ const pluginUiTestEnvironment = async (
 	await runtime.startSession({ executionMode, sessionId, workspace });
 	const executeCommand = async (
 		pluginId: string,
-		name: string
+		name: string,
+		targetSessionId = sessionId
 	): Promise<{ result: Promise<string | undefined> }> => {
 		let result: Promise<string | undefined> | undefined;
 		await act(async () => {
 			result = runtime.executeCommand(pluginId, name, {
 				argument: "",
-				sessionId,
+				sessionId: targetSessionId,
 				workspace,
 			});
 			await setup.waitForVisualIdle();
@@ -349,6 +369,7 @@ const pluginUiTestEnvironment = async (
 		executeCommand,
 		pluginUIHost,
 		runtime,
+		uiUpdates,
 		executeCustomTool,
 		customUIState,
 		destroyRenderer,
@@ -366,6 +387,484 @@ const pluginUiTestEnvironment = async (
 		setCustomEditorMounted: customEditorState.setMounted,
 	};
 };
+
+test("presentation controls are view-scoped, last-setter-owned, and title updates use the approved data mapping", async () => {
+	const environment = await pluginUiTestEnvironment();
+	const otherSessionId = `${environment.sessionId}-other`;
+	let unbindOtherSession: (() => void) | undefined;
+	try {
+		const pluginUIHost = environment.pluginUIHost;
+		if (pluginUIHost === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		unbindOtherSession = environment.runtime.bindPluginUIHost(
+			otherSessionId,
+			pluginUIHost
+		);
+		await environment.runtime.startSession({
+			executionMode: "interactive",
+			sessionId: otherSessionId,
+			workspace: environment.workspace,
+		});
+		const getPresentation = (sessionId = environment.sessionId) =>
+			pluginUIHost.getContributions(sessionId);
+		const { result: fixtureControls } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"set-presentation"
+		);
+		expect(await fixtureControls).toBe("true");
+		await flushTestRenderer(environment.setup, 2);
+		expect(getPresentation()).toMatchObject({
+			hiddenThinkingLabel: "Fixture reasoning label",
+			toolsExpanded: true,
+			workingIndicator: { frames: ["A", "B"], intervalMs: 120 },
+			workingMessage: "Fixture working message",
+			workingVisible: false,
+		});
+		expect(environment.uiUpdates).toContainEqual({
+			type: "title",
+			pluginId: "plugin_ui_fixture",
+			value: "Fixture terminal title",
+		});
+
+		const { result: otherViewControls } = await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"other-presentation",
+			otherSessionId
+		);
+		expect(await otherViewControls).toBe("false");
+		await flushTestRenderer(environment.setup, 2);
+		expect(getPresentation()).toMatchObject({
+			hiddenThinkingLabel: "Fixture reasoning label",
+			toolsExpanded: true,
+			workingMessage: "Fixture working message",
+			workingVisible: false,
+		});
+		expect(getPresentation(otherSessionId)).toMatchObject({
+			hiddenThinkingLabel: "Other reasoning label",
+			toolsExpanded: false,
+			workingIndicator: { frames: ["O"] },
+			workingMessage: "Other working message",
+			workingVisible: true,
+		});
+
+		const { result: otherControls } = await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"other-presentation"
+		);
+		expect(await otherControls).toBe("false");
+		await flushTestRenderer(environment.setup, 2);
+		expect(getPresentation()).toMatchObject({
+			hiddenThinkingLabel: "Other reasoning label",
+			toolsExpanded: false,
+			workingIndicator: { frames: ["O"] },
+			workingMessage: "Other working message",
+			workingVisible: true,
+		});
+		expect(environment.uiUpdates).toContainEqual({
+			type: "title",
+			pluginId: "plugin_ui_other_fixture",
+			value: "Other terminal title",
+		});
+
+		const { result: staleClear } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"clear-presentation"
+		);
+		expect(await staleClear).toBe("false");
+		await act(() =>
+			environment.runtime.disablePlugin(
+				"plugin_ui_fixture",
+				"Plugin disabled after losing the presentation override."
+			)
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(getPresentation()).toMatchObject({
+			hiddenThinkingLabel: "Other reasoning label",
+			toolsExpanded: false,
+			workingIndicator: { frames: ["O"] },
+			workingMessage: "Other working message",
+			workingVisible: true,
+		});
+		expect(getPresentation(otherSessionId)).toMatchObject({
+			hiddenThinkingLabel: "Other reasoning label",
+			toolsExpanded: false,
+			workingIndicator: { frames: ["O"] },
+			workingMessage: "Other working message",
+			workingVisible: true,
+		});
+		expect(environment.uiUpdates).not.toContainEqual({
+			type: "title",
+			pluginId: "plugin_ui_fixture",
+			value: null,
+		});
+
+		await act(() =>
+			environment.runtime.disablePlugin(
+				"plugin_ui_other_fixture",
+				"Plugin disabled to restore presentation defaults."
+			)
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(getPresentation()).toMatchObject({
+			statuses: [],
+			widgets: [],
+		});
+		const defaults = getPresentation();
+		expect(defaults.hiddenThinkingLabel).toBeUndefined();
+		expect(defaults.workingIndicator).toBeUndefined();
+		expect(defaults.workingMessage).toBeUndefined();
+		expect(defaults.workingVisible).toBeUndefined();
+		expect(defaults.toolsExpanded ?? false).toBe(false);
+		expect(getPresentation(otherSessionId)).toMatchObject({
+			statuses: [],
+			widgets: [],
+		});
+		expect(environment.uiUpdates).toContainEqual({
+			type: "title",
+			pluginId: "plugin_ui_other_fixture",
+			value: null,
+		});
+	} finally {
+		unbindOtherSession?.();
+		await environment.dispose();
+	}
+});
+
+test("header and footer have host-wide first-owner conflicts and restore defaults without stacking", async () => {
+	const environment = await pluginUiTestEnvironment();
+	const otherSessionId = `${environment.sessionId}-other`;
+	let unbindOtherSession: (() => void) | undefined;
+	try {
+		const pluginUIHost = environment.pluginUIHost;
+		if (pluginUIHost === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		unbindOtherSession = environment.runtime.bindPluginUIHost(
+			otherSessionId,
+			pluginUIHost
+		);
+		await environment.runtime.startSession({
+			executionMode: "interactive",
+			sessionId: otherSessionId,
+			workspace: environment.workspace,
+		});
+		const { result: ownerResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"set-ui-chrome"
+		);
+		expect(JSON.parse((await ownerResult) ?? "{}")).toEqual({
+			header: { success: true },
+			footer: { success: true },
+		});
+		await flushTestRenderer(environment.setup, 2);
+		let frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Fixture header opencode 64x16");
+		expect(frame).toContain("Fixture footer opencode 64x16 main");
+
+		const { result: competingResult } = await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"compete-ui-chrome",
+			otherSessionId
+		);
+		expect(JSON.parse((await competingResult) ?? "{}")).toEqual({
+			header: {
+				code: "plugin_ui_contribution_conflict",
+				success: false,
+				surface: "header",
+			},
+			footer: {
+				code: "plugin_ui_contribution_conflict",
+				success: false,
+				surface: "footer",
+			},
+		});
+		const { result: competingClear } = await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"other-clear-ui-chrome",
+			otherSessionId
+		);
+		expect(JSON.parse((await competingClear) ?? "{}")).toMatchObject({
+			header: { success: false, surface: "header" },
+			footer: { success: false, surface: "footer" },
+		});
+		await flushTestRenderer(environment.setup, 2);
+		frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Fixture header opencode 64x16");
+		expect(frame).toContain("Fixture footer opencode 64x16 main");
+		expect(frame).not.toContain("Other Plugin header");
+
+		const { result: replacementResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"replace-ui-header"
+		);
+		expect(JSON.parse((await replacementResult) ?? "{}")).toEqual({
+			success: true,
+		});
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Replacement header opencode"
+		);
+
+		const { result: ownerClear } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"clear-ui-chrome"
+		);
+		expect(JSON.parse((await ownerClear) ?? "{}")).toEqual({
+			header: { success: true },
+			footer: { success: true },
+		});
+		await flushTestRenderer(environment.setup, 2);
+		frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Host default header");
+		expect(frame).toContain("Host default footer");
+		expect(frame).not.toContain("Other Plugin header");
+
+		const { result: explicitClaim } = await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"claim-ui-chrome"
+		);
+		expect(JSON.parse((await explicitClaim) ?? "{}")).toEqual({
+			header: { success: true },
+			footer: { success: true },
+		});
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Other Plugin header"
+		);
+
+		await act(() =>
+			environment.runtime.disablePlugin(
+				"plugin_ui_other_fixture",
+				"Plugin disabled for chrome ownership test."
+			)
+		);
+		await flushTestRenderer(environment.setup, 2);
+		frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Host default header");
+		expect(frame).toContain("Host default footer");
+	} finally {
+		unbindOtherSession?.();
+		await environment.dispose();
+	}
+});
+
+test("status and widget keys sort by Plugin Identifier and key, coexist across owners, and clear independently", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result: fixtureSet } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"ui-contributions"
+		);
+		const { result: otherSet } = await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"other-ui-contributions"
+		);
+		expect(await fixtureSet).toBe("contributions set");
+		expect(await otherSet).toBe("other contributions set");
+		await flushTestRenderer(environment.setup, 2);
+
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Other Plugin alpha status");
+		expect(frame).toContain("Fixture alpha widget");
+		expect(frame).toContain("Fixture shared widget");
+		expect(frame).toContain("Other Plugin alpha widget");
+		expect(frame).toContain("Other Plugin shared widget");
+		expect(frame).toContain("Fixture below widget");
+		expect(frame.indexOf("Fixture alpha widget")).toBeLessThan(
+			frame.indexOf("Fixture shared widget")
+		);
+		expect(frame.indexOf("Fixture alpha widget")).toBeLessThan(
+			frame.indexOf("Other Plugin alpha widget")
+		);
+		expect(frame.indexOf("Fixture alpha widget")).toBeLessThan(
+			frame.indexOf("Fixture composer")
+		);
+		expect(frame.indexOf("Fixture below widget")).toBeGreaterThan(
+			frame.indexOf("Fixture composer")
+		);
+		const snapshot = environment.pluginUIHost?.getContributions(
+			environment.sessionId
+		);
+		if (snapshot === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		expect(
+			snapshot.statuses.map(({ pluginId, key }) => `${pluginId}/${key}`)
+		).toEqual([
+			"plugin_ui_fixture/alpha",
+			"plugin_ui_fixture/shared",
+			"plugin_ui_other_fixture/alpha",
+			"plugin_ui_other_fixture/shared",
+		]);
+		expect(
+			snapshot.widgets.map(({ pluginId, key }) => `${pluginId}/${key}`)
+		).toEqual([
+			"plugin_ui_fixture/alpha",
+			"plugin_ui_fixture/below",
+			"plugin_ui_fixture/shared",
+			"plugin_ui_other_fixture/alpha",
+			"plugin_ui_other_fixture/shared",
+		]);
+		expect(environment.uiUpdates).toContainEqual({
+			type: "status",
+			pluginId: "plugin_ui_fixture",
+			key: "shared",
+			value: "Fixture shared status",
+		});
+		expect(environment.uiUpdates).toContainEqual({
+			type: "widget",
+			pluginId: "plugin_ui_fixture",
+			key: "shared",
+			value: ["Fixture shared widget"],
+			placement: "aboveEditor",
+		});
+
+		const { result: fixtureClear } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"clear-ui-contributions"
+		);
+		expect(await fixtureClear).toBe("contributions cleared");
+		expect(environment.uiUpdates).toContainEqual({
+			type: "status",
+			pluginId: "plugin_ui_fixture",
+			key: "shared",
+			value: null,
+		});
+		expect(environment.uiUpdates).toContainEqual({
+			type: "widget",
+			pluginId: "plugin_ui_fixture",
+			key: "shared",
+			value: null,
+			placement: "aboveEditor",
+		});
+		await flushTestRenderer(environment.setup, 2);
+		const afterFixtureClear = environment.setup.captureCharFrame();
+		const afterFixtureClearSnapshot =
+			environment.pluginUIHost?.getContributions(environment.sessionId);
+		if (afterFixtureClearSnapshot === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		expect(
+			afterFixtureClearSnapshot.statuses.map(
+				({ pluginId, key }) => `${pluginId}/${key}`
+			)
+		).toEqual([
+			"plugin_ui_other_fixture/alpha",
+			"plugin_ui_other_fixture/shared",
+		]);
+		expect(
+			afterFixtureClearSnapshot.widgets.map(
+				({ pluginId, key }) => `${pluginId}/${key}`
+			)
+		).toEqual([
+			"plugin_ui_other_fixture/alpha",
+			"plugin_ui_other_fixture/shared",
+		]);
+		expect(afterFixtureClear).not.toContain("Fixture shared widget");
+		expect(afterFixtureClear).not.toContain("Fixture alpha widget");
+		expect(afterFixtureClear).toContain("Other Plugin shared widget");
+		expect(afterFixtureClear).toContain("Other Plugin alpha widget");
+
+		await act(() =>
+			environment.runtime.disablePlugin(
+				"plugin_ui_other_fixture",
+				"Plugin disabled for contribution ownership test."
+			)
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(
+			environment.pluginUIHost?.getContributions(environment.sessionId).statuses
+		).toEqual([]);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Other Plugin shared widget"
+		);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Other Plugin alpha widget"
+		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("the verified contribution example renders and clears its Plugin UI surfaces", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result: setResult } = await environment.executeCommand(
+			"issue_tracker_ui",
+			"show-issue-ui"
+		);
+		expect(await setResult).toBe("Issue-tracker UI contributions enabled.");
+		await flushTestRenderer(environment.setup, 2);
+
+		const pluginUIHost = environment.pluginUIHost;
+		if (pluginUIHost === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		const contributions = pluginUIHost.getContributions(environment.sessionId);
+		expect(contributions.statuses).toEqual([
+			{
+				key: "sync",
+				pluginId: "issue_tracker_ui",
+				value: "Issue tracker connected",
+			},
+		]);
+		expect(contributions.widgets).toEqual([
+			{
+				key: "issue",
+				lines: ["Open issues: 4", "Reviews waiting: 2"],
+				placement: "aboveEditor",
+				pluginId: "issue_tracker_ui",
+			},
+			{
+				key: "sync-detail",
+				lines: ["Last checked just now"],
+				placement: "belowEditor",
+				pluginId: "issue_tracker_ui",
+			},
+		]);
+		expect(contributions).toMatchObject({
+			hiddenThinkingLabel: "Issue-tracker reasoning",
+			toolsExpanded: true,
+			workingIndicator: {
+				frames: ["·", "•", "●", "•"],
+				intervalMs: 120,
+			},
+			workingMessage: "Checking issue status...",
+		});
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Issue tracker · 64 columns");
+		expect(frame).toContain("Issue tracker connected");
+		expect(frame).toContain("Open issues: 4");
+		expect(frame).toContain("Last checked just now");
+		expect(environment.uiUpdates).toContainEqual({
+			type: "title",
+			pluginId: "issue_tracker_ui",
+			value: "Wincode · Issue tracker",
+		});
+
+		const { result: clearResult } = await environment.executeCommand(
+			"issue_tracker_ui",
+			"clear-issue-ui"
+		);
+		expect(await clearResult).toBe("Issue-tracker UI contributions cleared.");
+		await flushTestRenderer(environment.setup, 2);
+		expect(pluginUIHost.getChrome()).toEqual({ header: null, footer: null });
+		expect(pluginUIHost.getTitle()).toBeNull();
+		expect(
+			pluginUIHost.getContributions(environment.sessionId).statuses
+		).toEqual([]);
+		expect(
+			pluginUIHost.getContributions(environment.sessionId).widgets
+		).toEqual([]);
+		const restoredFrame = environment.setup.captureCharFrame();
+		expect(restoredFrame).toContain("Host default header");
+		expect(restoredFrame).toContain("Host default footer");
+		expect(restoredFrame).not.toContain("Issue tracker · 64 columns");
+	} finally {
+		await environment.dispose();
+	}
+});
 
 test("a direct Plugin Command opens custom UI, returns once, and restores its composer", async () => {
 	const environment = await pluginUiTestEnvironment();
@@ -1650,6 +2149,16 @@ test("JSON, Print, and RPC Plugins receive terminal-free UI defaults", async () 
 			expect(await custom).toBe("undefined");
 			expect(environment.customUIState.factoryCalls).toBe(initialFactoryCalls);
 			expect(await notification).toBe("notified");
+			const { result: presentationDefaults } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				"presentation-defaults"
+			);
+			expect(JSON.parse((await presentationDefaults) ?? "{}")).toEqual({
+				expanded: false,
+				footer: { success: true },
+				header: { success: true },
+			});
+			expect(environment.uiUpdates).toEqual([]);
 			const themeResult = JSON.parse((await theme) ?? "{}");
 			expect(themeResult).toEqual({
 				changed: {

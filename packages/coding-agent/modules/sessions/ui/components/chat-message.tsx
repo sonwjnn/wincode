@@ -23,9 +23,11 @@ import { SessionWriterAction } from "./session-writer-controls";
 
 function AssistantTranscriptContent({
 	message,
+	sessionId,
 	streaming,
 }: {
 	message: SessionMessage;
+	sessionId?: string;
 	streaming: boolean;
 }) {
 	const failureText = getAssistantFailureText(message);
@@ -34,6 +36,7 @@ function AssistantTranscriptContent({
 			<BotMessageContent
 				agent={message.metadata?.agent ?? buildAgent.id}
 				parts={message.parts}
+				sessionId={sessionId}
 				streaming={streaming}
 			/>
 		);
@@ -44,6 +47,7 @@ function AssistantTranscriptContent({
 			<BotMessageContent
 				agent={message.metadata?.agent ?? buildAgent.id}
 				parts={message.parts.filter((part) => part.type !== "text")}
+				sessionId={sessionId}
 			/>
 		</>
 	);
@@ -51,6 +55,7 @@ function AssistantTranscriptContent({
 
 export function ChatMessage({
 	footerMessage,
+	sessionId,
 	forkCheckpoints,
 	isRewindDisabled = false,
 	messages,
@@ -62,6 +67,7 @@ export function ChatMessage({
 	streaming = false,
 }: {
 	footerMessage?: SessionMessage;
+	sessionId?: string;
 	forkCheckpoints?: ReadonlyMap<
 		SessionMessageId,
 		SessionForkCheckpointAssessment
@@ -167,6 +173,7 @@ export function ChatMessage({
 						) : (
 							<AssistantTranscriptContent
 								message={message}
+								sessionId={sessionId}
 								streaming={streaming && message === latestAssistant}
 							/>
 						)}
