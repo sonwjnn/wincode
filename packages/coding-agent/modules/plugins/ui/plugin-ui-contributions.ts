@@ -1,4 +1,5 @@
 import { omitUndefined } from "@wincode/utils";
+import { compareText } from "@/shared/utils/compare-text";
 import type {
 	PluginUI,
 	PluginUIContributionResult,
@@ -144,16 +145,6 @@ type MutablePluginUIView = {
 	workingIndicator: PluginUIOwnedValue<PluginUIWorkingIndicator> | undefined;
 	workingMessage: PluginUIOwnedValue<string> | undefined;
 	workingVisible: PluginUIOwnedValue<boolean> | undefined;
-};
-
-const compareText = (left: string, right: string): number => {
-	if (left < right) {
-		return -1;
-	}
-	if (left > right) {
-		return 1;
-	}
-	return 0;
 };
 
 const sameLines = (

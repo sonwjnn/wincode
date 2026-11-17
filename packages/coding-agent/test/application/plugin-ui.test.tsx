@@ -16,6 +16,7 @@ import type {
 import { LocalStyleProvider } from "@wincode/tui";
 import { act, useRef, useState } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { createPluginTools } from "@/modules/plugins/tools";
 import type { PluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
 import {
@@ -28,6 +29,12 @@ import {
 } from "@/modules/plugins/ui/plugin-ui-host";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
+import {
+	SettingsRegistryProvider,
+	useSettingsOperations,
+} from "@/modules/settings";
+import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import { toSessionId } from "@/shared/identifiers";
@@ -57,6 +64,22 @@ import { flushTestRenderer } from "../support/opentui";
 const sessionMessagesFromTranscript = (
 	transcript: readonly object[]
 ): readonly SessionMessage[] => transcript as readonly SessionMessage[];
+
+const contributionRenderParts: SessionMessage["parts"] = [
+	{ text: "private reasoning text", type: "reasoning" },
+	{
+		input: { command: "printf contribution output" },
+		output: {
+			exitCode: 0,
+			output: Array.from({ length: 12 }, (_, index) =>
+				index === 11 ? "final expanded output line" : `output line ${index + 1}`
+			).join("\n"),
+		},
+		state: "output-available",
+		toolCallId: toolCallId("plugin-ui-expanded-shell"),
+		type: "tool-shell",
+	},
+];
 
 const textFromSessionTranscript = (transcript: readonly object[]): string =>
 	sessionMessagesFromTranscript(transcript)
@@ -127,9 +150,13 @@ const pluginUiTestEnvironment = async (
 	let isTopLayer: (id: string) => boolean = () => false;
 	const transcriptState: {
 		advance: () => void;
+		setHideThinking: () => Promise<void>;
+		showContributionMessage: () => void;
 		showSessionTranscript: (transcript: readonly object[]) => void;
 	} = {
 		advance: () => undefined,
+		setHideThinking: async () => undefined,
+		showContributionMessage: () => undefined,
 		showSessionTranscript: () => undefined,
 	};
 	const customEditorState: { setMounted: (mounted: boolean) => void } = {
@@ -140,16 +167,49 @@ const pluginUiTestEnvironment = async (
 		isTopLayer = useKeyboardLayer().isTopLayer;
 		return null;
 	}
+	function ContributionMessage() {
+		const settingsOperations = useSettingsOperations();
+		transcriptState.setHideThinking = async () => {
+			await settingsOperations.setValue("display.hideThinking", true);
+		};
+		return (
+			<BotMessageContent
+				parts={contributionRenderParts}
+				sessionId={sessionId}
+			/>
+		);
+	}
 	function TestTranscript() {
 		const [revision, setRevision] = useState(0);
 		const [sessionTranscript, setSessionTranscript] = useState<string>();
+		const [showContributionMessage, setShowContributionMessage] =
+			useState(false);
 		transcriptState.advance = () => setRevision((current) => current + 1);
+		transcriptState.showContributionMessage = () =>
+			setShowContributionMessage(true);
 		transcriptState.showSessionTranscript = (transcript) =>
 			setSessionTranscript(textFromSessionTranscript(transcript));
 		return (
-			<text>
-				{sessionTranscript ?? `Plugin UI host fixture · update ${revision}`}
-			</text>
+			<>
+				<text>
+					{sessionTranscript ?? `Plugin UI host fixture · update ${revision}`}
+				</text>
+				{showContributionMessage ? (
+					<ConfigProvider
+						value={{
+							configStore,
+							cwd: workspace,
+							homeRoot: root,
+							trustedProjectRoots: [workspace],
+							workspace,
+						}}
+					>
+						<SettingsRegistryProvider>
+							<ContributionMessage />
+						</SettingsRegistryProvider>
+					</ConfigProvider>
+				) : null}
+			</>
 		);
 	}
 	function FixtureComposer() {
@@ -531,6 +591,204 @@ test("presentation controls are view-scoped, last-setter-owned, and title update
 	}
 });
 
+test("stopping a Plugin Session clears its view contributions and closes old UI handles", async () => {
+	const environment = await pluginUiTestEnvironment();
+	let unbindOtherSession: (() => void) | undefined;
+	let unsubscribe: (() => void) | undefined;
+	try {
+		const pluginUIHost = environment.pluginUIHost;
+		if (pluginUIHost === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		const sessionContext = {
+			executionMode: "interactive" as const,
+			sessionId: environment.sessionId,
+			workspace: environment.workspace,
+		};
+		const otherSessionId = `${environment.sessionId}-other`;
+		const otherSessionContext = {
+			...sessionContext,
+			sessionId: otherSessionId,
+		};
+		unbindOtherSession = environment.runtime.bindPluginUIHost(
+			otherSessionId,
+			pluginUIHost
+		);
+		await environment.runtime.startSession(otherSessionContext);
+		const otherUI = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			otherSessionId
+		);
+		await act(() => otherUI.setStatus("lifecycle", "Other Session value"));
+		let notifications = 0;
+		unsubscribe = pluginUIHost.subscribeContributions(
+			environment.sessionId,
+			() => notifications++
+		);
+		const oldUI = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		await act(() => {
+			oldUI.setStatus("lifecycle", "Old Session value");
+			oldUI.setHiddenThinkingLabel("Old Session label");
+			oldUI.setToolsExpanded(true);
+		});
+		const notificationsBeforeStop = notifications;
+		await act(async () => environment.runtime.stopSession(sessionContext));
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(pluginUIHost.getContributions(environment.sessionId)).toEqual({
+			statuses: [],
+			widgets: [],
+		});
+		expect(pluginUIHost.getContributions(otherSessionId).statuses).toEqual([
+			{
+				key: "lifecycle",
+				pluginId: "plugin_ui_fixture",
+				value: "Other Session value",
+			},
+		]);
+		expect(notifications).toBe(notificationsBeforeStop + 1);
+		const notificationsAfterStop = notifications;
+		await act(() => oldUI.setStatus("stale", "Must not be published"));
+		expect(pluginUIHost.getContributions(environment.sessionId)).toEqual({
+			statuses: [],
+			widgets: [],
+		});
+		expect(notifications).toBe(notificationsAfterStop);
+
+		await act(async () => environment.runtime.startSession(sessionContext));
+		const newUI = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		expect(newUI).not.toBe(oldUI);
+		await act(() => newUI.setStatus("lifecycle", "New Session value"));
+		expect(
+			pluginUIHost.getContributions(environment.sessionId).statuses
+		).toEqual([
+			{
+				key: "lifecycle",
+				pluginId: "plugin_ui_fixture",
+				value: "New Session value",
+			},
+		]);
+		expect(notifications).toBe(notificationsAfterStop + 1);
+	} finally {
+		unsubscribe?.();
+		unbindOtherSession?.();
+		await environment.dispose();
+	}
+});
+
+test("a fresh Plugin runtime after shutdown starts with empty UI state and accepts new registrations", async () => {
+	const environment = await pluginUiTestEnvironment();
+	let reloadedRuntime: PluginRuntime | undefined;
+	let unbindReloadedHost: (() => void) | undefined;
+	let unsubscribe: (() => void) | undefined;
+	try {
+		const pluginUIHost = environment.pluginUIHost;
+		if (pluginUIHost === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		const sessionContext = {
+			executionMode: "interactive" as const,
+			sessionId: environment.sessionId,
+			workspace: environment.workspace,
+		};
+		let notifications = 0;
+		unsubscribe = pluginUIHost.subscribeContributions(
+			environment.sessionId,
+			() => notifications++
+		);
+		const oldUI = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		await act(() => {
+			oldUI.setStatus("old", "Old runtime state");
+			oldUI.setHiddenThinkingLabel("Old runtime label");
+		});
+		await act(async () => environment.runtime.shutdown());
+		await flushTestRenderer(environment.setup, 2);
+		const notificationsAfterShutdown = notifications;
+		expect(pluginUIHost.getContributions(environment.sessionId)).toEqual({
+			statuses: [],
+			widgets: [],
+		});
+		expect(notificationsAfterShutdown).toBeGreaterThan(0);
+		await act(() => oldUI.setStatus("stale", "Must not survive shutdown"));
+		expect(pluginUIHost.getContributions(environment.sessionId)).toEqual({
+			statuses: [],
+			widgets: [],
+		});
+		expect(notifications).toBe(notificationsAfterShutdown);
+
+		const root = path.dirname(environment.workspace);
+		const nextRuntime = await loadPlugins({
+			bundledPlugins: [{ factory: pluginUiFixture, id: "plugin_ui_fixture" }],
+			cliPaths: [],
+			config: {
+				configStore: environment.configStore,
+				cwd: environment.workspace,
+				homeRoot: root,
+				trustedProjectRoots: [environment.workspace],
+				workspace: environment.workspace,
+			},
+			userDataDir: root,
+		});
+		reloadedRuntime = nextRuntime;
+		unbindReloadedHost = nextRuntime.bindPluginUIHost(
+			environment.sessionId,
+			pluginUIHost
+		);
+		await nextRuntime.startSession(sessionContext);
+		expect(pluginUIHost.getContributions(environment.sessionId)).toEqual({
+			statuses: [],
+			widgets: [],
+		});
+
+		let registrationResult: Promise<string | undefined> | undefined;
+		await act(async () => {
+			registrationResult = nextRuntime.executeCommand(
+				"plugin_ui_fixture",
+				"set-presentation",
+				{
+					argument: "",
+					sessionId: environment.sessionId,
+					workspace: environment.workspace,
+				}
+			);
+			await environment.setup.waitForVisualIdle();
+		});
+		if (registrationResult === undefined) {
+			throw new Error("The reloaded Plugin Command did not start.");
+		}
+		expect(await registrationResult).toBe("true");
+		expect(pluginUIHost.getContributions(environment.sessionId)).toMatchObject({
+			hiddenThinkingLabel: "Fixture reasoning label",
+			toolsExpanded: true,
+		});
+		const notificationsAfterRegistration = notifications;
+		await act(() => oldUI.setStatus("late", "Old runtime must stay closed"));
+		expect(
+			pluginUIHost
+				.getContributions(environment.sessionId)
+				.statuses.some(({ key }) => key === "late")
+		).toBe(false);
+		expect(notifications).toBe(notificationsAfterRegistration);
+	} finally {
+		unsubscribe?.();
+		const runtimeToShutdown = reloadedRuntime;
+		if (runtimeToShutdown !== undefined) {
+			await act(async () => runtimeToShutdown.shutdown());
+		}
+		unbindReloadedHost?.();
+		await environment.dispose();
+	}
+});
+
 test("header and footer have host-wide first-owner conflicts and restore defaults without stacking", async () => {
 	const environment = await pluginUiTestEnvironment();
 	const otherSessionId = `${environment.sessionId}-other`;
@@ -861,6 +1119,40 @@ test("the verified contribution example renders and clears its Plugin UI surface
 		expect(restoredFrame).toContain("Host default header");
 		expect(restoredFrame).toContain("Host default footer");
 		expect(restoredFrame).not.toContain("Issue tracker · 64 columns");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("view presentation contributions render their hidden-thinking label and expand shell output", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 30,
+		width: 88,
+	});
+	try {
+		await act(() => environment.transcriptState.showContributionMessage());
+		await flushTestRenderer(environment.setup, 3);
+		await act(async () => environment.transcriptState.setHideThinking());
+		await flushTestRenderer(environment.setup, 3);
+		let frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Thinking...");
+		expect(frame).not.toContain("private reasoning text");
+		expect(frame).toContain("(Ctrl+O: Expand)");
+		expect(frame).not.toContain("final expanded output line");
+
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"set-presentation"
+		);
+		expect(await result).toBe("true");
+		await flushTestRenderer(environment.setup, 3);
+		frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Fixture reasoning label");
+		expect(frame).not.toContain("Thinking...");
+		expect(frame).not.toContain("private reasoning text");
+		expect(frame).toContain("final expanded output line");
+		expect(frame).toContain("(Ctrl+O: Collapse)");
+		expect(frame).not.toContain("(Ctrl+O: Expand)");
 	} finally {
 		await environment.dispose();
 	}
