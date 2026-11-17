@@ -1,7 +1,7 @@
 import { getErrorMessage } from "@wincode/utils";
 import type {
 	PluginSessionContext,
-	PluginSessionHistoryNavigationContext,
+	PluginSessionHistoryNavigationInputContext,
 } from "@/modules/plugins/public";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { resolveProviderModelSelectionForHost } from "@/modules/providers/provider-model-selection";
@@ -78,7 +78,7 @@ let interactiveManager: SessionHostManager | undefined;
 
 const runBeforeHistoryNavigationHook = async (
 	entry: ManagedHostEntry,
-	context: PluginSessionHistoryNavigationContext
+	context: PluginSessionHistoryNavigationInputContext
 ): Promise<SessionHistoryNavigationOutcome | null> => {
 	const hook = entry.pluginRuntime?.runBeforeSessionHistoryNavigation;
 	if (hook === undefined) {
@@ -121,7 +121,7 @@ const completeHistoryNavigation = async (
 			entry.sessionId
 		);
 		entry.historyGeneration = pathAfterNavigation.historyGeneration;
-		const afterContext: PluginSessionHistoryNavigationContext = {
+		const afterContext: PluginSessionHistoryNavigationInputContext = {
 			...entry.pluginSessionContext,
 			fromEntryId: previousPath.activeLeafId,
 			historyGeneration: pathAfterNavigation.historyGeneration,
@@ -1315,7 +1315,7 @@ export const createSessionHostManager = (
 				const sessionHistory = entry.sessionHistory;
 				const previousPath =
 					await sessionHistory.readSessionHistoryPath(sessionId);
-				const navigationContext: PluginSessionHistoryNavigationContext = {
+				const navigationContext: PluginSessionHistoryNavigationInputContext = {
 					...entry.pluginSessionContext,
 					fromEntryId: previousPath.activeLeafId,
 					historyGeneration: previousPath.historyGeneration,

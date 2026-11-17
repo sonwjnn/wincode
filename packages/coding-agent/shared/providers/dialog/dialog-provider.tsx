@@ -23,7 +23,7 @@ import type { DialogConfig, DialogPadding } from "./types";
 
 export type DialogContextValue = {
 	open: (config: DialogConfig) => void;
-	close: () => void;
+	close: (layerId?: string) => void;
 	closeAll: () => void;
 };
 
@@ -82,14 +82,19 @@ export function DialogProvider({ children }: DialogProviderProps) {
 		[]
 	);
 
-	const close = useCallback(() => {
-		const topId = layerIdsRef.current.at(-1);
-		if (!topId) {
-			return;
-		}
-		pop(topId);
-		updateStack((prev) => prev.slice(0, -1));
-	}, [pop, updateStack]);
+	const close = useCallback(
+		(layerId?: string) => {
+			const targetId = layerId ?? layerIdsRef.current.at(-1);
+			if (targetId === undefined) {
+				return;
+			}
+			pop(targetId);
+			updateStack((prev) =>
+				prev.filter((dialog) => dialog.layerId !== targetId)
+			);
+		},
+		[pop, updateStack]
+	);
 
 	const closeAll = useCallback(() => {
 		const currentStack = dialogStackRef.current;
@@ -115,18 +120,11 @@ export function DialogProvider({ children }: DialogProviderProps) {
 			const configWithLayer = { ...config, layerId };
 			updateStack((prev) => [...prev, configWithLayer]);
 			push(layerId, () => {
-				pop(layerId);
-				updateStack((prev) => {
-					const idx = prev.findIndex((d) => d.layerId === layerId);
-					if (idx === -1) {
-						return prev;
-					}
-					return prev.slice(0, idx);
-				});
+				close(layerId);
 				return true;
 			});
 		},
-		[push, baseLayerId, updateStack, pop]
+		[push, baseLayerId, updateStack, close]
 	);
 
 	const value: DialogContextValue = {

@@ -12,6 +12,7 @@ import { isJsonValue, logger, omitUndefined } from "@wincode/utils";
 import { isPluginOutputWithinLimit } from "./output";
 import type { PluginRuntime, PluginToolDescriptor } from "./runtime";
 import type { PluginTool } from "./types";
+import { unsupportedPluginUI } from "./ui/plugin-ui-default";
 
 export type PluginToolsContext = Readonly<{
 	agentId?: AgentId;
@@ -117,6 +118,9 @@ const executePluginToolHandler = async (
 			agentId,
 			sessionId: context.sessionId ?? "",
 			...omitUndefined({ sessionHistory, sessionState }),
+			ui:
+				context.pluginRuntime?.getPluginUI(tool.pluginId, context.sessionId) ??
+				unsupportedPluginUI,
 			signal: signal ?? context.signal ?? new AbortController().signal,
 			toolCallId,
 			registerBackgroundWork: (work) =>

@@ -263,6 +263,7 @@ test("MCP resource reads return bounded previews and preserve the full text arti
 			{
 				agentId: agentId("mcp-resource-reader"),
 				sessionId: sessionId("mcp-resource-read-session"),
+				ui: runtime.getPluginUI("mcp", sessionId("mcp-resource-read-session")),
 				toolCallId: toolCallId("mcp-resource-read-call"),
 				workspace,
 				signal: new AbortController().signal,

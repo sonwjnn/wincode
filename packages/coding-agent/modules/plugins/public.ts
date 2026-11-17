@@ -14,6 +14,10 @@ import type {
 } from "@wincode/ai";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
+import type { Theme } from "../../shared/providers/theme/themes";
+
+export type { Theme, ThemeColors } from "../../shared/providers/theme/themes";
+
 import type { SessionHistoryEntryId } from "../../shared/identifiers";
 import type {
 	SessionSdkAgentSource,
@@ -95,6 +99,58 @@ export class PluginSessionHistoryWriteError extends Error {
 export type PluginToolResult = ToolCallOutput;
 export type PluginInputSchema = z.ZodType | ToolJsonSchema;
 
+/** Timeout and caller cancellation options for a blocking Plugin UI request. */
+export type PluginUIDialogOptions = Readonly<{
+	signal?: AbortSignal;
+	timeout?: number;
+}>;
+
+export type PluginNotificationLevel = "info" | "warning" | "error";
+export type PluginUIPromptKind = "select" | "confirm" | "input" | "editor";
+
+export type PluginThemeChangeResult =
+	| Readonly<{ success: true }>
+	| Readonly<{ success: false; error: string }>;
+
+/** UI-neutral operations the host makes available to a Plugin callback. */
+export type PluginUI = Readonly<{
+	select: (
+		prompt: string,
+		choices: readonly string[],
+		options?: PluginUIDialogOptions
+	) => Promise<string | undefined>;
+	confirm: (
+		title: string,
+		message?: string,
+		options?: PluginUIDialogOptions
+	) => Promise<boolean>;
+	input: (
+		title: string,
+		placeholder?: string,
+		options?: PluginUIDialogOptions
+	) => Promise<string | undefined>;
+	editor: (
+		title: string,
+		initialValue?: string,
+		options?: PluginUIDialogOptions
+	) => Promise<string | undefined>;
+	notify: (message: string, level?: PluginNotificationLevel) => void;
+	getAllThemes: () => readonly Theme[];
+	getTheme: (name: string) => Theme | undefined;
+	setTheme: (theme: string | Theme) => PluginThemeChangeResult;
+}>;
+
+export type PluginUIContext = Readonly<{ ui: PluginUI }>;
+
+export type PluginUIPromptContext = Readonly<{
+	executionMode?: ExecutionMode;
+	kind: PluginUIPromptKind;
+	pluginId: string;
+	reason: "ui_prompt";
+	sessionId?: string;
+	title: string;
+}>;
+
 export type PluginConfigOrigin = Readonly<{
 	path: string;
 	scope: string;
@@ -140,13 +196,14 @@ export type PluginConfigFileStore = Readonly<{
 	) => Promise<PluginConfigSnapshot>;
 }>;
 
-export type PluginProviderConnectContext = Readonly<{
-	requestTextInput: (
-		prompt: string,
-		signal: AbortSignal
-	) => Promise<string | undefined>;
-	signal: AbortSignal;
-}>;
+export type PluginProviderConnectContext = PluginUIContext &
+	Readonly<{
+		requestTextInput: (
+			prompt: string,
+			signal: AbortSignal
+		) => Promise<string | undefined>;
+		signal: AbortSignal;
+	}>;
 
 /** A trusted Plugin's factory and host-mediated connection interaction. */
 export type PluginProviderRegistration = Readonly<{
@@ -182,12 +239,13 @@ export type PluginStatusPanelSnapshot = Readonly<{
 }>;
 
 /** Declarative host-rendered status and controls contributed by a Plugin. */
-export type PluginStatusPanelActionContext = Readonly<{
-	requestTextInput: (
-		prompt: string,
-		signal: AbortSignal
-	) => Promise<string | undefined>;
-}>;
+export type PluginStatusPanelActionContext = PluginUIContext &
+	Readonly<{
+		requestTextInput: (
+			prompt: string,
+			signal: AbortSignal
+		) => Promise<string | undefined>;
+	}>;
 
 export type PluginStatusPanelRegistration = Readonly<{
 	emptyText?: string;
@@ -239,16 +297,25 @@ export type PluginSessionContext = Readonly<{
 	workspace: string;
 }>;
 
-export type PluginSessionHistoryNavigationContext = PluginSessionContext &
-	Readonly<{
-		fromEntryId: SessionHistoryEntryId | null;
-		historyGeneration: number;
-		operationId: string;
-		toEntryId: SessionHistoryEntryId | null;
-	}>;
+export type PluginSessionHookContext = PluginSessionContext & PluginUIContext;
+
+type PluginSessionHistoryNavigationFields = Readonly<{
+	fromEntryId: SessionHistoryEntryId | null;
+	historyGeneration: number;
+	operationId: string;
+	toEntryId: SessionHistoryEntryId | null;
+}>;
+
+/** Session Host input used to report a completed history navigation. */
+export type PluginSessionHistoryNavigationInputContext = PluginSessionContext &
+	PluginSessionHistoryNavigationFields;
+
+/** Plugin callback context for a completed history navigation. */
+export type PluginSessionHistoryNavigationContext = PluginSessionHookContext &
+	PluginSessionHistoryNavigationFields;
 
 export type PluginBeforeSessionHistoryNavigationContext = Omit<
-	PluginSessionHistoryNavigationContext,
+	PluginSessionHookContext & PluginSessionHistoryNavigationFields,
 	"sessionHistory" | "sessionState"
 > &
 	Readonly<{
@@ -256,7 +323,16 @@ export type PluginBeforeSessionHistoryNavigationContext = Omit<
 		sessionState?: Pick<PluginSessionState, "read">;
 	}>;
 
-export type PluginBeforeAgentTurnContext = PluginSessionContext &
+export type PluginBeforeAgentTurnInputContext = PluginSessionContext &
+	Readonly<{
+		agentId: AgentId;
+		capabilityCeiling?: SessionSdkCapabilityCeiling;
+		registerTurnCleanup?: (cleanup: () => void) => void;
+		signal: AbortSignal;
+		turnId?: AgentTurnId;
+	}>;
+
+export type PluginBeforeAgentTurnContext = PluginSessionHookContext &
 	Readonly<{
 		agentId: AgentId;
 		capabilityCeiling?: SessionSdkCapabilityCeiling;
@@ -273,7 +349,15 @@ export type PluginProcessContext = Readonly<{
 /** Why compaction ran: an operator request, a threshold check, or overflow recovery. */
 export type PluginCompactionTrigger = "manual" | "overflow" | "threshold";
 
-export type PluginCompactionContext = PluginSessionContext &
+export type PluginCompactionInputContext = PluginSessionContext &
+	Readonly<{
+		focus?: string;
+		signal: AbortSignal;
+		trigger: PluginCompactionTrigger;
+		turnId?: AgentTurnId;
+	}>;
+
+export type PluginCompactionContext = PluginSessionHookContext &
 	Readonly<{
 		focus?: string;
 		signal: AbortSignal;
@@ -291,17 +375,25 @@ export type PluginBeforeCompactionResult =
 	| Readonly<{ cancel?: never; summary: string }>
 	| undefined;
 
+type PluginCompactionCompletedFields = Readonly<{
+	compactionId: string;
+	estimatedTokensAfter: number;
+	tokensBefore: number;
+}>;
+
+export type PluginCompactionCompletedInputContext =
+	PluginCompactionInputContext & PluginCompactionCompletedFields;
+
 export type PluginCompactionCompletedContext = PluginCompactionContext &
-	Readonly<{
-		compactionId: string;
-		estimatedTokensAfter: number;
-		tokensBefore: number;
-	}>;
+	PluginCompactionCompletedFields;
+
+export type PluginCompactionFailedInputContext = PluginCompactionInputContext &
+	Readonly<{ error: string }>;
 
 export type PluginCompactionFailedContext = PluginCompactionContext &
 	Readonly<{ error: string }>;
 
-export type PluginToolContext = PluginSessionContext &
+export type PluginToolContext = PluginSessionHookContext &
 	Readonly<{
 		agentId: AgentId;
 		signal: AbortSignal;
@@ -309,13 +401,16 @@ export type PluginToolContext = PluginSessionContext &
 		registerBackgroundWork: (work: Promise<unknown>) => void;
 	}>;
 
-export type PluginCommandContext = Readonly<{
+export type PluginCommandInputContext = Readonly<{
 	argument: string;
+	executionMode?: ExecutionMode;
 	sessionHistory?: PluginSessionHistory;
 	sessionId?: string;
 	sessionState?: PluginSessionState;
 	workspace: string;
 }>;
+
+export type PluginCommandContext = PluginCommandInputContext & PluginUIContext;
 
 export type PluginToolRegistration<Schema extends PluginInputSchema> =
 	Readonly<{
@@ -357,12 +452,12 @@ export type PluginRegistrationAPI = PluginToolRegistrationAPI &
 	}>;
 
 export type PluginSessionStartHook = (
-	context: PluginSessionContext,
+	context: PluginSessionHookContext,
 	api: PluginRegistrationAPI
 ) => void | Promise<void>;
 
 export type PluginSessionShutdownHook = (
-	context: PluginSessionContext
+	context: PluginSessionHookContext
 ) => void | Promise<void>;
 
 export type PluginBeforeSessionHistoryNavigationResult =
@@ -377,6 +472,10 @@ export type PluginBeforeSessionHistoryNavigationHook = (
 
 export type PluginSessionHistoryNavigatedHook = (
 	context: PluginSessionHistoryNavigationContext
+) => void | Promise<void>;
+
+export type PluginUIPromptHook = (
+	context: PluginUIPromptContext
 ) => void | Promise<void>;
 
 export type PluginBeforeAgentTurnHook = (
@@ -423,6 +522,8 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 		onBeforeCompaction: (handler: PluginBeforeCompactionHook) => void;
 		onCompactionCompleted: (handler: PluginCompactionCompletedHook) => void;
 		onCompactionFailed: (handler: PluginCompactionFailedHook) => void;
+		onUIPromptStart: (handler: PluginUIPromptHook) => void;
+		onUIPromptEnd: (handler: PluginUIPromptHook) => void;
 		onStart: (handler: PluginProcessStartHook) => void;
 		onShutdown: (handler: PluginShutdownHook) => void;
 	}>;

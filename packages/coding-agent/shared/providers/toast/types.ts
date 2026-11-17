@@ -1,6 +1,6 @@
-export type ToastVariant = "success" | "error" | "info";
+export type ToastVariant = "success" | "warning" | "error" | "info";
 
-export type UiNotificationLevel = ToastVariant | "warning";
+export type UiNotificationLevel = ToastVariant;
 
 export type UiNotificationAnchor = Readonly<{
 	messageCount: number;

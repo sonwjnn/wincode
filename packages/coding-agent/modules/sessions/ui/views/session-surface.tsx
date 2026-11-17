@@ -22,6 +22,7 @@ import {
 	useAgentRegistry,
 } from "@/modules/agents";
 import type { AgentRegistry } from "@/modules/agents/registry";
+import { useOptionalPluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import {
 	createInteractiveProviderController,
@@ -230,6 +231,8 @@ const createProviderReselection = async (
 			getCompositionRevision,
 			getPluginProviderRegistrations: () =>
 				getPluginProviderRegistrationsFromCollection(providerCollection) ?? [],
+			getPluginUI: (pluginId) =>
+				capabilities.getPluginRuntime?.()?.getPluginUI(pluginId, sessionId),
 			getTrustedPluginProviderRegistrations: () =>
 				capabilities
 					.getPluginRuntime?.()
@@ -427,6 +430,13 @@ export function SessionSurface({
 		thinkingLevel,
 	} = usePromptConfig();
 	const pluginRuntime = getInteractivePluginRuntime();
+	const pluginUIHost = useOptionalPluginUIHost();
+	useEffect(() => {
+		if (pluginRuntime === undefined || pluginUIHost === null) {
+			return;
+		}
+		return pluginRuntime.bindPluginUIHost(sessionId, pluginUIHost);
+	}, [pluginRuntime, pluginUIHost, sessionId]);
 	const thinkingSelection = useMemo<ThinkingSelection>(
 		() => (thinkingLevel === undefined ? {} : { thinkingLevel }),
 		[thinkingLevel]

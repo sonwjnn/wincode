@@ -5,10 +5,12 @@ import type {
 	Provider,
 	ProviderModel,
 } from "@wincode/ai";
+import type { PluginUI } from "@/modules/plugins/public";
 import {
 	createPluginRuntime,
 	type PluginProviderDescriptor,
 } from "@/modules/plugins/runtime";
+import { unsupportedPluginUI } from "@/modules/plugins/ui/plugin-ui-default";
 import {
 	createInteractiveProviderController,
 	type InteractiveProviderController,
@@ -95,7 +97,8 @@ const withSessionWork = async <Result>(
 const controllerFor = (
 	collection: InteractiveSessionProviderCollection,
 	manager: SessionHostManager,
-	discoverableProviderIds?: () => readonly string[]
+	discoverableProviderIds?: () => readonly string[],
+	getPluginUI?: (pluginId: string) => PluginUI | undefined
 ): InteractiveProviderController =>
 	createInteractiveProviderController(collection, {
 		getDiscoverableProviderIds:
@@ -104,6 +107,7 @@ const controllerFor = (
 		getPluginProviderComposition: collection.getPluginProviderComposition,
 		supportsModelDiscovery: collection.supportsModelDiscovery,
 		withSessionWork: (action) => withSessionWork(manager, action),
+		...(getPluginUI === undefined ? {} : { getPluginUI }),
 	});
 
 test("Provider controller exposes the current Plugin owner for explicit selection binding", async () => {
@@ -129,6 +133,42 @@ test("Provider controller exposes the current Plugin owner for explicit selectio
 			providerId: registration.providerId,
 			sourceIdentity: registration.sourceIdentity,
 		});
+	} finally {
+		await collection.close();
+		await manager.shutdownAll();
+	}
+});
+
+test("Plugin Provider connections receive their owner-bound Plugin UI", async () => {
+	const stores = createMemoryStores();
+	let receivedUI: PluginUI | undefined;
+	const registration = registrationFor(
+		"provider-ui-plugin",
+		"/trusted/provider-ui.ts",
+		async ({ ui }) => {
+			receivedUI = ui;
+		},
+		() => undefined
+	);
+	const collection = await createInteractiveSessionProviderCollection({
+		credentialStore: stores.credentialStore,
+		modelStore: stores.modelStore,
+		pluginProviders: [registration],
+	});
+	const manager = createSessionHostManager();
+	const controller = controllerFor(
+		collection,
+		manager,
+		undefined,
+		() => unsupportedPluginUI
+	);
+
+	try {
+		await controller.connectPluginProvider(
+			"shared_provider",
+			async () => "unused fake input"
+		);
+		expect(receivedUI).toBe(unsupportedPluginUI);
 	} finally {
 		await collection.close();
 		await manager.shutdownAll();

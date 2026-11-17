@@ -106,10 +106,15 @@ export function ThemeProvider({ children, themeName }: ThemeProviderProps) {
 		}
 	}, [themeName]);
 
-	const setTheme = useCallback((theme: Theme) => {
-		setCurrentTheme(theme);
-		persistTheme(theme);
-	}, []);
+	const setTheme = useCallback(
+		(theme: Theme) => {
+			setCurrentTheme(theme);
+			if (isUndefined(themeName)) {
+				persistTheme(theme);
+			}
+		},
+		[themeName]
+	);
 	const reloadTheme = useCallback(() => {
 		setCurrentTheme(resolveThemeValue(themeName));
 	}, [themeName]);

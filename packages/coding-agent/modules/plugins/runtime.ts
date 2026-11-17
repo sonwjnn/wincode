@@ -26,20 +26,23 @@ import {
 } from "./prompt-selection";
 import type {
 	PluginAgentRegistration,
-	PluginBeforeAgentTurnContext,
 	PluginBeforeAgentTurnHook,
+	PluginBeforeAgentTurnInputContext,
 	PluginBeforeCompactionHook,
 	PluginBeforeCompactionResult,
 	PluginBeforeSessionHistoryNavigationContext,
 	PluginBeforeSessionHistoryNavigationHook,
 	PluginCommandContext,
 	PluginCommandHandler,
+	PluginCommandInputContext,
 	PluginCommandRegistration,
 	PluginCompactionCompletedContext,
 	PluginCompactionCompletedHook,
-	PluginCompactionContext,
+	PluginCompactionCompletedInputContext,
 	PluginCompactionFailedContext,
 	PluginCompactionFailedHook,
+	PluginCompactionFailedInputContext,
+	PluginCompactionInputContext,
 	PluginInputSchema,
 	PluginJsonValue,
 	PluginMcpServerRegistration,
@@ -50,7 +53,7 @@ import type {
 	PluginSessionContext,
 	PluginSessionHistory,
 	PluginSessionHistoryNavigatedHook,
-	PluginSessionHistoryNavigationContext,
+	PluginSessionHistoryNavigationInputContext,
 	PluginSessionHistoryReader,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
@@ -60,6 +63,11 @@ import type {
 	PluginStatusPanelRegistration,
 	PluginToolRegistration,
 	PluginToolRegistrationAPI,
+	PluginUI,
+	PluginUIContext,
+	PluginUIPromptContext,
+	PluginUIPromptHook,
+	PluginUIPromptKind,
 } from "./public";
 import {
 	PluginSessionHistoryWriteError,
@@ -68,6 +76,12 @@ import {
 } from "./public";
 import { validatePluginCommand, validatePluginTool } from "./registration";
 import type { PluginCommand, PluginTool } from "./types";
+import { unsupportedPluginUI } from "./ui/plugin-ui-default";
+import type {
+	PluginUIHandle,
+	PluginUIHost,
+	PluginUIOwner,
+} from "./ui/plugin-ui-host";
 
 export type PluginDiagnostic = Readonly<{
 	message: string;
@@ -130,6 +144,8 @@ export type LoadedPlugin = Readonly<{
 	onSessionHistoryNavigated?: PluginSessionHistoryNavigatedHook;
 	onCompactionCompleted?: PluginCompactionCompletedHook;
 	onCompactionFailed?: PluginCompactionFailedHook;
+	onUIPromptStart?: PluginUIPromptHook;
+	onUIPromptEnd?: PluginUIPromptHook;
 	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
@@ -152,7 +168,7 @@ export type PluginRuntime = Readonly<{
 	executeCommand: (
 		pluginId: string,
 		name: string,
-		context: PluginCommandContext
+		context: PluginCommandInputContext
 	) => Promise<string>;
 	getAgentRegistrations: () => readonly PluginAgentRegistration[];
 	getProviderRegistrations: (
@@ -163,6 +179,8 @@ export type PluginRuntime = Readonly<{
 	bindPromptSelectionTarget: (
 		target: PluginPromptSelectionTarget
 	) => () => void;
+	bindPluginUIHost: (sessionId: string, host: PluginUIHost) => () => void;
+	getPluginUI: (pluginId: string, sessionId?: string) => PluginUI;
 	getResource: <Resource = unknown>(
 		pluginId: string,
 		name: string
@@ -192,25 +210,25 @@ export type PluginRuntime = Readonly<{
 	) => () => void;
 	waitForBackgroundWork: (sessionId: string) => Promise<void>;
 	resolveToolsForTurn: (
-		context: PluginBeforeAgentTurnContext,
+		context: PluginBeforeAgentTurnInputContext,
 		hostContext?: unknown
 	) => Promise<readonly PluginToolDescriptor[]>;
 	/** The first Plugin decision that cancels or replaces the summary wins. */
 	runBeforeCompactionHooks: (
-		context: PluginCompactionContext
+		context: PluginCompactionInputContext
 	) => Promise<{ cancel?: string; summary?: string } | undefined>;
 	runBeforeSessionHistoryNavigation?: (
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	) => Promise<string | undefined>;
 	notifySessionHistoryNavigated?: (
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	) => Promise<void>;
 	/** Reports a committed compaction; a hook failure cannot undo it. */
 	notifyCompactionCompleted: (
-		context: PluginCompactionCompletedContext
+		context: PluginCompactionCompletedInputContext
 	) => Promise<void>;
 	notifyCompactionFailed: (
-		context: PluginCompactionFailedContext
+		context: PluginCompactionFailedInputContext
 	) => Promise<void>;
 	start: () => Promise<readonly PluginDiagnostic[]>;
 	shutdown: () => Promise<void>;
@@ -242,6 +260,18 @@ type SessionPluginState = {
 	storageError?: Error;
 	stopPromise?: Promise<void>;
 	tools: Map<string, PluginToolDescriptor>;
+};
+
+type PluginUIHostBinding = Readonly<{ host: PluginUIHost }>;
+
+type PluginUIHandleBinding = Readonly<{
+	binding: PluginUIHostBinding;
+	handle: PluginUIHandle;
+}>;
+
+type PluginUIPromptSpan = {
+	context: PluginUIPromptContext;
+	count: number;
 };
 
 class PluginRegistrationError extends Error {
@@ -319,6 +349,10 @@ export const createPluginRuntime = (
 	const backgroundWork = new Map<string, Set<Promise<void>>>();
 	const backgroundWorkErrors = new Map<string, unknown[]>();
 	const backgroundWorkListeners = new Map<string, Set<() => void>>();
+	const pluginUIHosts = new Map<string, PluginUIHostBinding>();
+	const pluginUIHandles = new Map<string, Map<string, PluginUIHandleBinding>>();
+	const pluginUIPromptSpans = new Map<string, PluginUIPromptSpan>();
+	const closingPluginUISessions = new Set<string>();
 	const notifyBackgroundWorkChange = (sessionId: string): void => {
 		for (const listener of [
 			...(backgroundWorkListeners.get(sessionId) ?? []),
@@ -345,6 +379,143 @@ export const createPluginRuntime = (
 			pluginId: plugin.id,
 			sourcePath: plugin.sourcePath,
 		});
+	};
+	const reportUIPromptHookFailure = (
+		plugin: LoadedPlugin,
+		operation: "prompt-start" | "prompt-end",
+		error: unknown
+	): void => {
+		void logPluginFailure(
+			`Plugin UI prompt ${operation} hook failed`,
+			plugin,
+			`ui-${operation}`,
+			error
+		).catch(() => undefined);
+	};
+	const notifyUIPromptHook = (
+		plugin: LoadedPlugin,
+		hook: PluginUIPromptHook | undefined,
+		context: PluginUIPromptContext,
+		operation: "prompt-start" | "prompt-end"
+	): void => {
+		if (hook === undefined) {
+			return;
+		}
+		void Promise.resolve()
+			.then(() => hook(context))
+			.catch((error: unknown) =>
+				reportUIPromptHookFailure(plugin, operation, error)
+			);
+	};
+	const beginUIPrompt = (
+		plugin: LoadedPlugin,
+		state: SessionPluginState,
+		kind: PluginUIPromptKind,
+		title: string
+	): (() => void) => {
+		const sessionId = state.context.sessionId;
+		const key = JSON.stringify([plugin.id, sessionId]);
+		const context: PluginUIPromptContext = Object.freeze({
+			executionMode: state.context.executionMode,
+			kind,
+			pluginId: plugin.id,
+			reason: "ui_prompt",
+			sessionId,
+			title,
+		});
+		let span = pluginUIPromptSpans.get(key);
+		if (span === undefined) {
+			span = { context, count: 0 };
+			pluginUIPromptSpans.set(key, span);
+			notifyUIPromptHook(
+				plugin,
+				plugin.onUIPromptStart,
+				context,
+				"prompt-start"
+			);
+		}
+		span.count += 1;
+		let released = false;
+		return () => {
+			if (released) {
+				return;
+			}
+			released = true;
+			span.count -= 1;
+			if (span.count === 0) {
+				pluginUIPromptSpans.delete(key);
+				notifyUIPromptHook(
+					plugin,
+					plugin.onUIPromptEnd,
+					span.context,
+					"prompt-end"
+				);
+			}
+		};
+	};
+	const closePluginUIHandles = (
+		sessionId: string,
+		binding?: PluginUIHostBinding,
+		pluginId?: string
+	): void => {
+		const handles = pluginUIHandles.get(sessionId);
+		if (handles === undefined) {
+			return;
+		}
+		for (const [ownerPluginId, entry] of handles) {
+			if (
+				(pluginId !== undefined && ownerPluginId !== pluginId) ||
+				(binding !== undefined && entry.binding !== binding)
+			) {
+				continue;
+			}
+			try {
+				entry.handle.close();
+			} catch {
+				// UI cleanup must not block Session or Plugin shutdown.
+			}
+			handles.delete(ownerPluginId);
+		}
+		if (handles.size === 0) {
+			pluginUIHandles.delete(sessionId);
+		}
+	};
+	const getPluginUI = (pluginId: string, sessionId?: string): PluginUI => {
+		if (sessionId === undefined) {
+			return unsupportedPluginUI;
+		}
+		const plugin = plugins.find((candidate) => candidate.id === pluginId);
+		const state = sessionStates.get(sessionId);
+		const binding = pluginUIHosts.get(sessionId);
+		if (
+			plugin === undefined ||
+			state === undefined ||
+			state.closed ||
+			disabledPlugins.has(pluginId) ||
+			state.disabled.has(pluginId) ||
+			closingPluginUISessions.has(sessionId) ||
+			(state.context.executionMode !== undefined &&
+				state.context.executionMode !== "interactive") ||
+			binding === undefined
+		) {
+			return unsupportedPluginUI;
+		}
+		let handles = pluginUIHandles.get(sessionId);
+		if (handles === undefined) {
+			handles = new Map();
+			pluginUIHandles.set(sessionId, handles);
+		}
+		const current = handles.get(pluginId);
+		if (current?.binding === binding) {
+			return current.handle.ui;
+		}
+		current?.handle.close();
+		const handle = binding.host.create(
+			{ pluginId, sessionId } satisfies PluginUIOwner,
+			(kind, title) => beginUIPrompt(plugin, state, kind, title)
+		);
+		handles.set(pluginId, { binding, handle });
+		return handle.ui;
 	};
 	const start = async (): Promise<readonly PluginDiagnostic[]> => {
 		if (shutdownPromise !== undefined) {
@@ -743,7 +914,7 @@ export const createPluginRuntime = (
 		plugin: LoadedPlugin,
 		state: SessionPluginState | undefined,
 		context: Context
-	): Context => {
+	): Context & PluginUIContext => {
 		const {
 			sessionHistory: _ignoredHistory,
 			sessionState: _ignoredState,
@@ -755,7 +926,8 @@ export const createPluginRuntime = (
 		return Object.freeze({
 			...base,
 			...omitUndefined({ sessionHistory, sessionState }),
-		}) as Context;
+			ui: getPluginUI(plugin.id, context.sessionId),
+		}) as Context & PluginUIContext;
 	};
 	const initializePluginSession = async (
 		plugin: LoadedPlugin,
@@ -797,6 +969,7 @@ export const createPluginRuntime = (
 				return;
 			}
 			state.disabled.add(plugin.id);
+			closePluginUIHandles(state.context.sessionId, undefined, plugin.id);
 			addDiagnostic(
 				plugin,
 				`Plugin Session start hook failed; disabled for this Session: ${getErrorMessage(error, String(error))}`
@@ -845,34 +1018,40 @@ export const createPluginRuntime = (
 		if (state === undefined) {
 			return;
 		}
+		closingPluginUISessions.add(context.sessionId);
+		closePluginUIHandles(context.sessionId);
 		if (state.stopPromise !== undefined) {
 			return state.stopPromise;
 		}
 		const closing = (async () => {
-			await state.startPromise;
-			for (const plugin of [...plugins].reverse()) {
-				if (
-					!state.started.has(plugin.id) ||
-					plugin.onSessionShutdown === undefined
-				) {
-					continue;
+			try {
+				await state.startPromise;
+				for (const plugin of [...plugins].reverse()) {
+					if (
+						!state.started.has(plugin.id) ||
+						plugin.onSessionShutdown === undefined
+					) {
+						continue;
+					}
+					try {
+						await plugin.onSessionShutdown(
+							contextForPlugin(plugin, state, context)
+						);
+					} catch (error) {
+						await logPluginFailure(
+							"Plugin Session shutdown hook failed",
+							plugin,
+							"session-shutdown",
+							error
+						);
+					}
 				}
-				try {
-					await plugin.onSessionShutdown(
-						contextForPlugin(plugin, state, context)
-					);
-				} catch (error) {
-					await logPluginFailure(
-						"Plugin Session shutdown hook failed",
-						plugin,
-						"session-shutdown",
-						error
-					);
+			} finally {
+				state.closed = true;
+				closingPluginUISessions.delete(context.sessionId);
+				if (sessionStates.get(context.sessionId) === state) {
+					sessionStates.delete(context.sessionId);
 				}
-			}
-			state.closed = true;
-			if (sessionStates.get(context.sessionId) === state) {
-				sessionStates.delete(context.sessionId);
 			}
 		})();
 		state.stopPromise = closing;
@@ -880,7 +1059,7 @@ export const createPluginRuntime = (
 	};
 	const resolvePluginToolsForTurn = async (
 		plugin: LoadedPlugin,
-		context: PluginBeforeAgentTurnContext,
+		context: PluginBeforeAgentTurnInputContext,
 		hostContext: unknown,
 		turnToolOwners: Map<string, string>
 	): Promise<readonly PluginToolDescriptor[] | null> => {
@@ -940,7 +1119,7 @@ export const createPluginRuntime = (
 		return pluginTools;
 	};
 	const resolveToolsForTurn = async (
-		context: PluginBeforeAgentTurnContext,
+		context: PluginBeforeAgentTurnInputContext,
 		hostContext?: unknown
 	): Promise<readonly PluginToolDescriptor[]> => {
 		const resolved: PluginToolDescriptor[] = [];
@@ -975,12 +1154,12 @@ export const createPluginRuntime = (
 	};
 	const requestCompactionDecision = async (
 		plugin: LoadedPlugin,
-		context: PluginCompactionContext
+		context: PluginCompactionInputContext
 	): Promise<PluginBeforeCompactionResult> => {
 		const state = sessionStates.get(context.sessionId);
 		try {
 			const decision = await plugin.onBeforeCompaction?.(
-				state === undefined ? context : contextForPlugin(plugin, state, context)
+				contextForPlugin(plugin, state, context)
 			);
 			if (state?.storageError !== undefined) {
 				throw state.storageError;
@@ -1001,7 +1180,7 @@ export const createPluginRuntime = (
 	};
 	const compactionDecisionFor = async (
 		plugin: LoadedPlugin,
-		context: PluginCompactionContext
+		context: PluginCompactionInputContext
 	): Promise<{ cancel?: string; summary?: string } | undefined> => {
 		if (
 			plugin.onBeforeCompaction === undefined ||
@@ -1024,7 +1203,7 @@ export const createPluginRuntime = (
 		return Object.freeze({ summary: decision.summary });
 	};
 	const runBeforeCompactionHooks = async (
-		context: PluginCompactionContext
+		context: PluginCompactionInputContext
 	): Promise<{ cancel?: string; summary?: string } | undefined> => {
 		let summary: string | undefined;
 		for (const plugin of plugins) {
@@ -1041,7 +1220,9 @@ export const createPluginRuntime = (
 	};
 	const notifyCompactionHooks = async (
 		operation: "completed" | "failed",
-		context: PluginCompactionCompletedContext | PluginCompactionFailedContext
+		context:
+			| PluginCompactionCompletedInputContext
+			| PluginCompactionFailedInputContext
 	): Promise<void> => {
 		for (const plugin of plugins) {
 			if (!isEnabledForSession(plugin, context.sessionId)) {
@@ -1049,10 +1230,7 @@ export const createPluginRuntime = (
 			}
 			try {
 				const state = sessionStates.get(context.sessionId);
-				const pluginContext =
-					state === undefined
-						? context
-						: contextForPlugin(plugin, state, context);
+				const pluginContext = contextForPlugin(plugin, state, context);
 				if (operation === "completed") {
 					await plugin.onCompactionCompleted?.(
 						pluginContext as PluginCompactionCompletedContext
@@ -1075,7 +1253,7 @@ export const createPluginRuntime = (
 	const beforeNavigationContextForPlugin = (
 		plugin: LoadedPlugin,
 		state: SessionPluginState,
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	): PluginBeforeSessionHistoryNavigationContext => {
 		const pluginContext = contextForPlugin(plugin, state, context);
 		const sessionHistory = pluginContext.sessionHistory;
@@ -1095,7 +1273,7 @@ export const createPluginRuntime = (
 		});
 	};
 	const runBeforeSessionHistoryNavigation = async (
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	): Promise<string | undefined> => {
 		const state = sessionStates.get(context.sessionId);
 		if (state === undefined) {
@@ -1128,7 +1306,7 @@ export const createPluginRuntime = (
 		}
 	};
 	const notifySessionHistoryNavigated = async (
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	): Promise<void> => {
 		const state = sessionStates.get(context.sessionId);
 		if (state === undefined) {
@@ -1167,18 +1345,64 @@ export const createPluginRuntime = (
 		}
 	};
 
+	const shutdownStartedPlugins = async (): Promise<void> => {
+		for (const plugin of [...plugins].reverse()) {
+			if (
+				!processStartAttemptedPlugins.has(plugin.id) ||
+				plugin.onShutdown === undefined
+			) {
+				continue;
+			}
+			const context: PluginProcessContext = {
+				sourcePath: plugin.sourcePath,
+				workspace: plugin.workspace,
+			};
+			try {
+				await plugin.onShutdown(context);
+			} catch (error) {
+				await logPluginFailure(
+					"Plugin shutdown hook failed",
+					plugin,
+					"shutdown",
+					error
+				);
+			}
+		}
+		processStartAttemptedPlugins.clear();
+		processStarted = false;
+	};
+
 	return Object.freeze({
 		get diagnostics() {
 			return Object.freeze([...diagnostics]);
 		},
 
 		bindPromptSelectionTarget: promptSelectionBridge.bindPromptSelectionTarget,
+		bindPluginUIHost(sessionId, host) {
+			const binding = Object.freeze({ host });
+			const previous = pluginUIHosts.get(sessionId);
+			if (previous !== undefined) {
+				closePluginUIHandles(sessionId, previous);
+			}
+			pluginUIHosts.set(sessionId, binding);
+			return () => {
+				if (pluginUIHosts.get(sessionId) !== binding) {
+					return;
+				}
+				pluginUIHosts.delete(sessionId);
+				closePluginUIHandles(sessionId, binding);
+			};
+		},
+		getPluginUI,
 		disablePlugin(pluginId, message) {
 			const plugin = plugins.find(({ id }) => id === pluginId);
 			if (plugin === undefined || disabledPlugins.has(pluginId)) {
 				return;
 			}
 			disabledPlugins.add(pluginId);
+			for (const sessionId of pluginUIHandles.keys()) {
+				closePluginUIHandles(sessionId, undefined, pluginId);
+			}
 			addDiagnostic(plugin, message);
 		},
 		async executeCommand(pluginId, name, context) {
@@ -1217,9 +1441,10 @@ export const createPluginRuntime = (
 					sessionState: _ignoredState,
 					...base
 				} = context;
-				const pluginContext = Object.freeze({
+				const pluginContext: PluginCommandContext = Object.freeze({
 					...base,
 					...omitUndefined({ sessionHistory, sessionState }),
+					ui: getPluginUI(plugin.id, context.sessionId),
 				});
 				const result = await command.handler(pluginContext);
 				if (typeof result !== "string") {
@@ -1411,30 +1636,11 @@ export const createPluginRuntime = (
 						sessionStates.delete(sessionId);
 					}
 				}
-				for (const plugin of [...plugins].reverse()) {
-					if (
-						!processStartAttemptedPlugins.has(plugin.id) ||
-						plugin.onShutdown === undefined
-					) {
-						continue;
-					}
-					const context: PluginProcessContext = {
-						sourcePath: plugin.sourcePath,
-						workspace: plugin.workspace,
-					};
-					try {
-						await plugin.onShutdown(context);
-					} catch (error) {
-						await logPluginFailure(
-							"Plugin shutdown hook failed",
-							plugin,
-							"shutdown",
-							error
-						);
-					}
+				for (const [sessionId, binding] of pluginUIHosts) {
+					pluginUIHosts.delete(sessionId);
+					closePluginUIHandles(sessionId, binding);
 				}
-				processStartAttemptedPlugins.clear();
-				processStarted = false;
+				await shutdownStartedPlugins();
 			})();
 			shutdownPromise = closing;
 			try {

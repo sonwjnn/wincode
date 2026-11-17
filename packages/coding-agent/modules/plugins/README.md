@@ -69,14 +69,15 @@ Plugin Identifiers use lowercase ASCII letters, digits, and underscores; local T
 
 ### Provider SDK Providers
 
-A trusted Plugin may register a custom SDK Provider with `registerProvider`. The host calls `createProvider()` for each Session Host, so return a fresh Provider instance. The `connect` interaction receives only the host's `requestTextInput` operation and an abort signal, then returns a JSON credential value or `undefined` to cancel:
+A trusted Plugin may register a custom SDK Provider with `registerProvider`. The host calls `createProvider()` for each Session Host, so return a fresh Provider instance. The `connect` interaction receives `ui`, the host's `requestTextInput` operation, and an abort signal, then returns a JSON credential value or `undefined` to cancel:
 
 ```ts
 plugin.registerProvider({
   providerId: "acme",
   displayName: "Acme Model Service",
   createProvider: () => createAcmeProvider(),
-  connect: async ({ requestTextInput, signal }) => {
+  connect: async ({ requestTextInput, signal, ui }) => {
+    ui.notify("Connect to Acme Model Service", "info");
     const apiKey = await requestTextInput("Acme API key", signal);
     return apiKey === undefined ? undefined : { apiKey };
   },
@@ -103,9 +104,47 @@ A Plugin factory may also register named process resources with `registerResourc
 
 Tool handlers can register background promises with `context.registerBackgroundWork(promise)`. One-Shot waits for all work registered to that Session before exiting. Interactive Mode and RPC keep the parent Session Host alive while registered work is pending, even after its last view is released; normal idle unloading resumes when the work settles.
 
+## Plugin UI
+
+Session-bound Plugin callbacks, Tools, Commands, Provider `connect()` callbacks, and Status Panel `runAction()` handlers receive `ui`. In Interactive Mode, while that Session has a mounted host view, the host renders dialogs and notifications; Plugin code describes the request but does not create terminal components:
+
+```ts
+plugin.registerCommand({
+  description: "Prepare and confirm a reply draft.",
+  name: "draft_reply",
+  handler: async ({ ui }) => {
+    const recipient = await ui.input("Recipient", "name@example.com");
+    if (recipient === undefined) return "Cancelled";
+
+    const confirmed = await ui.confirm(
+      "Send reply",
+      `Send the reply to ${recipient}?`,
+      { timeout: 30_000 },
+    );
+    if (!confirmed) return "Not sent";
+
+    const draft = await ui.editor("Reply", "Thanks for your message.");
+    if (draft === undefined) return "Cancelled";
+
+    ui.notify("Draft ready", "info");
+    return draft;
+  },
+});
+```
+
+`select(prompt, choices)` returns the selected string; `confirm(title, message?)` returns a boolean; `input(title, placeholder?)` and `editor(title, initialValue?)` return text. Dismissal, timeout, caller cancellation, Plugin disable, Session-view unbinding, or runtime shutdown resolve each request to its default: `undefined` for selection/input/editor and `false` for confirmation. The editor saves with `Ctrl+Enter`; `Escape` dismisses dialogs. Empty selection choices resolve immediately to `undefined`.
+
+Pass `{ signal, timeout }` as the final dialog argument to cancel a request or set a deadline in milliseconds; no deadline is applied unless `timeout` is supplied. In a supported Interactive Session, an already-aborted signal and a zero timeout resolve immediately to the method's default; a negative or non-finite timeout rejects with `RangeError`. Caller abort resolves to the same default, so inspect `signal.aborted` to distinguish it from dismissal or timeout. Unsupported-mode methods use their no-op defaults without opening or validating a dialog request. Cancellation removes only that request's dialog. Concurrent requests keep independent dialog layers, so closing a child request does not close its parent.
+
+`notify(message, level?)` displays a nonblocking toast (`info`, `warning`, or `error`); it does not wait for user input. `getAllThemes()` and `getTheme(name)` return copies of the available theme data. `setTheme(nameOrTheme)` changes the app's shared theme and returns `PluginThemeChangeResult`; an unknown name or invalid theme leaves the current theme unchanged and returns its error. The public exports include `PluginUI`, `PluginUIContext`, `PluginUIDialogOptions`, `PluginNotificationLevel`, `PluginUIPromptKind`, `PluginUIPromptContext`, `PluginThemeChangeResult`, `Theme`, and `ThemeColors` from `@wincode/coding-agent`.
+
+Prompt observers can use `onUIPromptStart` and `onUIPromptEnd`. Their context identifies the Plugin, Session, prompt kind, title, execution mode, and `reason: "ui_prompt"`. Concurrent or nested dialogs for one Plugin and Session share one start/end span. Observer callbacks run best-effort and never delay the dialog; failures are logged without blocking it. These hooks report a UI-request span, not Agent Turn state: they do not pause or resume a Turn, while a Tool or Command that awaits a request remains pending until the request settles.
+
+One-Shot, JSON, Print, and RPC execution do not render Plugin UI. If there is no Interactive Session host, methods use terminal-free defaults: selection/input/editor return `undefined`, confirmation returns `false`, notifications do nothing, theme listing is empty, theme lookup returns `undefined`, and theme changes return a failure result. This keeps noninteractive and RPC execution React-free; it does not imply that an RPC UI capability is available.
+
 ## Status Panels
 
-Plugins may register a status panel with `registerStatusPanel`. The host renders its snapshot in the session sidebar and indicator, routes refresh and item actions through the Plugin Runtime, and lets a command open the same panel with `statusPanelId`. When a panel supplies `refresh`, its dialog exposes `Ctrl+R`; `Space` runs the selected item action. A panel owns its status values and action behavior; the host does not need domain-specific UI or imports.
+Plugins may register a status panel with `registerStatusPanel`. The host renders its snapshot in the session sidebar and indicator, routes refresh and item actions through the Plugin Runtime, and lets a command open the same panel with `statusPanelId`. When a panel supplies `refresh`, its dialog exposes `Ctrl+R`; `Space` runs the selected item action. A panel owns its status values and action behavior; its `runAction` context also receives the Plugin UI API. The host does not need domain-specific UI or imports.
 
 ## Session SDK
 
