@@ -41,6 +41,10 @@ import type {
 } from "../../../modules/sessions/host/session-rpc";
 import { resolveWorkspaceRoot as resolveSessionWorkspaceRoot } from "../../../modules/sessions/host/session-rpc";
 import type { SessionFilePart } from "../../../modules/sessions/message";
+import {
+	RPC_PLUGIN_UI_CAPABILITY_VERSION,
+	RPC_PLUGIN_UI_METHODS,
+} from "./plugin-ui";
 import { projectMessage, submissionFromWaiting } from "./projection";
 import {
 	RPC_ERROR_CODES,
@@ -276,9 +280,13 @@ export const createRpcRequestHandler = (
 			) {
 				throw rpcInvalidParams("clientInfo.version must be a string.");
 			}
-			if (asRecord(params.capabilities) === undefined) {
+			const clientCapabilities = asRecord(params.capabilities);
+			if (clientCapabilities === undefined) {
 				throw rpcInvalidParams("capabilities must be an object.");
 			}
+			const clientPluginUiCapability = asRecord(clientCapabilities.pluginUi);
+			state.pluginUiEnabled =
+				clientPluginUiCapability?.version === RPC_PLUGIN_UI_CAPABILITY_VERSION;
 			const requestedCwd = params.cwd;
 			if (typeof requestedCwd !== "string" || !path.isAbsolute(requestedCwd)) {
 				throw appError(
@@ -343,6 +351,14 @@ export const createRpcRequestHandler = (
 			state.lifecycle = "initialized";
 			return success(request.id, {
 				capabilities: {
+					...(state.pluginUiEnabled === true
+						? {
+								pluginUi: {
+									methods: RPC_PLUGIN_UI_METHODS,
+									version: RPC_PLUGIN_UI_CAPABILITY_VERSION,
+								},
+							}
+						: {}),
 					explicitSteering: true,
 					failedSubmissionRetry: true,
 					stateNotifications: true,

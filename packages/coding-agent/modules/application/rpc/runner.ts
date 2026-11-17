@@ -1,4 +1,4 @@
-import { logger } from "@wincode/utils";
+import { logger, omitUndefined } from "@wincode/utils";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { resolveSubmissionPrompt } from "@/modules/commands/submission-resolution";
 import { expandPastedText } from "@/modules/sessions/pasted-text";
@@ -12,6 +12,9 @@ import type {
 	SessionSubmissionEvent,
 } from "../../../modules/sessions/host/session-rpc";
 import { type DeferredNotification, SerializedWriter } from "./output";
+import { createRpcPluginUIHost } from "./plugin-ui";
+import type { RpcPluginUIChannel } from "./plugin-ui-channel";
+import { createRpcPluginUIChannel } from "./plugin-ui-channel";
 import {
 	operationalStatus,
 	projectExecution,
@@ -130,6 +133,7 @@ export async function runRpc({
 	const unsubscribers: Array<() => void> = [];
 	const boundUnsubscribers: Array<() => void> = [];
 	let runtime: RuntimeModules | undefined;
+	let pluginUIChannel: RpcPluginUIChannel | undefined;
 	const state: RpcSessionState = {
 		lifecycle: "uninitialized",
 		shutdownRequested: false,
@@ -185,6 +189,7 @@ export async function runRpc({
 				}
 				state.lifecycle = "closing";
 				inputAbortController.abort();
+				pluginUIChannel?.close();
 				const deadline = Date.now() + shutdownDeadlineMs;
 				const settle = async (
 					work: Promise<void>,
@@ -292,13 +297,10 @@ export async function runRpc({
 		onAbort();
 	}
 
-	const emit = (method: string, params: unknown): void => {
-		const frame: Record<string, unknown> = {
-			jsonrpc: JSON_RPC_VERSION,
-			method,
-			params: { sequence: ++notificationSequence, ...(asRecord(params) ?? {}) },
-		};
-		const coalescable = method === "session/stateChanged";
+	const enqueueFrame = (
+		frame: Record<string, unknown>,
+		coalescable = false
+	): void => {
 		if (handlingRequest) {
 			if (deferredOverflow) {
 				return;
@@ -330,6 +332,52 @@ export async function runRpc({
 			.enqueue(frame, { coalescable })
 			.catch((error: unknown) => fatalShutdown(error));
 	};
+	const emit = (method: string, params: unknown): void => {
+		enqueueFrame(
+			{
+				jsonrpc: JSON_RPC_VERSION,
+				method,
+				params: {
+					sequence: ++notificationSequence,
+					...(asRecord(params) ?? {}),
+				},
+			},
+			method === "session/stateChanged"
+		);
+	};
+	const emitPluginUIRequest = (
+		id: string,
+		params: Readonly<Record<string, unknown>>
+	): void => {
+		enqueueFrame({
+			id,
+			jsonrpc: JSON_RPC_VERSION,
+			method: "plugin/ui/request",
+			params: { sequence: ++notificationSequence, ...params },
+		});
+	};
+	const emitPluginUICancellation = (id: string): void => {
+		enqueueFrame({
+			jsonrpc: JSON_RPC_VERSION,
+			method: "$/cancelRequest",
+			params: { id },
+		});
+	};
+	pluginUIChannel = createRpcPluginUIChannel({
+		sendCancellation: emitPluginUICancellation,
+		sendNotification: (method, params) => {
+			if (state.pluginUiEnabled === true && !state.shutdownRequested) {
+				emit(method, params);
+			}
+		},
+		sendRequest: (id, params) => {
+			if (state.pluginUiEnabled !== true || state.shutdownRequested) {
+				pluginUIChannel?.cancelRequest(id);
+				return;
+			}
+			emitPluginUIRequest(id, params);
+		},
+	});
 	const resetDeferred = (): void => {
 		deferred.length = 0;
 		deferredHead = 0;
@@ -459,6 +507,20 @@ export async function runRpc({
 		state.lifecycle = "bound";
 		lastStateSignature = "";
 		lastTranscriptSignature = "";
+		if (state.pluginUiEnabled === true) {
+			const pluginRuntime = state.assembly?.capabilities.getPluginRuntime?.();
+			if (pluginRuntime !== undefined && pluginUIChannel !== undefined) {
+				const pluginUIHost = createRpcPluginUIHost(pluginUIChannel.transport);
+				const unbindPluginUIHost = pluginRuntime.bindPluginUIHost(
+					sessionId,
+					pluginUIHost
+				);
+				boundUnsubscribers.push(() => {
+					unbindPluginUIHost();
+					pluginUIHost.close();
+				});
+			}
+		}
 		try {
 			currentState();
 		} catch (error) {
@@ -581,7 +643,46 @@ export async function runRpc({
 				);
 				continue;
 			}
-			const rawId = stringValue(asRecord(record.value)?.id);
+			const incoming = asRecord(record.value);
+			if (incoming?.method === "$/cancelRequest") {
+				const cancelParams = asRecord(incoming.params);
+				const id = stringValue(cancelParams?.id);
+				if (
+					incoming.jsonrpc !== JSON_RPC_VERSION ||
+					id === undefined ||
+					!pluginUIChannel.cancelRequest(id)
+				) {
+					void logger.debug("Ignored an unknown RPC cancellation", {
+						operation: "rpc.plugin-ui.cancel",
+						...omitUndefined({ requestId: id }),
+					});
+				}
+				continue;
+			}
+			if (
+				incoming !== undefined &&
+				typeof incoming.id === "string" &&
+				!("method" in incoming)
+			) {
+				const hasResult = Object.hasOwn(incoming, "result");
+				const hasError = Object.hasOwn(incoming, "error");
+				const validFrame =
+					incoming.jsonrpc === JSON_RPC_VERSION && hasResult !== hasError;
+				const matched = pluginUIChannel.receiveResponse(
+					incoming.id,
+					incoming.result,
+					hasError,
+					validFrame
+				);
+				if (!matched) {
+					void logger.debug("Ignored an unknown RPC response", {
+						operation: "rpc.plugin-ui.response",
+						requestId: incoming.id,
+					});
+				}
+				continue;
+			}
+			const rawId = stringValue(incoming?.id);
 			if (rawId !== undefined && seenRequestIds.has(rawId)) {
 				await output.enqueue(
 					failure(rawId, RPC_ERROR_CODES.invalidRequest, "Invalid Request", {

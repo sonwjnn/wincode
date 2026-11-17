@@ -81,9 +81,10 @@ import type { PluginCommand, PluginTool } from "./types";
 import { unsupportedPluginUI } from "./ui/plugin-ui-default";
 import type {
 	PluginUIHandle,
-	PluginUIHost,
+	PluginUIHostBinding,
 	PluginUIOwner,
-} from "./ui/plugin-ui-host";
+	PluginUIUpdate,
+} from "./ui/plugin-ui-host-contract";
 
 export type PluginDiagnostic = Readonly<{
 	message: string;
@@ -181,7 +182,11 @@ export type PluginRuntime = Readonly<{
 	bindPromptSelectionTarget: (
 		target: PluginPromptSelectionTarget
 	) => () => void;
-	bindPluginUIHost: (sessionId: string, host: PluginUIHost) => () => void;
+	bindPluginUIHost: (
+		sessionId: string,
+		host: PluginUIHostBinding
+	) => () => void;
+	notifyPluginUIUpdate: (sessionId: string, update: PluginUIUpdate) => void;
 	getPluginUI: (pluginId: string, sessionId?: string) => PluginUI;
 	getResource: <Resource = unknown>(
 		pluginId: string,
@@ -264,12 +269,12 @@ type SessionPluginState = {
 	tools: Map<string, PluginToolDescriptor>;
 };
 
-type PluginUIHostBinding = Readonly<{ host: PluginUIHost }>;
+type PluginUIHostRegistration = Readonly<{ host: PluginUIHostBinding }>;
 
 type PluginUIInvocation = "command" | "event";
 
 type PluginUIHandleBinding = Readonly<{
-	binding: PluginUIHostBinding;
+	binding: PluginUIHostRegistration;
 	handle: PluginUIHandle;
 	pluginId: string;
 }>;
@@ -354,7 +359,7 @@ export const createPluginRuntime = (
 	const backgroundWork = new Map<string, Set<Promise<void>>>();
 	const backgroundWorkErrors = new Map<string, unknown[]>();
 	const backgroundWorkListeners = new Map<string, Set<() => void>>();
-	const pluginUIHosts = new Map<string, PluginUIHostBinding>();
+	const pluginUIHosts = new Map<string, PluginUIHostRegistration>();
 	const pluginUIHandles = new Map<string, Map<string, PluginUIHandleBinding>>();
 	const pluginUIPromptSpans = new Map<string, PluginUIPromptSpan>();
 	const closingPluginUISessions = new Set<string>();
@@ -460,7 +465,7 @@ export const createPluginRuntime = (
 	};
 	const closePluginUIHandles = (
 		sessionId: string,
-		binding?: PluginUIHostBinding,
+		binding?: PluginUIHostRegistration,
 		pluginId?: string
 	): void => {
 		const handles = pluginUIHandles.get(sessionId);
@@ -504,7 +509,8 @@ export const createPluginRuntime = (
 			state.disabled.has(pluginId) ||
 			closingPluginUISessions.has(sessionId) ||
 			(state.context.executionMode !== undefined &&
-				state.context.executionMode !== "interactive") ||
+				state.context.executionMode !== "interactive" &&
+				state.context.executionMode !== "rpc") ||
 			binding === undefined
 		) {
 			return unsupportedPluginUI;
@@ -1390,7 +1396,7 @@ export const createPluginRuntime = (
 
 		bindPromptSelectionTarget: promptSelectionBridge.bindPromptSelectionTarget,
 		bindPluginUIHost(sessionId, host) {
-			const binding = Object.freeze({ host });
+			const binding: PluginUIHostRegistration = Object.freeze({ host });
 			const previous = pluginUIHosts.get(sessionId);
 			if (previous !== undefined) {
 				closePluginUIHandles(sessionId, previous);
@@ -1403,6 +1409,9 @@ export const createPluginRuntime = (
 				pluginUIHosts.delete(sessionId);
 				closePluginUIHandles(sessionId, binding);
 			};
+		},
+		notifyPluginUIUpdate(sessionId, update) {
+			pluginUIHosts.get(sessionId)?.host.update?.(update);
 		},
 		getPluginUI,
 		disablePlugin(pluginId, message) {

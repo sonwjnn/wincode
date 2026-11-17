@@ -217,6 +217,7 @@ export type RpcLifecycle =
 
 export type RpcSessionState = {
 	lifecycle: RpcLifecycle;
+	pluginUiEnabled?: boolean;
 	assembly?: RpcAssembly;
 	host?: SessionHost;
 	boundSessionId?: SessionId;
