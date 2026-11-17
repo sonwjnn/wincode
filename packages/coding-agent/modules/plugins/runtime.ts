@@ -43,9 +43,12 @@ import type {
 	PluginCompactionFailedHook,
 	PluginCompactionFailedInputContext,
 	PluginCompactionInputContext,
+	PluginEntryRenderer,
 	PluginInputSchema,
 	PluginJsonValue,
 	PluginMcpServerRegistration,
+	PluginMessageRenderer,
+	PluginMessageRole,
 	PluginProcessContext,
 	PluginProcessStartHook,
 	PluginProviderRegistration,
@@ -140,6 +143,16 @@ export type PluginCommandDescriptor = Readonly<{
 export type PluginStatusPanelDescriptor = PluginStatusPanelRegistration &
 	Readonly<{ pluginId: string; sourcePath: string }>;
 
+export type PluginMessageRendererContribution = Readonly<{
+	component: PluginMessageRenderer;
+	pluginId: string;
+}>;
+
+export type PluginEntryRendererContribution = Readonly<{
+	component: PluginEntryRenderer;
+	pluginId: string;
+}>;
+
 export type PluginProviderDescriptor = PluginProviderRegistration &
 	Readonly<{
 		pluginId: string;
@@ -156,6 +169,8 @@ export type LoadedPlugin = Readonly<{
 	mcpServers?: readonly PluginMcpServerRegistration[];
 	statusPanels?: readonly PluginStatusPanelRegistration[];
 	providers?: readonly PluginProviderDescriptor[];
+	messageRenderers?: ReadonlyMap<PluginMessageRole, PluginMessageRenderer>;
+	entryRenderers?: ReadonlyMap<string, PluginEntryRenderer>;
 	sourceIdentity?: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onBeforeCompaction?: PluginBeforeCompactionHook;
@@ -228,6 +243,17 @@ export type PluginRuntime = Readonly<{
 		sessionId: string
 	) => PluginSessionState | undefined;
 	getStatusPanels: () => readonly PluginStatusPanelDescriptor[];
+	getMessageRenderer: (
+		role: PluginMessageRole,
+		sessionId?: string
+	) => PluginMessageRendererContribution | undefined;
+	getEntryRenderer: (
+		pluginId: string,
+		type: string,
+		sessionId?: string
+	) => PluginEntryRendererContribution | undefined;
+	getRendererRevision: () => number;
+	subscribeRendererChanges: (listener: () => void) => () => void;
 	refreshStatusPanel: (pluginId: string, panelId: string) => Promise<void>;
 	runStatusPanelAction: (
 		pluginId: string,
@@ -404,6 +430,48 @@ export const createPluginRuntime = (
 	const diagnostics = [...initialDiagnostics];
 	const disabledPlugins = new Set<string>();
 	const sessionStates = new Map<string, SessionPluginState>();
+	const rendererListeners = new Set<() => void>();
+	const messageRenderers = new Map<
+		PluginMessageRole,
+		PluginMessageRendererContribution
+	>();
+	const entryRenderers = new Map<
+		string,
+		Map<string, PluginEntryRendererContribution>
+	>();
+	let rendererRevision = 0;
+	let renderersClosed = false;
+	for (const plugin of plugins) {
+		for (const [role, component] of plugin.messageRenderers ?? []) {
+			if (!messageRenderers.has(role)) {
+				messageRenderers.set(
+					role,
+					Object.freeze({ component, pluginId: plugin.id })
+				);
+			}
+		}
+		let pluginEntryRenderers = entryRenderers.get(plugin.id);
+		if (pluginEntryRenderers === undefined) {
+			pluginEntryRenderers = new Map();
+			entryRenderers.set(plugin.id, pluginEntryRenderers);
+		}
+		for (const [type, component] of plugin.entryRenderers ?? []) {
+			pluginEntryRenderers.set(
+				type,
+				Object.freeze({ component, pluginId: plugin.id })
+			);
+		}
+	}
+	const notifyRendererChanges = (): void => {
+		rendererRevision += 1;
+		for (const listener of [...rendererListeners]) {
+			try {
+				listener();
+			} catch {
+				// A renderer observer cannot interfere with Plugin lifecycle.
+			}
+		}
+	};
 	const backgroundWork = new Map<string, Set<Promise<void>>>();
 	const backgroundWorkErrors = new Map<string, unknown[]>();
 	const backgroundWorkListeners = new Map<string, Set<() => void>>();
@@ -586,6 +654,10 @@ export const createPluginRuntime = (
 		if (shutdownPromise !== undefined) {
 			await shutdownPromise;
 		}
+		if (renderersClosed) {
+			renderersClosed = false;
+			notifyRendererChanges();
+		}
 		if (processStarted) {
 			return [];
 		}
@@ -613,6 +685,7 @@ export const createPluginRuntime = (
 					diagnostics.push(diagnostic);
 					startDiagnostics.push(diagnostic);
 					disabledPlugins.add(plugin.id);
+					notifyRendererChanges();
 					await logPluginFailure(
 						"Plugin process start hook failed; disabled for this runtime",
 						plugin,
@@ -646,6 +719,39 @@ export const createPluginRuntime = (
 		!disabledPlugins.has(plugin.id) &&
 		(sessionId === undefined ||
 			!sessionStates.get(sessionId)?.disabled.has(plugin.id));
+	const getMessageRenderer = (
+		role: PluginMessageRole,
+		sessionId?: string
+	): PluginMessageRendererContribution | undefined => {
+		if (renderersClosed) {
+			return;
+		}
+		const renderer = messageRenderers.get(role);
+		const plugin =
+			renderer === undefined
+				? undefined
+				: plugins.find(({ id }) => id === renderer.pluginId);
+		return plugin !== undefined && isEnabledForSession(plugin, sessionId)
+			? renderer
+			: undefined;
+	};
+	const getEntryRenderer = (
+		pluginId: string,
+		type: string,
+		sessionId?: string
+	): PluginEntryRendererContribution | undefined => {
+		if (renderersClosed) {
+			return;
+		}
+		const renderer = entryRenderers.get(pluginId)?.get(type);
+		const plugin =
+			renderer === undefined
+				? undefined
+				: plugins.find(({ id }) => id === renderer.pluginId);
+		return plugin !== undefined && isEnabledForSession(plugin, sessionId)
+			? renderer
+			: undefined;
+	};
 	const commandsForPlugin = (
 		plugin: LoadedPlugin,
 		sessionId?: string
@@ -1034,6 +1140,7 @@ export const createPluginRuntime = (
 				return;
 			}
 			state.disabled.add(plugin.id);
+			notifyRendererChanges();
 			closePluginUIHandles(state.context.sessionId, undefined, plugin.id);
 			addDiagnostic(
 				plugin,
@@ -1548,6 +1655,7 @@ export const createPluginRuntime = (
 					}
 				}
 			}
+			notifyRendererChanges();
 			for (const sessionId of pluginUIHandles.keys()) {
 				closePluginUIHandles(sessionId, undefined, pluginId);
 			}
@@ -1632,6 +1740,13 @@ export const createPluginRuntime = (
 					.filter((plugin) => isEnabledForSession(plugin))
 					.map(({ id, sourcePath }) => Object.freeze({ id, sourcePath }))
 			);
+		},
+		getMessageRenderer,
+		getEntryRenderer,
+		getRendererRevision: () => rendererRevision,
+		subscribeRendererChanges(listener) {
+			rendererListeners.add(listener);
+			return () => rendererListeners.delete(listener);
 		},
 		getAgentRegistrations() {
 			return Object.freeze(
@@ -1788,6 +1903,8 @@ export const createPluginRuntime = (
 			if (shutdownPromise !== undefined) {
 				return shutdownPromise;
 			}
+			renderersClosed = true;
+			notifyRendererChanges();
 			const closing = (async () => {
 				await waitForStartToSettle();
 				for (const [sessionId, state] of [...sessionStates]) {

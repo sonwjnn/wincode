@@ -21,6 +21,7 @@ import { codingToolNames } from "@/modules/tools";
 import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
+import { validatePluginSessionHistoryType } from "../sessions/session-plugin-history";
 import {
 	validatePluginSessionStatePluginId,
 	validatePluginSessionStateSchemaVersion,
@@ -38,9 +39,12 @@ import type {
 	PluginCompactionCompletedHook,
 	PluginCompactionFailedHook,
 	PluginDefinitionAPI,
+	PluginEntryRenderer,
 	PluginFactory,
 	PluginJsonValue,
 	PluginLoadContext,
+	PluginMessageRenderer,
+	PluginMessageRole,
 	PluginProcessStartHook,
 	PluginProviderRegistration,
 	PluginSessionHistoryNavigatedHook,
@@ -48,6 +52,7 @@ import type {
 	PluginSessionStartHook,
 	PluginShutdownHook,
 	PluginStatusPanelRegistration,
+	PluginUIContributionResult,
 	PluginUIPromptHook,
 } from "./public";
 import {
@@ -95,6 +100,8 @@ export type LoadPluginsInput = Readonly<{
 type MutablePluginDraft = {
 	agents: Map<string, PluginAgentRegistration>;
 	commands: Map<string, PluginCommand>;
+	entryRenderers: Map<string, PluginEntryRenderer>;
+	messageRenderers: Map<PluginMessageRole, PluginMessageRenderer>;
 	mcpServers: Map<string, PluginJsonValue>;
 	providers: Map<string, PluginProviderRegistration>;
 	resources: Map<string, PluginResourceDescriptor>;
@@ -137,6 +144,11 @@ const isTypeScriptPluginPath = (candidatePath: string): boolean =>
 	typescriptPluginExtensions.has(path.extname(candidatePath)) &&
 	!declarationFilePattern.test(candidatePath);
 const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
+const pluginMessageRendererRoles = new Set<PluginMessageRole>([
+	"assistant",
+	"system",
+	"user",
+]);
 const pluginMcpServerNamePattern = /^[A-Za-z0-9_-]{1,64}$/u;
 const pluginResourceNamePattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const RESERVED_TOOL_NAMES = new Set([...codingToolNames, "skill"]);
@@ -555,11 +567,64 @@ const createPluginAPI = (
 	toolNames: ReadonlySet<string>,
 	commandNames: ReadonlySet<string>,
 	customCommandNames: ReadonlySet<string>,
+	messageRendererOwners: ReadonlyMap<PluginMessageRole, string>,
 	promptSelectionBridge: PluginPromptSelectionBridge
-): PluginAPI =>
-	Object.freeze({
+): PluginAPI => {
+	let draft: MutablePluginDraft | undefined;
+	const assertOpen = (): void => {
+		if (!isOpen()) {
+			throw new Error("Plugin registration is closed.");
+		}
+	};
+	const requireDraft = (): MutablePluginDraft => {
+		if (draft === undefined) {
+			throw new Error("Define the Plugin before registering its renderers.");
+		}
+		return draft;
+	};
+	const registrationConflict = (
+		surface: "entry" | "message"
+	): PluginUIContributionResult => ({
+		code: "plugin_ui_contribution_conflict",
+		success: false,
+		surface,
+	});
+	return Object.freeze({
 		setModel: promptSelectionBridge.setModel,
 		setThinkingLevel: promptSelectionBridge.setThinkingLevel,
+		registerMessageRenderer(role, renderer) {
+			assertOpen();
+			if (
+				!pluginMessageRendererRoles.has(role) ||
+				typeof renderer !== "function"
+			) {
+				throw new Error(
+					"Plugin Message Renderers require a supported transcript role and React component."
+				);
+			}
+			const plugin = requireDraft();
+			if (
+				plugin.messageRenderers.has(role) ||
+				messageRendererOwners.has(role)
+			) {
+				return registrationConflict("message");
+			}
+			plugin.messageRenderers.set(role, renderer);
+			return { success: true };
+		},
+		registerEntryRenderer(type, renderer) {
+			assertOpen();
+			validatePluginSessionHistoryType(type);
+			if (typeof renderer !== "function") {
+				throw new Error("Plugin Entry Renderers require a React component.");
+			}
+			const plugin = requireDraft();
+			if (plugin.entryRenderers.has(type)) {
+				return registrationConflict("entry");
+			}
+			plugin.entryRenderers.set(type, renderer);
+			return { success: true };
+		},
 		definePlugin(identity) {
 			if (
 				!(isOpen() && isObjectLike(identity)) ||
@@ -572,9 +637,11 @@ const createPluginAPI = (
 				validatePluginSessionStatePluginId(identity.id);
 				validatePluginSessionStateSchemaVersion(identity.sessionStateVersion);
 			}
-			const draft: MutablePluginDraft = {
+			const nextDraft: MutablePluginDraft = {
 				agents: new Map(),
 				commands: new Map(),
+				entryRenderers: new Map(),
+				messageRenderers: new Map(),
 				mcpServers: new Map(),
 				providers: new Map(),
 				resources: new Map(),
@@ -585,9 +652,10 @@ const createPluginAPI = (
 				tools: new Map(),
 				workspace: context.workspace,
 			};
-			setDraft(draft);
+			setDraft(nextDraft);
+			draft = nextDraft;
 			return createRegistrationAPI(
-				draft,
+				nextDraft,
 				isOpen,
 				diagnostics,
 				toolNames,
@@ -596,6 +664,7 @@ const createPluginAPI = (
 			);
 		},
 	});
+};
 
 const loadedPluginFromDraft = (
 	draft: MutablePluginDraft,
@@ -701,6 +770,8 @@ const loadedPluginFromDraft = (
 	return Object.freeze({
 		agents: Object.freeze([...draft.agents.values()]),
 		commands: Object.freeze(registeredCommands),
+		entryRenderers: new Map(draft.entryRenderers),
+		messageRenderers: new Map(draft.messageRenderers),
 		mcpServers: Object.freeze(
 			[...draft.mcpServers].map(([name, config]) =>
 				Object.freeze({ config, name, ownerPluginId: draft.id })
@@ -1125,6 +1196,7 @@ type PluginLoadState = Readonly<{
 	loadedPlugins: LoadedPlugin[];
 	pluginSources: Map<string, string>;
 	toolNames: Set<string>;
+	messageRendererOwners: Map<PluginMessageRole, string>;
 }>;
 
 type PluginFactoryResult = Readonly<{
@@ -1280,6 +1352,7 @@ const runPluginFactory = async (
 				state.toolNames,
 				state.commandNames,
 				state.customCommandNames,
+				state.messageRendererOwners,
 				promptSelectionBridge
 			),
 			context
@@ -1350,6 +1423,9 @@ const publishPluginDraft = async (
 			state.commandNames,
 			candidate.sourceScope
 		);
+		for (const role of loaded.messageRenderers?.keys() ?? []) {
+			state.messageRendererOwners.set(role, loaded.id);
+		}
 		state.pluginSources.set(loaded.id, candidate.path);
 		state.loadedPlugins.push(loaded);
 	} catch (error) {
@@ -1374,6 +1450,7 @@ export const loadPlugins = async (
 		diagnostics,
 		disabledPluginIds: plan.disabledPluginIds,
 		loadedPlugins: [],
+		messageRendererOwners: new Map(),
 		pluginSources: new Map(),
 		toolNames: new Set<string>(RESERVED_TOOL_NAMES),
 	};

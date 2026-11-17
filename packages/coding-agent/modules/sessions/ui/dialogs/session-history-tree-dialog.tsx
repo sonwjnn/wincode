@@ -1,16 +1,33 @@
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
 import type { SessionRecordId } from "@wincode/agent-core";
-import { getErrorMessage } from "@wincode/utils";
+import { getErrorMessage, logger } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	createElement,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import {
+	PluginRendererErrorBoundary,
+	useInteractivePluginRuntime,
+	usePluginRendererRevision,
+} from "@/modules/plugins/ui/plugin-renderer-boundary";
 import type { SessionSdk } from "@/modules/sessions/sdk-contract";
 import type {
 	SessionHistoryTreeEntry,
 	SessionHistoryTreePage,
 } from "@/modules/sessions/session-pagination-types";
+import type {
+	PluginSessionHistoryEntry,
+	PluginSessionHistoryReader,
+} from "@/modules/sessions/session-plugin-history";
+import { MAX_SESSION_PAGE_LIMIT } from "@/modules/sessions/storage/session-pagination";
 import { stripControlCharacters } from "@/shared/display-sanitize";
-import type { SessionId } from "@/shared/identifiers";
+import type { SessionHistoryEntryId, SessionId } from "@/shared/identifiers";
 import {
 	useDialog,
 	useDialogEscape,
@@ -140,10 +157,135 @@ const getEntryPreviewTitle = (entry: SessionHistoryTreeEntry): string => {
 	}
 };
 
+const findPluginHistoryEntry = async (
+	history: PluginSessionHistoryReader,
+	entryId: SessionHistoryEntryId
+): Promise<PluginSessionHistoryEntry | undefined> => {
+	let cursor: string | undefined;
+	let readPoint: string | undefined;
+	while (true) {
+		const page = await history.read(
+			cursor === undefined
+				? { limit: MAX_SESSION_PAGE_LIMIT }
+				: { cursor, limit: MAX_SESSION_PAGE_LIMIT }
+		);
+		if (readPoint !== undefined && page.readPoint !== readPoint) {
+			return;
+		}
+		readPoint = page.readPoint;
+		const entry = page.entries.find((candidate) => candidate.id === entryId);
+		if (entry !== undefined) {
+			return entry;
+		}
+		if (page.nextCursor === undefined) {
+			return;
+		}
+		cursor = page.nextCursor;
+	}
+};
+
+function PluginHistoryEntryPreview({
+	entry,
+	fallback,
+	sessionId,
+}: Readonly<{
+	entry: Extract<SessionHistoryTreeEntry, { kind: "plugin-entry" }>;
+	fallback: string;
+	sessionId: SessionId;
+}>) {
+	const runtime = useInteractivePluginRuntime();
+	const rendererRevision = usePluginRendererRevision(runtime);
+	const { currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const renderer = runtime?.getEntryRenderer(
+		entry.pluginId,
+		entry.type,
+		sessionId
+	);
+	const [pluginEntry, setPluginEntry] = useState<PluginSessionHistoryEntry>();
+	const Renderer = renderer?.component;
+
+	useEffect(() => {
+		let active = true;
+		setPluginEntry(undefined);
+		if (
+			!entry.selectedPath ||
+			runtime === undefined ||
+			Renderer === undefined
+		) {
+			return () => {
+				active = false;
+			};
+		}
+		const history = runtime.getSessionHistoryForPlugin(
+			entry.pluginId,
+			sessionId
+		);
+		if (history === undefined) {
+			return () => {
+				active = false;
+			};
+		}
+		void findPluginHistoryEntry(history, entry.id)
+			.then((found) => {
+				if (active) {
+					setPluginEntry(found);
+				}
+			})
+			.catch((error: unknown) => {
+				if (active) {
+					void logger.debug(
+						"Plugin Session History entry preview could not load its payload",
+						{
+							cause: getErrorMessage(error, String(error)),
+							entryId: entry.id,
+							pluginId: entry.pluginId,
+						}
+					);
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, [
+		entry.id,
+		entry.pluginId,
+		entry.selectedPath,
+		Renderer,
+		runtime,
+		sessionId,
+	]);
+
+	if (
+		renderer === undefined ||
+		Renderer === undefined ||
+		pluginEntry === undefined
+	) {
+		return <text>{fallback}</text>;
+	}
+	return (
+		<PluginRendererErrorBoundary
+			fallback={<text>{fallback}</text>}
+			key={`${renderer?.pluginId}:${entry.id}:${rendererRevision}`}
+			pluginId={renderer.pluginId}
+			surface="entry"
+		>
+			{createElement(Renderer, {
+				dimensions,
+				entry: pluginEntry,
+				options: { selectedPath: entry.selectedPath },
+				theme: currentTheme,
+			})}
+		</PluginRendererErrorBoundary>
+	);
+}
+
 function SessionHistoryEntryPreview({
 	entry,
+	sessionId,
 }: {
 	readonly entry: SessionHistoryTreeEntry;
+	readonly sessionId: SessionId;
 }) {
 	useDialogEscape();
 	const { colors } = useTheme();
@@ -157,11 +299,19 @@ function SessionHistoryEntryPreview({
 			<text fg={colors.textMuted}>
 				{`Sequence ${entry.sequence} · ${entry.selectedPath ? "Selected Path" : "inactive branch"}`}
 			</text>
-			<text fg={colors.text}>
-				{content.length === 0
-					? "No plain-text content in this entry."
-					: content}
-			</text>
+			{entry.kind === "plugin-entry" ? (
+				<PluginHistoryEntryPreview
+					entry={entry}
+					fallback={content}
+					sessionId={sessionId}
+				/>
+			) : (
+				<text fg={colors.text}>
+					{content.length === 0
+						? "No plain-text content in this entry."
+						: content}
+				</text>
+			)}
 		</box>
 	);
 }
@@ -280,12 +430,14 @@ export function SessionHistoryTreeDialogContent({
 	const openPreview = useCallback(
 		(entry: SessionHistoryTreeEntry) => {
 			dialog.open({
-				children: <SessionHistoryEntryPreview entry={entry} />,
+				children: (
+					<SessionHistoryEntryPreview entry={entry} sessionId={sessionId} />
+				),
 				title: `History entry ${entry.sequence}`,
 				width: 72,
 			});
 		},
-		[dialog]
+		[dialog, sessionId]
 	);
 	const navigateTo = useCallback(
 		async (targetEntryId: SessionHistoryTreeEntry["id"] | null) => {

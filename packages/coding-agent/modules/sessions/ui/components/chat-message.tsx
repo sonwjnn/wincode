@@ -1,9 +1,15 @@
 import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
 import type { SessionMessageId, SessionRecordId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
-import type { ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { buildAgent } from "@/modules/agents";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
+import {
+	PluginRendererErrorBoundary,
+	useInteractivePluginRuntime,
+	usePluginRendererRevision,
+} from "@/modules/plugins/ui/plugin-renderer-boundary";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -11,7 +17,6 @@ import type {
 	UiNotification,
 	UiNotificationLevel,
 } from "@/shared/providers/toast/types";
-import { getInteractivePluginRuntime } from "@/shared/runtime-context";
 import {
 	BotMessageContent,
 	BotMessageFooter,
@@ -59,9 +64,84 @@ function AssistantTranscriptContent({
 	);
 }
 
+function DefaultSessionTranscriptMessage({
+	message,
+	pluginRuntime,
+	sessionId,
+	streaming,
+}: Readonly<{
+	message: SessionMessage;
+	pluginRuntime: PluginRuntime | undefined;
+	sessionId?: string;
+	streaming: boolean;
+}>) {
+	if (message.role === "user") {
+		return (
+			<UserMessage
+				appliedSkill={getAppliedSkill(message.metadata)}
+				parts={message.parts}
+				submissionFailure={message.metadata?.submissionFailure}
+			/>
+		);
+	}
+	return (
+		<AssistantTranscriptContent
+			message={message}
+			pluginRuntime={pluginRuntime}
+			sessionId={sessionId}
+			streaming={streaming}
+		/>
+	);
+}
+
+function SessionTranscriptMessage({
+	message,
+	sessionId,
+	streaming,
+}: Readonly<{
+	message: SessionMessage;
+	sessionId?: string;
+	streaming: boolean;
+}>) {
+	const runtime = useInteractivePluginRuntime();
+	const rendererRevision = usePluginRendererRevision(runtime);
+	const { currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const contribution =
+		message.role === "tool"
+			? undefined
+			: runtime?.getMessageRenderer(message.role, sessionId);
+	const fallback = (
+		<DefaultSessionTranscriptMessage
+			message={message}
+			pluginRuntime={runtime}
+			sessionId={sessionId}
+			streaming={streaming}
+		/>
+	);
+	if (contribution === undefined) {
+		return fallback;
+	}
+	const Renderer = contribution.component;
+	return (
+		<PluginRendererErrorBoundary
+			fallback={fallback}
+			key={`${contribution.pluginId}:${message.id}:${rendererRevision}`}
+			pluginId={contribution.pluginId}
+			surface="message"
+		>
+			{createElement(Renderer, {
+				dimensions,
+				message,
+				options: { streaming },
+				theme: currentTheme,
+			})}
+		</PluginRendererErrorBoundary>
+	);
+}
+
 export function ChatMessage({
 	footerMessage,
-	sessionId,
 	forkCheckpoints,
 	isRewindDisabled = false,
 	messages,
@@ -71,9 +151,9 @@ export function ChatMessage({
 	onRetry,
 	showActions = false,
 	streaming = false,
+	sessionId,
 }: {
 	footerMessage?: SessionMessage;
-	sessionId?: string;
 	forkCheckpoints?: ReadonlyMap<
 		SessionMessageId,
 		SessionForkCheckpointAssessment
@@ -86,9 +166,9 @@ export function ChatMessage({
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 	showActions?: boolean;
 	streaming?: boolean;
+	sessionId?: string;
 }) {
 	const { colors } = useTheme();
-	const pluginRuntime = getInteractivePluginRuntime();
 	const retryMessageId = resolveRetryMessageId(messages);
 	const latestAssistant = messages.findLast(
 		(message) => message.role === "assistant"
@@ -171,20 +251,11 @@ export function ChatMessage({
 			<box flexDirection="column" gap={1} width="100%">
 				{messages.map((message) => (
 					<box flexDirection="column" key={message.id} width="100%">
-						{message.role === "user" ? (
-							<UserMessage
-								appliedSkill={getAppliedSkill(message.metadata)}
-								parts={message.parts}
-								submissionFailure={message.metadata?.submissionFailure}
-							/>
-						) : (
-							<AssistantTranscriptContent
-								message={message}
-								pluginRuntime={pluginRuntime}
-								sessionId={sessionId}
-								streaming={streaming && message === latestAssistant}
-							/>
-						)}
+						<SessionTranscriptMessage
+							message={message}
+							sessionId={sessionId}
+							streaming={streaming && message === latestAssistant}
+						/>
 						{renderCheckpoint(forkCheckpoints?.get(message.id), message)}
 						{notificationsAfterMessage?.get(message.id)?.map((notification) => (
 							<ChatNotificationMessage

@@ -304,6 +304,35 @@ checklist.registerTool({
 
 `read({ cursor, limit })` returns only this Plugin's events on the Selected Path. Pages default to 50 entries, with a maximum of 200, and include an opaque `readPoint`; keep following `nextCursor` to read that same snapshot. The Session tree reader is separate: use `sessionSdk.readSessionHistoryTreePage` only when the Plugin explicitly needs tree metadata. Tree entries show the Plugin Identifier and event type, never the payload. Custom events are not added to Provider context automatically.
 
+### Plugin UI renderers
+
+Use `api.registerMessageRenderer(role, component)` to customize the presentation of existing `user`, `assistant`, or `system` messages in the Session Transcript. It does not create message roles, change the stored message, or affect what enters model context. The first Plugin to register a role in load order owns it; later registrations return `{ success: false, code: "plugin_ui_contribution_conflict", surface: "message" }` and do not replace the owner.
+
+```tsx
+import type { PluginFactory, PluginMessageRenderer } from "@wincode/coding-agent";
+
+const AssistantMessage: PluginMessageRenderer = ({ message, theme }) => {
+  const text = message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join(" ");
+  return <text fg={theme.colors.text}>{text}</text>;
+};
+
+const transcriptPlugin: PluginFactory = (api) => {
+  api.definePlugin({ id: "transcript_view" });
+  const registration = api.registerMessageRenderer("assistant", AssistantMessage);
+  if (!registration.success) {
+    // Another Plugin owns this role; this Plugin cannot replace it.
+  }
+};
+```
+
+Use `api.registerEntryRenderer(type, component)` for this Plugin's own `sessionHistory` event types. The Session history tree keeps its normal navigation and opaque preview; press `p` on a Selected Path event to show the registered component. The host reads the owning Plugin's paginated history for that entry, preserving the read snapshot. A missing or disabled Plugin, an inactive branch entry, or an unavailable payload keeps the opaque host preview; Wincode never loads Plugin code just to show an entry. Components receive `theme`, terminal `dimensions`, and the message or durable entry. Entry components receive `options.selectedPath`; payloads stay out of Provider context unless the Plugin explicitly sends some other model input.
+
+Renderers mount only in Interactive UI and are contained by the host's error boundary. A rendering error falls back to the built-in transcript presentation or opaque entry preview. Disabling or unloading the owner unmounts its component and restores the host fallback. Registration conflicts are non-throwing; entry types are scoped to their owner Plugin, so different Plugins can use the same event type.
+
+For a complete Plugin that appends versioned history events and renders them from the Selected Path, see [the history-entry renderer example](../../examples/history-entry-renderer-plugin.tsx). Enable it explicitly with `wincode --plugin packages/coding-agent/examples/history-entry-renderer-plugin.tsx` from the repository root.
+
 `append(type, payload, operationId)` attaches one entry to the current Active Leaf and advances it as one durable history write. Event types must be non-empty and no more than 128 UTF-8 bytes. Payloads must be strict JSON and no more than 64 KiB serialized; the event type and payload schema version belong to the Plugin. Use a version field in payloads and leave unknown versions unapplied while preserving their original entries. Operation IDs follow the same 512-character ASCII format as Plugin Session State: retry with the same ID and identical event; reusing an ID with different content conflicts. A capability from before Navigation is stale; use the refreshed capability from `onSessionHistoryNavigated` or the next `onSessionStart`.
 
 A failed append throws `PluginSessionHistoryWriteError`, whose `writeOutcome` distinguishes a write that did not commit from an indeterminate or committed-but-blocked write. Do not retry uncertain work with a new ID; keep the Session blocked until storage reconciliation. Validation errors occur before persistence. Events remain opaque and preserved when the Plugin is absent or disabled, and are retained in Session Bundles and Fork history. They are not secure-erasure storage. `sessionHistory` event history and `sessionState` snapshots are separate capabilities and may coexist.
