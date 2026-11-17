@@ -307,7 +307,7 @@ test("Session-scoped Plugin Tool renderers follow the owning Session lifecycle",
 	}
 });
 
-test("turn-scoped Plugin Tool renderers stay presentation-only and Session-bound", async () => {
+test("turn-scoped Plugin Tool renderers fall back after their descriptor expires", async () => {
 	resetPluginToolRendererFixtureState();
 	const environment = await createRendererEnvironment();
 	try {
@@ -359,7 +359,38 @@ test("turn-scoped Plugin Tool renderers stay presentation-only and Session-bound
 		);
 		expect(pluginToolRendererFixtureState.executionCount).toBe(0);
 
-		await environment.stopSession();
+		const nextTurnTools = await environment.runtime.resolveToolsForTurn({
+			agentId,
+			executionMode: "interactive",
+			sessionId: environment.sessionId,
+			signal: new AbortController().signal,
+			workspace: environment.workspace,
+		});
+		expect(nextTurnTools.some((tool) => tool.name === turnTool.name)).toBe(
+			false
+		);
+		createPluginTools({
+			agentId,
+			existingToolNames: [],
+			pluginRuntime: environment.runtime,
+			pluginTools: nextTurnTools,
+			sessionId: environment.sessionId,
+			workspace: environment.workspace,
+		});
+		const descriptorsAfterNextTurn = environment.runtime.getToolDescriptors(
+			environment.sessionId,
+			{ includeTurnRenderers: true }
+		);
+		expect(
+			descriptorsAfterNextTurn.some((tool) => tool.name === turnTool.name)
+		).toBe(false);
+		expect(
+			descriptorsAfterNextTurn.some(
+				(tool) =>
+					tool.localName === "session_scoped" && tool.renderCall !== undefined
+			)
+		).toBe(true);
+
 		await act(() => environment.updateParts([part]));
 		await flushTestRenderer(environment.setup, 2);
 		expect(environment.setup.captureCharFrame()).toContain(

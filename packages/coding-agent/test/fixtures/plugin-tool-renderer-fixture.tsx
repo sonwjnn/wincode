@@ -138,6 +138,7 @@ const TurnCallRenderer: PluginToolCallRenderer = ({ call, theme }) => (
 );
 
 const pluginToolRendererFixture: PluginFactory = (api) => {
+	let registerTurnScopedTool = true;
 	const plugin = api.definePlugin({ id: "tool_renderer_fixture" });
 	plugin.onSessionStart((_context, registration) => {
 		registration.registerTool({
@@ -152,6 +153,10 @@ const pluginToolRendererFixture: PluginFactory = (api) => {
 		});
 	});
 	plugin.onBeforeAgentTurn((_context, registration) => {
+		if (!registerTurnScopedTool) {
+			return;
+		}
+		registerTurnScopedTool = false;
 		registration.registerTool({
 			name: "turn_scoped",
 			description: "Register a renderer for one Agent Turn.",

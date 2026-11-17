@@ -1452,6 +1452,7 @@ export const createPluginRuntime = (
 		if (state === undefined || state.closed) {
 			return;
 		}
+		state.toolPresentationDescriptors.clear();
 		for (const tool of tools) {
 			const plugin = plugins.find(({ id }) => id === tool.pluginId);
 			if (plugin === undefined || !isEnabledForSession(plugin, sessionId)) {
