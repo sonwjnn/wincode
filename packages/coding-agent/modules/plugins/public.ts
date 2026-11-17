@@ -14,7 +14,7 @@ import type {
 	ProviderModelSelection,
 	ThinkingLevel,
 } from "@wincode/ai";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
 import type { Theme } from "../../shared/providers/theme/themes";
@@ -261,8 +261,9 @@ export type PluginUIContributionSurface =
 export type PluginUIContributionResult =
 	| Readonly<{ success: true }>
 	| Readonly<{
-			success: false;
 			code: "plugin_ui_contribution_conflict";
+			ownerPluginId?: string;
+			success: false;
 			surface: PluginUIContributionSurface;
 	  }>;
 
@@ -346,6 +347,72 @@ export type PluginEntryRendererProps = Readonly<{
 
 export type PluginEntryRenderer = ComponentType<PluginEntryRendererProps>;
 
+export type PluginAutocompleteItem = Readonly<{
+	description?: string;
+	label: string;
+	value: string;
+}>;
+
+export type PluginAutocompleteResult = Readonly<{
+	items: readonly PluginAutocompleteItem[];
+	prefix: string;
+}>;
+
+export type PluginAutocompleteContext = Readonly<{
+	column: number;
+	cursorOffset: number;
+	line: number;
+	lines: readonly string[];
+	sessionId: string;
+	text: string;
+}>;
+
+export type PluginAutocompleteEdit = Readonly<{
+	cursorOffset: number;
+	text: string;
+}>;
+
+export type PluginAutocompleteProvider = Readonly<{
+	getSuggestions: (
+		context: PluginAutocompleteContext
+	) =>
+		| PluginAutocompleteResult
+		| null
+		| Promise<PluginAutocompleteResult | null>;
+	applyCompletion: (
+		context: PluginAutocompleteContext,
+		item: PluginAutocompleteItem,
+		prefix: string
+	) => PluginAutocompleteEdit;
+	shouldTriggerFileCompletion?: (context: PluginAutocompleteContext) => boolean;
+}>;
+
+export type PluginAutocompleteProviderFactory = (
+	current: PluginAutocompleteProvider
+) => PluginAutocompleteProvider;
+
+export type PluginEditorKeybinding = Readonly<
+	NonNullable<TextareaOptions["keyBindings"]>[number]
+>;
+
+export type PluginEditorContext = Readonly<{
+	cursorOffset: number;
+	defaultEditor: ReactNode;
+	height: number;
+	keybindings: readonly PluginEditorKeybinding[];
+	nextPrompt: () => boolean;
+	paste: (text: string) => boolean;
+	previousPrompt: () => boolean;
+	setText: (text: string, cursorOffset?: number) => void;
+	submit: () => Promise<void>;
+	text: string;
+	theme: Theme;
+	width: number;
+}>;
+
+/** A React editor mounted in place of the host editor or around its default slot. */
+export type PluginEditorComponent = ComponentType<PluginEditorContext>;
+
 export type PluginTerminalInputResult = Readonly<{ consume: true }> | undefined;
 export type PluginTerminalInputHandler = (
 	data: string
@@ -411,6 +478,16 @@ export type PluginUI = Readonly<{
 	setToolsExpanded: (expanded: boolean) => void;
 	/** Observes raw terminal sequences in Interactive Mode; return consume to stop host parsing. */
 	onTerminalInput: (handler: PluginTerminalInputHandler) => () => void;
+	getEditorText: () => string | undefined;
+	setEditorText: (text: string) => boolean;
+	pasteToEditor: (text: string) => boolean;
+	addAutocompleteProvider: (
+		provider: PluginAutocompleteProviderFactory
+	) => () => void;
+	getEditorComponent: () => PluginEditorComponent | undefined;
+	setEditorComponent: (
+		component: PluginEditorComponent | undefined
+	) => PluginUIContributionResult | undefined;
 }>;
 
 export type PluginUIContext = Readonly<{ ui: PluginUI }>;
@@ -706,13 +783,28 @@ export type PluginCommandHandler = (
 	context: PluginCommandContext
 ) => string | Promise<string>;
 
+export type PluginCommandArgumentCompletion = (
+	prefix: string
+) =>
+	| readonly PluginAutocompleteItem[]
+	| null
+	| Promise<readonly PluginAutocompleteItem[] | null>;
+
 export type PluginCommandRegistration = Readonly<{
 	description: string;
 	name: string;
 }> &
 	(
-		| Readonly<{ handler: PluginCommandHandler; statusPanelId?: never }>
-		| Readonly<{ handler?: never; statusPanelId: string }>
+		| Readonly<{
+				getArgumentCompletions?: PluginCommandArgumentCompletion;
+				handler: PluginCommandHandler;
+				statusPanelId?: never;
+		  }>
+		| Readonly<{
+				getArgumentCompletions?: never;
+				handler?: never;
+				statusPanelId: string;
+		  }>
 	);
 
 export type PluginToolRegistrationAPI = Readonly<{

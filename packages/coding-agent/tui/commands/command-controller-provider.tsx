@@ -224,6 +224,8 @@ export function CommandControllerProvider({
 			return createCommandController({
 				...options,
 				customCommands,
+				getPluginCommands: () =>
+					pluginRuntime?.getCommands(options.sessionId) ?? [],
 				pluginCommands: pluginRuntime?.getCommands(options.sessionId) ?? [],
 				executePluginCommand: async (command, argument, sessionId) => {
 					if (pluginRuntime === undefined) {

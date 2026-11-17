@@ -154,6 +154,19 @@ describe("Paste Intake", () => {
 		});
 	});
 
+	test("Plugin text paste uses normal collapse and preserves its source text", async () => {
+		const harness = createHarness();
+		const text = "first line\nsecond line\nthird line";
+
+		await harness.intake.pasteText(text, harness.dependencies);
+
+		expect(harness.document.capture()).toMatchObject({
+			pastedText: [{ text, token: "[Pasted ~3 lines]" }],
+			text: "[Pasted ~3 lines] ",
+		});
+		expect(harness.document.capture().files).toEqual([]);
+	});
+
 	test("image size refusal preserves the attachment error boundary", async () => {
 		const harness = createHarness();
 		const event = new PasteEvent(new Uint8Array(10 * 1024 * 1024 + 1), {

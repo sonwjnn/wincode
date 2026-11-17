@@ -1,4 +1,5 @@
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import type { PluginCommandArgumentCompletion } from "@/modules/plugins/public";
 import { SKILL_NAMESPACE_PREFIX, type Skill } from "@/modules/skills";
 import { fuzzyMatch } from "@/shared/fuzzy";
 import type { CommandSpec } from "./commands";
@@ -10,6 +11,7 @@ export type SkillCommandSpec = BaseSpec & { kind: "skill" };
 /** A single slash suggestion that enters the Skill namespace search. */
 export type SkillSearchCommandSpec = BaseSpec & { kind: "skill-search" };
 export type PluginCommandSpec = BaseSpec & {
+	getArgumentCompletions?: PluginCommandArgumentCompletion;
 	kind: "plugin";
 	pluginId: string;
 	statusPanelId?: string;

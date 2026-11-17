@@ -129,7 +129,7 @@ Reference dialog defaults remain: select/input timeout returns `undefined`; conf
 
 Qualify keyed widgets/status and their cleanup by Plugin Identifier; identical local keys in different Plugins do not overwrite each other. Use deterministic contribution ordering.
 
-Editor, header, and footer each have one active owner. The first successful registration claims the position; a second Plugin receives a conflict rather than silently replacing it. Releasing/unloading the owner restores the host default. Wrapping an editor does not create an implicit stack of competing Plugin owners.
+Each Session's editor slot, plus the application-host-wide header and footer slots, has one active owner. The first successful registration claims the position; a second Plugin in that scope receives a conflict rather than silently replacing it. Releasing/unloading the owner restores the host default. Wrapping an editor does not create an implicit stack of competing Plugin owners.
 
 Subscriptions, raw input handlers, widgets, and presentation overrides are tied to their owning Plugin and applicable Session/view scope. Reload/unload removes them without leaving stale callbacks active.
 

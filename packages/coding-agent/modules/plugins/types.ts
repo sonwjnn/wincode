@@ -1,5 +1,6 @@
 import type { ToolExecutionMode } from "@wincode/agent-core";
 import type {
+	PluginCommandArgumentCompletion,
 	PluginCommandHandler,
 	PluginInputSchema,
 	PluginToolCallRenderer,
@@ -22,6 +23,7 @@ export type PluginTool = Readonly<{
 
 export type PluginCommand = Readonly<{
 	description: string;
+	getArgumentCompletions?: PluginCommandArgumentCompletion;
 	handler?: PluginCommandHandler;
 	name: string;
 	statusPanelId?: string;

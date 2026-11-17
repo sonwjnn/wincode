@@ -3,6 +3,10 @@ import type {
 	CommandSuggestion,
 } from "@/modules/commands/command-controller";
 import type { FileMentionOption } from "@/modules/file-mentions";
+import type {
+	PluginAutocompleteItem,
+	PluginAutocompleteProviderFactory,
+} from "@/modules/plugins/public";
 import type { PromptHistoryStore } from "@/modules/sessions/storage/prompt-history";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";
 import type { ComposerDocument } from "../../ui/composer-document";
@@ -18,7 +22,19 @@ export type InputOverlayState =
 			kind: "command";
 			selectedIndex: number;
 	  }
-	| { items: FileMentionOption[]; kind: "file-mention"; selectedIndex: number };
+	| { items: FileMentionOption[]; kind: "file-mention"; selectedIndex: number }
+	| {
+			items: readonly PluginAutocompleteItem[];
+			kind: "plugin-autocomplete";
+			prefix: string;
+			selectedIndex: number;
+	  }
+	| {
+			items: readonly PluginAutocompleteItem[];
+			kind: "plugin-argument";
+			prefix: string;
+			selectedIndex: number;
+	  };
 
 export type ChatInputControllerState = {
 	overlay: InputOverlayState;
@@ -29,11 +45,14 @@ export type ChatInputControllerActions = {
 	onArrowDown: (cursorOffset?: number, textLength?: number) => boolean;
 	onArrowUp: (cursorOffset?: number, textLength?: number) => boolean;
 	onCtrlC: (composition: SessionSubmissionComposition) => boolean;
+	onCursorChange: () => void;
 	onEnter: () => void;
 	onEscape: () => void;
 	onItemExecute: (index: number) => void;
 	onItemSelect: (index: number) => void;
 	onTab: (shift: boolean) => void;
+	nextPrompt: () => boolean;
+	previousPrompt: () => boolean;
 	onTextChange: (
 		composition: SessionSubmissionComposition,
 		cursorOffset: number,
@@ -60,6 +79,8 @@ export type ChatInputControllerOptions = {
 	composerDocument: ComposerDocument;
 	disabled: boolean;
 	commandController: CommandController;
+	pluginAutocompleteProviders?: readonly PluginAutocompleteProviderFactory[];
+	sessionId?: string;
 	/** Ephemeral key whose composer text survives a remount (e.g. a session id). */
 	draftKey?: string;
 	getFileMentionOptions: () => Promise<FileMentionOption[]>;

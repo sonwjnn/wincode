@@ -271,23 +271,39 @@ export const validatePluginShortcut = (
 };
 
 export const validatePluginCommand = (candidate: unknown): PluginCommand => {
+	if (!isPlainObject(candidate)) {
+		throw new Error(
+			"Plugin Command registrations require a short name and description."
+		);
+	}
+	const { name, description, handler, statusPanelId, getArgumentCompletions } =
+		candidate as unknown as PluginCommandRegistration;
 	if (
-		!isPlainObject(candidate) ||
-		typeof candidate.name !== "string" ||
-		!pluginCommandNamePattern.test(candidate.name) ||
-		!isNonEmptyString(candidate.description)
+		typeof name !== "string" ||
+		!pluginCommandNamePattern.test(name) ||
+		!isNonEmptyString(description)
 	) {
 		throw new Error(
 			"Plugin Command registrations require a short name and description."
 		);
 	}
-	const command = candidate as unknown as PluginCommandRegistration;
-	const hasHandler = command.handler !== undefined;
-	const validHandler = typeof command.handler === "function";
-	const hasStatusPanel = command.statusPanelId !== undefined;
+	const hasHandler = handler !== undefined;
+	const validHandler = typeof handler === "function";
+	const hasStatusPanel = statusPanelId !== undefined;
+	if (
+		getArgumentCompletions !== undefined &&
+		typeof getArgumentCompletions !== "function"
+	) {
+		throw new Error("Plugin Command argument completions must be a function.");
+	}
 	const validStatusPanel =
-		typeof command.statusPanelId === "string" &&
-		pluginStatusPanelIdPattern.test(command.statusPanelId);
+		typeof statusPanelId === "string" &&
+		pluginStatusPanelIdPattern.test(statusPanelId);
+	if (hasStatusPanel && getArgumentCompletions !== undefined) {
+		throw new Error(
+			"Status-panel Plugin Commands do not support argument completions."
+		);
+	}
 	if (
 		(hasHandler && !validHandler) ||
 		(hasStatusPanel && !validStatusPanel) ||
@@ -298,11 +314,10 @@ export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 		);
 	}
 	return Object.freeze({
-		description: command.description,
-		...(command.handler === undefined ? {} : { handler: command.handler }),
-		name: command.name,
-		...(command.statusPanelId === undefined
-			? {}
-			: { statusPanelId: command.statusPanelId }),
+		description,
+		...omitUndefined({ getArgumentCompletions }),
+		...omitUndefined({ handler }),
+		name,
+		...omitUndefined({ statusPanelId }),
 	});
 };

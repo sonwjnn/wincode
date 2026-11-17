@@ -36,4 +36,10 @@ export const unsupportedPluginUI: PluginUI = Object.freeze({
 	getAllThemes: () => [],
 	getTheme: () => undefined,
 	setTheme: () => unsupportedThemeChange,
+	getEditorText: () => undefined,
+	setEditorText: () => false,
+	pasteToEditor: () => false,
+	addAutocompleteProvider: () => () => undefined,
+	getEditorComponent: () => undefined,
+	setEditorComponent: () => undefined,
 });
