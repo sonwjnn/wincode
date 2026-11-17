@@ -80,12 +80,14 @@ const StatusPanelRow = ({ isBusy, isSelected, item }: StatusPanelRowProps) => {
 export type PluginStatusPanelDialogContentProps = Readonly<{
 	panel: PluginStatusPanelDescriptor;
 	pluginRuntime: PluginRuntime;
+	sessionId?: string;
 }>;
 
 /** Renders a Plugin's declarative status and routes actions through the Plugin Runtime. */
 export const PluginStatusPanelDialogContent = ({
 	panel,
 	pluginRuntime,
+	sessionId,
 }: PluginStatusPanelDialogContentProps) => {
 	const toast = useToast();
 	const dialog = useDialog();
@@ -174,6 +176,7 @@ export const PluginStatusPanelDialogContent = ({
 			void pluginRuntime
 				.runStatusPanelAction(panel.pluginId, panel.id, item.id, actionId, {
 					requestTextInput,
+					ui: pluginRuntime.getPluginUI(panel.pluginId, sessionId),
 				})
 				.catch(() => {
 					if (mountedRef.current) {
@@ -190,7 +193,7 @@ export const PluginStatusPanelDialogContent = ({
 					}
 				});
 		},
-		[panel, pluginRuntime, requestTextInput, toast.show]
+		[panel, pluginRuntime, requestTextInput, sessionId, toast.show]
 	);
 
 	return (

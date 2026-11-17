@@ -48,6 +48,7 @@ import type {
 	PluginSessionStartHook,
 	PluginShutdownHook,
 	PluginStatusPanelRegistration,
+	PluginUIPromptHook,
 } from "./public";
 import {
 	validatePluginAgent,
@@ -105,6 +106,8 @@ type MutablePluginDraft = {
 	onSessionHistoryNavigated?: PluginSessionHistoryNavigatedHook;
 	onCompactionCompleted?: PluginCompactionCompletedHook;
 	onCompactionFailed?: PluginCompactionFailedHook;
+	onUIPromptStart?: PluginUIPromptHook;
+	onUIPromptEnd?: PluginUIPromptHook;
 	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
@@ -429,6 +432,25 @@ const createRegistrationAPI = (
 			}
 			plugin.onCompactionFailed = handler;
 		},
+		onUIPromptStart(handler) {
+			assertOpen();
+			if (
+				typeof handler !== "function" ||
+				plugin.onUIPromptStart !== undefined
+			) {
+				throw new Error(
+					"Plugin hook 'onUIPromptStart' must be registered once."
+				);
+			}
+			plugin.onUIPromptStart = handler;
+		},
+		onUIPromptEnd(handler) {
+			assertOpen();
+			if (typeof handler !== "function" || plugin.onUIPromptEnd !== undefined) {
+				throw new Error("Plugin hook 'onUIPromptEnd' must be registered once.");
+			}
+			plugin.onUIPromptEnd = handler;
+		},
 		onStart(handler) {
 			registerProcessLifecycleHook(
 				handler,
@@ -690,6 +712,8 @@ const loadedPluginFromDraft = (
 		onSessionHistoryNavigated: draft.onSessionHistoryNavigated,
 		onCompactionCompleted: draft.onCompactionCompleted,
 		onCompactionFailed: draft.onCompactionFailed,
+		onUIPromptStart: draft.onUIPromptStart,
+		onUIPromptEnd: draft.onUIPromptEnd,
 		onStart: draft.onStart,
 		onSessionShutdown: draft.onSessionShutdown,
 		onSessionStart: draft.onSessionStart,

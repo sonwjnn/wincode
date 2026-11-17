@@ -258,6 +258,7 @@ function Toast({ currentToast }: ToastProps) {
 
 	const variantColors: Record<ToastVariant, string> = {
 		success: colors.success,
+		warning: colors.warning,
 		error: colors.error,
 		info: colors.info,
 	};

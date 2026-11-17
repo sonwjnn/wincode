@@ -11,6 +11,7 @@ import type {
 	TextWriter,
 } from "../modules/application/modes/types";
 import type { PluginRuntime } from "../modules/plugins/runtime";
+import { unsupportedPluginUI } from "../modules/plugins/ui/plugin-ui-default";
 import { createConfigStore } from "../shared/config/config-store";
 
 const capture = (): { output: string; writer: TextWriter } => {
@@ -364,6 +365,8 @@ describe("application dispatch", () => {
 				},
 			],
 			bindPromptSelectionTarget: () => () => undefined,
+			bindPluginUIHost: () => () => undefined,
+			getPluginUI: () => unsupportedPluginUI,
 			disablePlugin: () => undefined,
 			executeCommand: async () => "",
 			getAgentRegistrations: () => [],
@@ -420,6 +423,8 @@ describe("application dispatch", () => {
 		const runtime: PluginRuntime = {
 			diagnostics: [],
 			bindPromptSelectionTarget: () => () => undefined,
+			bindPluginUIHost: () => () => undefined,
+			getPluginUI: () => unsupportedPluginUI,
 			disablePlugin: () => undefined,
 			executeCommand: async () => "",
 			getAgentRegistrations: () => [],

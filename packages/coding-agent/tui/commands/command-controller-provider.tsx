@@ -248,6 +248,7 @@ export function CommandControllerProvider({
 								children: createElement(PluginStatusPanelDialogContent, {
 									panel,
 									pluginRuntime,
+									sessionId,
 								}),
 								title: panel.title,
 							});

@@ -17,6 +17,7 @@ import type {
 import { createApplicationResourceLoader } from "@/modules/application/resource-loader";
 import { runRpc } from "@/modules/application/rpc/runner";
 import { loadPlugins } from "@/modules/plugins/loader";
+import { unsupportedPluginUI } from "@/modules/plugins/ui/plugin-ui-default";
 import {
 	DEFAULT_PROVIDER_MODEL_SELECTION,
 	normalizeProviderModelSelection,
@@ -1511,6 +1512,7 @@ test("Turn-scoped Plugin registrations override, mask, and preserve outer tools 
 		const callContext = {
 			agentId: agentIdSchema.parse("build"),
 			sessionId: sessionContext.sessionId,
+			ui: unsupportedPluginUI,
 			signal: new AbortController().signal,
 			toolCallId: toolCallId("scope-tool-call"),
 			registerBackgroundWork: () => undefined,
@@ -1584,6 +1586,7 @@ test("a failed pre-Agent-Turn hook omits only that Plugin's tools", async () => 
 
 test("Plugins publish status panels and route panel actions through the runtime", async () => {
 	let refreshCount = 0;
+	let actionReceivedOwnerUI = false;
 	const actions: string[] = [];
 	const runtime = await loadPlugins({
 		bundledPlugins: [
@@ -1611,8 +1614,9 @@ test("Plugins publish status panels and route panel actions through the runtime"
 						refresh: async () => {
 							refreshCount += 1;
 						},
-						runAction: async (itemId, actionId) => {
+						runAction: async (itemId, actionId, context) => {
 							actions.push(`${itemId}:${actionId}`);
+							actionReceivedOwnerUI = context?.ui === unsupportedPluginUI;
 						},
 						subscribe: () => () => undefined,
 						title: "Services",
@@ -1649,10 +1653,15 @@ test("Plugins publish status panels and route panel actions through the runtime"
 			"status_fixture",
 			"services",
 			"worker",
-			"restart"
+			"restart",
+			{
+				requestTextInput: async () => undefined,
+				ui: unsupportedPluginUI,
+			}
 		);
-		expect({ actions, refreshCount }).toEqual({
+		expect({ actions, actionReceivedOwnerUI, refreshCount }).toEqual({
 			actions: ["worker:restart"],
+			actionReceivedOwnerUI: true,
 			refreshCount: 1,
 		});
 	} finally {
