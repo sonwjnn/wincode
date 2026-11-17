@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import { z } from "zod";
 import type { PluginUI } from "@/modules/plugins/public";
 import {
@@ -6,6 +7,7 @@ import {
 	type LoadedPlugin,
 } from "@/modules/plugins/runtime";
 import type { PluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
+import type { PluginUIOwner } from "@/modules/plugins/ui/plugin-ui-host-contract";
 import type { PluginSessionHistoryPersistence } from "@/modules/sessions/session-plugin-history";
 import { toSessionHistoryEntryId } from "@/shared/identifiers";
 import { createEmptyPluginRuntime } from "../support/plugin-runtime";
@@ -88,11 +90,11 @@ test("stopping during Plugin startup leaves no shortcut subscription on its boun
 		],
 		[]
 	);
-	const host: PluginUIHost = {
+	const host = fromPartial<PluginUIHost>({
 		close: () => undefined,
 		create: () => ({
 			close: () => undefined,
-			ui: {
+			ui: fromPartial<PluginUI>({
 				confirm: async () => false,
 				custom: async () => undefined,
 				editor: async () => undefined,
@@ -103,15 +105,19 @@ test("stopping during Plugin startup leaves no shortcut subscription on its boun
 				onTerminalInput: () => () => undefined,
 				select: async () => undefined,
 				setTheme: () => ({ success: true }),
-			} satisfies PluginUI,
+			}),
 		}),
 		getCustomUI: () => null,
-		registerShortcut: (owner, _shortcut, handler) => {
+		registerShortcut: (
+			owner: PluginUIOwner,
+			_shortcut: string,
+			handler: () => void
+		) => {
 			shortcutSubscriptions.set(owner.pluginId, handler);
 			return () => shortcutSubscriptions.delete(owner.pluginId);
 		},
 		subscribeCustomUI: () => () => undefined,
-	};
+	});
 	const unbindHost = runtime.bindPluginUIHost(sessionContext.sessionId, host);
 	let starting: Promise<void> | undefined;
 
