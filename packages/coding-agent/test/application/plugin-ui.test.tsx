@@ -1130,8 +1130,12 @@ test("view presentation contributions render their hidden-thinking label and exp
 		width: 88,
 	});
 	try {
-		await act(() => environment.transcriptState.showContributionMessage());
-		await flushTestRenderer(environment.setup, 3);
+		await act(async () => {
+			environment.transcriptState.showContributionMessage();
+			await flushTestRenderer(environment.setup, 3);
+			await environment.configStore.getSnapshot(environment.workspace);
+			await flushTestRenderer(environment.setup);
+		});
 		await act(async () => environment.transcriptState.setHideThinking());
 		await flushTestRenderer(environment.setup, 3);
 		let frame = environment.setup.captureCharFrame();
