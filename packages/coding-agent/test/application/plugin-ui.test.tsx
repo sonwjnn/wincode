@@ -2063,6 +2063,32 @@ test("PluginAPI rejects modifier-free shortcuts without consuming ordinary input
 	}
 });
 
+test("PluginAPI rejects a modifier name used as the shortcut key", async () => {
+	const pluginId = "plugin_modifier_key_shortcut";
+	const plugin: PluginFactory = (api) => {
+		api.definePlugin({ id: pluginId });
+		api.registerShortcut("ctrl+ctrl", {
+			description: "A modifier cannot be registered as the key token.",
+			handler: () => undefined,
+		});
+	};
+	const environment = await pluginUiTestEnvironment("interactive", {}, false, [
+		{ factory: plugin, id: pluginId },
+	]);
+	try {
+		expect(
+			environment.runtime.getLoadedPlugins().map(({ id }) => id)
+		).not.toContain(pluginId);
+		expect(
+			environment.runtime.diagnostics.some(({ message }) =>
+				message.includes("modifier+key notation")
+			)
+		).toBe(true);
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("a matching Plugin Meta+W shortcut runs when the host does not claim it", async () => {
 	const pluginId = "plugin_meta_w_shortcut_control";
 	const pluginShortcutCalls = { count: 0 };

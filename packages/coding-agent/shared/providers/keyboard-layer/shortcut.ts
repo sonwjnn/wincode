@@ -23,7 +23,7 @@ export const parseKeyboardShortcut = (
 ): KeyboardShortcut | undefined => {
 	const parts = shortcut.trim().toLowerCase().split("+");
 	const key = parts.pop();
-	if (key === undefined || !KEY_NAME.test(key)) {
+	if (key === undefined || !KEY_NAME.test(key) || MODIFIERS.has(key)) {
 		return;
 	}
 	const modifiers = new Set<string>();

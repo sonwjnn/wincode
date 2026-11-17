@@ -137,10 +137,16 @@ test("stopping during Plugin startup leaves no shortcut subscription on its boun
 		expect([...shortcutSubscriptions.keys()]).toEqual([]);
 	} finally {
 		finishSessionStart.resolve();
-		await starting;
-		await runtime.stopSession(sessionContext);
-		unbindHost();
-		await runtime.shutdown();
+		try {
+			await starting?.catch(() => undefined);
+		} finally {
+			try {
+				await runtime.stopSession(sessionContext);
+			} finally {
+				unbindHost();
+				await runtime.shutdown();
+			}
+		}
 	}
 });
 

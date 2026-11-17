@@ -234,7 +234,7 @@ export const validatePluginProvider = (
 	});
 };
 
-/** Validates one Plugin Shortcut before it can replace an owner's registration. */
+/** Validates one Plugin Shortcut registration before it enters the runtime. */
 export const validatePluginShortcut = (
 	shortcutCandidate: unknown,
 	optionsCandidate: unknown
