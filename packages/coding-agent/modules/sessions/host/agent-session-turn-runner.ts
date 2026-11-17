@@ -74,6 +74,7 @@ type PluginTurnResolution = Readonly<{
 	options: Readonly<{
 		pluginRuntime?: PluginRuntime;
 		pluginTools?: readonly PluginToolDescriptor[];
+		registerTurnCleanup?: (cleanup: () => void) => void;
 	}>;
 }>;
 
@@ -238,6 +239,9 @@ const resolvePluginTurnContext = async (
 				? {}
 				: { pluginRuntime: input.pluginRuntime }),
 			pluginTools,
+			...(input.hostContext.registerTurnCleanup === undefined
+				? {}
+				: { registerTurnCleanup: input.hostContext.registerTurnCleanup }),
 		},
 	};
 };

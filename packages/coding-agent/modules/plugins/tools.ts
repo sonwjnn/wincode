@@ -20,6 +20,7 @@ export type PluginToolsContext = Readonly<{
 	pluginRuntime?: PluginRuntime;
 	existingToolNames?: readonly string[];
 	registerBackgroundWork?: (sessionId: string, work: Promise<unknown>) => void;
+	registerTurnCleanup?: (cleanup: () => void) => void;
 	sessionId?: string;
 	signal?: AbortSignal;
 	workspace?: string;
@@ -196,7 +197,8 @@ export const createPluginTools = (
 	// Only admitted Tools can own renderer metadata for their Session rows.
 	context.pluginRuntime?.recordToolPresentationDescriptors?.(
 		context.sessionId,
-		selectedPluginTools
+		selectedPluginTools,
+		context.registerTurnCleanup
 	);
 	return resolved;
 };

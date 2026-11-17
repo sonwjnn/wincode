@@ -137,6 +137,10 @@ const TurnCallRenderer: PluginToolCallRenderer = ({ call, theme }) => (
 	<text fg={theme.colors.tool}>{`turn-scoped call ${call.state}`}</text>
 );
 
+const TurnResultRenderer: PluginToolResultRenderer = ({ result, theme }) => (
+	<text fg={theme.colors.primary}>{`turn-scoped result ${result.type}`}</text>
+);
+
 const pluginToolRendererFixture: PluginFactory = (api) => {
 	let registerTurnScopedTool = true;
 	const plugin = api.definePlugin({ id: "tool_renderer_fixture" });
@@ -162,6 +166,7 @@ const pluginToolRendererFixture: PluginFactory = (api) => {
 			description: "Register a renderer for one Agent Turn.",
 			inputSchema: z.object({ query: z.string() }),
 			renderCall: TurnCallRenderer,
+			renderResult: TurnResultRenderer,
 			handler: async ({ query }) => ({
 				output: { answer: `turn result for ${query}` },
 				type: "success",

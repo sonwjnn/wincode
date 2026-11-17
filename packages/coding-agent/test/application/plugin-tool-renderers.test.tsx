@@ -307,7 +307,7 @@ test("Session-scoped Plugin Tool renderers follow the owning Session lifecycle",
 	}
 });
 
-test("turn-scoped Plugin Tool renderers fall back after their descriptor expires", async () => {
+test("turn-scoped Plugin Tool renderers fall back when their turn ends before the next tool build", async () => {
 	resetPluginToolRendererFixtureState();
 	const environment = await createRendererEnvironment();
 	try {
@@ -328,76 +328,107 @@ test("turn-scoped Plugin Tool renderers fall back after their descriptor expires
 				.getToolDescriptors(environment.sessionId)
 				.some((tool) => tool.name === turnTool.name)
 		).toBe(false);
-		const resolvedTools = createPluginTools({
+		const turnCleanups: (() => void)[] = [];
+		const resolvedTool = createPluginTools({
 			agentId,
 			existingToolNames: [],
 			pluginRuntime: environment.runtime,
 			pluginTools: turnTools,
+			registerTurnCleanup: (cleanup) => turnCleanups.push(cleanup),
 			sessionId: environment.sessionId,
 			workspace: environment.workspace,
-		});
-		expect(
-			resolvedTools.some(({ definition }) => definition.name === turnTool.name)
-		).toBe(true);
+		}).find(({ definition }) => definition.name === turnTool.name);
+		if (resolvedTool === undefined) {
+			throw new Error("The turn-scoped Plugin Tool was not executable.");
+		}
 		const presentationDescriptor = environment.runtime
 			.getToolDescriptors(environment.sessionId, {
 				includeTurnRenderers: true,
 			})
 			.find((tool) => tool.name === turnTool.name);
 		expect(presentationDescriptor?.renderCall).toBeDefined();
-		const part: DynamicToolPart = {
+		expect(presentationDescriptor?.renderResult).toBeDefined();
+		const toolCallIdValue = toolCallId("plugin-turn-scoped-renderer-call");
+		const runningPart: DynamicToolPart = {
 			input: { query: "WCO-288" },
 			state: "input-available",
-			toolCallId: toolCallId("plugin-turn-scoped-renderer-call"),
+			toolCallId: toolCallIdValue,
 			toolName: turnTool.name,
 			type: "dynamic-tool",
 		};
-		await act(() => environment.updateParts([part]));
+		await act(() => environment.updateParts([runningPart]));
 		await flushTestRenderer(environment.setup, 2);
 		expect(environment.setup.captureCharFrame()).toContain(
 			"turn-scoped call input-available"
 		);
-		expect(pluginToolRendererFixtureState.executionCount).toBe(0);
-
-		const nextTurnTools = await environment.runtime.resolveToolsForTurn({
-			agentId,
-			executionMode: "interactive",
-			sessionId: environment.sessionId,
-			signal: new AbortController().signal,
-			workspace: environment.workspace,
+		const outcome = await resolvedTool.execute({
+			input: { query: "WCO-288" },
+			toolCallId: toolCallIdValue,
 		});
-		expect(nextTurnTools.some((tool) => tool.name === turnTool.name)).toBe(
-			false
+		if (outcome.type !== "success") {
+			throw new Error(`The turn-scoped Tool failed: ${outcome.errorText}`);
+		}
+		expect(outcome).toEqual({
+			output: { answer: "turn result for WCO-288" },
+			type: "success",
+		});
+		const resultPart: DynamicToolPart = {
+			...runningPart,
+			output: outcome.output,
+			state: "output-available",
+		};
+		await act(() => environment.updateParts([resultPart]));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"turn-scoped result success"
 		);
-		createPluginTools({
-			agentId,
-			existingToolNames: [],
-			pluginRuntime: environment.runtime,
-			pluginTools: nextTurnTools,
-			sessionId: environment.sessionId,
-			workspace: environment.workspace,
-		});
-		const descriptorsAfterNextTurn = environment.runtime.getToolDescriptors(
+
+		// The turn runner invokes registered callbacks in its finalizer. No next
+		// turn registration or tool build occurs before this lookup.
+		expect(turnCleanups).toHaveLength(1);
+		for (const cleanup of turnCleanups.reverse()) {
+			cleanup();
+		}
+		const descriptorsAfterTurnEnd = environment.runtime.getToolDescriptors(
 			environment.sessionId,
 			{ includeTurnRenderers: true }
 		);
 		expect(
-			descriptorsAfterNextTurn.some((tool) => tool.name === turnTool.name)
+			descriptorsAfterTurnEnd.some((tool) => tool.name === turnTool.name)
 		).toBe(false);
 		expect(
-			descriptorsAfterNextTurn.some(
+			descriptorsAfterTurnEnd.some(
 				(tool) =>
 					tool.localName === "session_scoped" && tool.renderCall !== undefined
 			)
 		).toBe(true);
 
-		await act(() => environment.updateParts([part]));
+		await act(() => environment.updateParts([resultPart]));
+		await flushTestRenderer(environment.setup, 2);
+		const fallbackFrame = environment.setup.captureCharFrame();
+		expect(fallbackFrame).toContain("plugin_tool_renderer_fixture_turn_scoped");
+		expect(fallbackFrame).not.toContain("turn-scoped call");
+		expect(fallbackFrame).not.toContain("turn-scoped result");
+		const sessionTool = turnTools.find(
+			(tool) => tool.localName === "session_scoped"
+		);
+		if (sessionTool === undefined) {
+			throw new Error("The Session-scoped Plugin Tool was not registered.");
+		}
+		await act(() =>
+			environment.updateParts([
+				{
+					input: { query: "WCO-288" },
+					state: "input-available",
+					toolCallId: toolCallId("plugin-session-scoped-after-turn-call"),
+					toolName: sessionTool.name,
+					type: "dynamic-tool",
+				},
+			])
+		);
 		await flushTestRenderer(environment.setup, 2);
 		expect(environment.setup.captureCharFrame()).toContain(
-			"plugin_tool_renderer_fixture_turn_scoped"
-		);
-		expect(environment.setup.captureCharFrame()).not.toContain(
-			"turn-scoped call"
+			"session-scoped call input-available"
 		);
 	} finally {
 		await environment.dispose();

@@ -350,6 +350,9 @@ const selectPluginToolProviderContext = (
 	...(context.pluginRuntime === undefined
 		? {}
 		: { pluginRuntime: context.pluginRuntime }),
+	...(context.registerTurnCleanup === undefined
+		? {}
+		: { registerTurnCleanup: context.registerTurnCleanup }),
 	...(context.signal === undefined ? {} : { signal: context.signal }),
 	...(context.pluginRuntime === undefined
 		? {}

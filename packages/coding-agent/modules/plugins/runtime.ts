@@ -202,7 +202,8 @@ export type PluginRuntime = Readonly<{
 	};
 	recordToolPresentationDescriptors?: (
 		sessionId: string,
-		tools: readonly PluginToolDescriptor[]
+		tools: readonly PluginToolDescriptor[],
+		registerTurnCleanup?: (cleanup: () => void) => void
 	) => void;
 	bindPromptSelectionTarget: (
 		target: PluginPromptSelectionTarget
@@ -1446,23 +1447,34 @@ export const createPluginRuntime = (
 	}
 	const recordToolPresentationDescriptors = (
 		sessionId: string,
-		tools: readonly PluginToolDescriptor[]
+		tools: readonly PluginToolDescriptor[],
+		registerTurnCleanup?: (cleanup: () => void) => void
 	): void => {
 		const state = sessionStates.get(sessionId);
 		if (state === undefined || state.closed) {
 			return;
 		}
 		state.toolPresentationDescriptors.clear();
+		const turnDescriptors = new Map<string, PluginToolPresentationDescriptor>();
 		for (const tool of tools) {
 			const plugin = plugins.find(({ id }) => id === tool.pluginId);
 			if (plugin === undefined || !isEnabledForSession(plugin, sessionId)) {
 				continue;
 			}
-			state.toolPresentationDescriptors.set(
-				tool.name,
-				presentationDescriptorForTool(tool)
-			);
+			const descriptor = presentationDescriptorForTool(tool);
+			state.toolPresentationDescriptors.set(tool.name, descriptor);
+			turnDescriptors.set(tool.name, descriptor);
 		}
+		registerTurnCleanup?.(() => {
+			if (sessionStates.get(sessionId) !== state) {
+				return;
+			}
+			for (const [name, descriptor] of turnDescriptors) {
+				if (state.toolPresentationDescriptors.get(name) === descriptor) {
+					state.toolPresentationDescriptors.delete(name);
+				}
+			}
+		});
 	};
 
 	const shutdownStartedPlugins = async (): Promise<void> => {
