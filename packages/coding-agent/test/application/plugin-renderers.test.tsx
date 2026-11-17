@@ -102,6 +102,26 @@ const withPluginRuntime = async (
 	}
 };
 
+const TURN_COMPLETION_TIMEOUT_MS = 10_000;
+
+const waitForTurnCompletion = async (
+	completion: Promise<boolean>
+): Promise<boolean> => {
+	const timeout = Promise.withResolvers<never>();
+	const timeoutId = setTimeout(
+		() =>
+			timeout.reject(
+				new Error("Timed out waiting for the session turn to complete.")
+			),
+		TURN_COMPLETION_TIMEOUT_MS
+	);
+	try {
+		return await Promise.race([completion, timeout.promise]);
+	} finally {
+		clearTimeout(timeoutId);
+	}
+};
+
 const activeSessionFixtureCleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
 	await Promise.all(
@@ -119,21 +139,28 @@ const createActiveSessionPluginHistory = async (): Promise<{
 		path.join(os.tmpdir(), "plugin-renderer-active-session-")
 	);
 	const workspace = path.join(root, "workspace");
-	await fs.mkdir(workspace, { recursive: true });
 	let sdk: SessionSdk | undefined;
 	let handle: SessionSdkHandle | undefined;
 	let sessionHistory: PluginSessionHistory | undefined;
-	const dispose = async (): Promise<void> => {
-		try {
-			await handle?.dispose();
-		} finally {
-			try {
-				await sdk?.dispose();
-			} finally {
-				await fs.rm(root, { force: true, recursive: true });
-			}
+	let disposePromise: Promise<void> | undefined;
+	const dispose = (): Promise<void> => {
+		if (disposePromise !== undefined) {
+			return disposePromise;
 		}
+		disposePromise = (async () => {
+			try {
+				await handle?.dispose();
+			} finally {
+				try {
+					await sdk?.dispose();
+				} finally {
+					await fs.rm(root, { force: true, recursive: true });
+				}
+			}
+		})();
+		return disposePromise;
 	};
+	activeSessionFixtureCleanups.push(dispose);
 	const pluginFactory: PluginFactory = (api) => {
 		const definition = api.definePlugin({ id: "history_renderer" });
 		definition.onSessionStart(({ sessionHistory: activeHistory }) => {
@@ -145,6 +172,7 @@ const createActiveSessionPluginHistory = async (): Promise<{
 	};
 	const recorder = createFakeProviderRecorder();
 	try {
+		await fs.mkdir(workspace, { recursive: true });
 		sdk = await createSessionSdkWithRuntime({
 			createProviderCollection: () => createFakeProviderCollection(recorder),
 			cwd: workspace,
@@ -176,7 +204,7 @@ const createActiveSessionPluginHistory = async (): Promise<{
 					})
 				).rejected
 			).toBe(false);
-			expect(await turnCompleted.promise).toBe(true);
+			expect(await waitForTurnCompletion(turnCompleted.promise)).toBe(true);
 		} finally {
 			unsubscribeTurn();
 		}
@@ -212,7 +240,9 @@ const createActiveSessionPluginHistory = async (): Promise<{
 					})
 				).rejected
 			).toBe(false);
-			expect(await followupTurnCompleted.promise).toBe(true);
+			expect(await waitForTurnCompletion(followupTurnCompleted.promise)).toBe(
+				true
+			);
 		} finally {
 			unsubscribeFollowupTurn();
 		}
@@ -227,7 +257,6 @@ const createActiveSessionPluginHistory = async (): Promise<{
 			}
 			return context;
 		};
-		activeSessionFixtureCleanups.push(dispose);
 		return { history, persistedEntry, readContext, sessionId };
 	} catch (error) {
 		await dispose();
