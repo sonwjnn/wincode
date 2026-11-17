@@ -102,7 +102,11 @@ const pluginUiTestEnvironment = async (
 		kittyKeyboard?: boolean;
 		width?: number;
 	}> = {},
-	bindPluginUIHostInEditor = false
+	bindPluginUIHostInEditor = false,
+	additionalPlugins: readonly Readonly<{
+		factory: PluginFactory;
+		id: string;
+	}>[] = []
 ) => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-plugin-ui-"));
 	const workspace = path.join(root, "workspace");
@@ -120,6 +124,7 @@ const pluginUiTestEnvironment = async (
 				id: "plugin_ui_other_fixture",
 			},
 			{ factory: customEditorPlugin, id: "custom_editor" },
+			...additionalPlugins,
 		],
 		cliPaths: [],
 		config: {
@@ -421,6 +426,53 @@ test("a direct Plugin Command opens custom UI, returns once, and restores its co
 		expect(environment.setup.captureCharFrame()).not.toContain(
 			"Fixture custom UI"
 		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Plugin shortcuts remain available when host binding precedes partial Session registration failure", async () => {
+	const pluginId = "plugin_partial_registration";
+	const shortcutState = { calls: 0 };
+	const partialRegistrationPlugin: PluginFactory = (api) => {
+		const plugin = api.definePlugin({ id: pluginId });
+		api.registerShortcut("ctrl+shift+p", {
+			description: "Remain available after partial Session registration.",
+			handler: () => {
+				shortcutState.calls += 1;
+			},
+		});
+		plugin.onSessionStart((_context, registrationApi) => {
+			registrationApi.registerCommand({
+				description: "Confirm the partial Session scope was published.",
+				handler: () => "Partial Session scope published",
+				name: "partial-scope",
+			});
+			registrationApi.registerCommand({
+				description: "Trigger a nonfatal registration error.",
+				handler: () => "unreachable",
+				name: "",
+			});
+		});
+	};
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{ kittyKeyboard: true },
+		true,
+		[{ factory: partialRegistrationPlugin, id: pluginId }]
+	);
+	try {
+		const { result } = await environment.executeCommand(
+			pluginId,
+			"partial-scope"
+		);
+		expect(await result).toBe("Partial Session scope published");
+
+		await act(async () => {
+			environment.setup.mockInput.pressKey("p", { ctrl: true, shift: true });
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(shortcutState.calls).toBe(1);
 	} finally {
 		await environment.dispose();
 	}

@@ -1095,6 +1095,10 @@ export const createPluginRuntime = (
 			if (error instanceof PluginRegistrationError) {
 				publishScope();
 				state.started.add(plugin.id);
+				const binding = pluginUIHosts.get(state.context.sessionId);
+				if (binding !== undefined) {
+					registerPluginShortcuts(plugin, state.context.sessionId, binding);
+				}
 				return;
 			}
 			state.disabled.add(plugin.id);

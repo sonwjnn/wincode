@@ -218,7 +218,7 @@ export const validatePluginProvider = (
 	});
 };
 
-/** Validates one Plugin Command before it can replace an owner's registration. */
+/** Validates one Plugin Shortcut before it can replace an owner's registration. */
 export const validatePluginShortcut = (
 	shortcutCandidate: unknown,
 	optionsCandidate: unknown
