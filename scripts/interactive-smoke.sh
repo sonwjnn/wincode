@@ -277,26 +277,77 @@ if [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
   wait_for_text 'smoke-editor-turn' 150
   tmux send-keys -t "$SESSION" Tab
   tmux send-keys -t "$SESSION" Enter
-  wait_for_text 'Smoke custom editor' 150
+  wait_for_text 'Smoke custom overlay' 150
   wait_for_file "$WORKSPACE/.smoke-editor-command-started"
   wait_for_file "$WORKSPACE/.smoke-editor-command-context"
   wait_for_file "$WORKSPACE/.smoke-custom-editor-mounted"
   wait_for_file "$WORKSPACE/.smoke-custom-editor-turn-progress"
   wait_for_file "$WORKSPACE/.smoke-custom-editor-turn-terminal"
+  wait_for_file "$WORKSPACE/.smoke-custom-overlay-state"
   IFS= read -r COMMAND_CONTEXT < "$WORKSPACE/.smoke-editor-command-context" || true
-  [[ "$COMMAND_CONTEXT" == 'session:sdk' ]] || fail_with_frame 'The custom editor Plugin did not receive its active Session SDK.'
+  [[ "$COMMAND_CONTEXT" == 'session:sdk' ]] || fail_with_frame 'The custom overlay Plugin did not receive its active Session SDK.'
   IFS= read -r TURN_TERMINAL < "$WORKSPACE/.smoke-custom-editor-turn-terminal" || true
-  [[ "$TURN_TERMINAL" == 'agent-turn-completed' ]] || fail_with_frame "The custom editor smoke Agent Turn ended as '$TURN_TERMINAL'."
+  [[ "$TURN_TERMINAL" == 'agent-turn-completed' ]] || fail_with_frame "The custom overlay smoke Agent Turn ended as '$TURN_TERMINAL'."
   capture_frame
-  printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom editor' || \
-    fail_with_frame 'The custom editor closed before its Agent Turn completed.'
-  tmux send-keys -l -t "$SESSION" 'interactive smoke editor response'
-  tmux send-keys -t "$SESSION" Enter
+  printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom overlay' || \
+    fail_with_frame 'The custom overlay closed before its Agent Turn completed.'
+
+  OVERLAY_STATE_FILE="$WORKSPACE/.smoke-custom-overlay-state"
+  IFS= read -r INITIAL_OVERLAY_STATE < "$OVERLAY_STATE_FILE" || true
+  tmux resize-window -t "$SESSION" -x 50 -y 16
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    IFS= read -r CURRENT_OVERLAY_STATE < "$OVERLAY_STATE_FILE" || true
+    [[ "$CURRENT_OVERLAY_STATE" != "$INITIAL_OVERLAY_STATE" ]] && break
+    sleep 0.1
+  done
+  [[ "$CURRENT_OVERLAY_STATE" != "$INITIAL_OVERLAY_STATE" ]] || fail_with_frame 'The custom overlay bounds did not update after terminal resize.'
+  capture_frame
+  printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom overlay' || fail_with_frame 'The custom overlay was lost during terminal resize.'
+
+  tmux send-keys -t "$SESSION" f
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    grep -Fq '"focused":false' "$OVERLAY_STATE_FILE" && break
+    sleep 0.1
+  done
+  grep -Fq '"focused":false' "$OVERLAY_STATE_FILE" || fail_with_frame 'The custom overlay did not become unfocused.'
+  capture_frame
+  printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom overlay' || fail_with_frame 'Unfocusing the custom overlay hid it.'
+
+  tmux send-keys -t "$SESSION" h
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    grep -Fq '"hidden":true' "$OVERLAY_STATE_FILE" && break
+    sleep 0.1
+  done
+  grep -Fq '"hidden":true' "$OVERLAY_STATE_FILE" || fail_with_frame 'The custom overlay did not become hidden.'
+  capture_frame
+  printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom overlay' && fail_with_frame 'A hidden custom overlay remained visible.'
+  printf '%s\n' "$FRAME" | grep -Fq 'Ask anything...' || fail_with_frame 'Hiding the custom overlay did not reveal the application.'
+
+  tmux send-keys -t "$SESSION" h
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    grep -Fq '"hidden":false' "$OVERLAY_STATE_FILE" && break
+    sleep 0.1
+  done
+  grep -Fq '"hidden":false' "$OVERLAY_STATE_FILE" || fail_with_frame 'The custom overlay did not become visible again.'
+  tmux send-keys -t "$SESSION" f
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    grep -Fq '"focused":true' "$OVERLAY_STATE_FILE" && break
+    sleep 0.1
+  done
+  grep -Fq '"focused":true' "$OVERLAY_STATE_FILE" || fail_with_frame 'The custom overlay did not regain focus.'
+
+  tmux send-keys -t "$SESSION" Escape
   wait_for_file "$WORKSPACE/.smoke-editor-command-result"
   IFS= read -r EDITOR_RESULT < "$WORKSPACE/.smoke-editor-command-result" || true
-  [[ "$EDITOR_RESULT" == 'interactive smoke editor response' ]] || \
-    fail_with_frame 'The custom editor did not return the submitted response.'
+  [[ "$EDITOR_RESULT" == 'undefined' ]] || fail_with_frame 'Escape did not dismiss the custom overlay.'
   wait_for_text 'Ask anything...' 150
+  capture_frame
+  printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom overlay' && fail_with_frame 'The dismissed custom overlay remained visible.'
+  tmux send-keys -l -t "$SESSION" 'overlay restoration draft'
+  wait_for_text 'overlay restoration draft'
+  tmux send-keys -t "$SESSION" C-c
+  wait_for_text 'Ask anything...' 150
+
 fi
 fi
 tmux send-keys -l -t "$SESSION" '/exit'
@@ -344,7 +395,7 @@ if [[ "$LIVE" == 1 ]]; then
 elif [[ -n "$BINARY" ]]; then
   printf 'PASS: release executable TUI startup and clean /exit; no Provider request sent.\n'
 elif [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
-  printf 'PASS: faux streaming, cancellation, tool roundtrip, error recovery, resize, custom editor Agent Turn, clean /exit.\n'
+  printf 'PASS: faux streaming, cancellation, tool roundtrip, error recovery, overlay resize/focus/visibility/dismissal/restoration, clean /exit.\n'
 else
   printf 'PASS: faux streaming, cancellation, tool roundtrip, error recovery, resize, clean /exit.\n'
 fi

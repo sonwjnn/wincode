@@ -2,8 +2,10 @@ import type { InputRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type {
 	PluginFactory,
+	PluginUICustomBounds,
 	PluginUICustomComponent,
 	PluginUICustomContext,
+	PluginUICustomPresentationMode,
 } from "@wincode/coding-agent";
 import { useRef } from "react";
 import { z } from "zod";
@@ -20,6 +22,15 @@ const createCustomUIFixture = () => {
 			| Readonly<{ height: number; width: number }>
 			| undefined,
 		lastContext: undefined as PluginUICustomContext<string> | undefined,
+		lastFactoryBounds: undefined as PluginUICustomBounds | undefined,
+		lastPresentationState: undefined as
+			| Readonly<{
+					bounds: PluginUICustomBounds;
+					focused: boolean;
+					hidden: boolean;
+					presentation: PluginUICustomPresentationMode;
+			  }>
+			| undefined,
 		resolveAsyncFactory: customFactoryResult.resolve,
 		startAsyncFactory: customFactoryStarted.resolve,
 		throwComponent: false,
@@ -29,15 +40,30 @@ const createCustomUIFixture = () => {
 		environment,
 		height,
 		keybindings,
+		presentation,
+		presentationHandle,
 		theme,
 		width,
 	}) => {
 		state.lastComponentDimensions = { height, width };
+		state.lastPresentationState = {
+			bounds: presentationHandle.getBounds(),
+			focused: presentationHandle.isFocused(),
+			hidden: presentationHandle.isHidden(),
+			presentation,
+		};
 		if (state.throwComponent) {
 			throw new Error("Fixture custom component failed.");
 		}
 		const input = useRef<InputRenderable>(null);
 		useKeyboard((key) => {
+			if (key.name === "escape" || (key.ctrl && key.name === "c")) {
+				key.preventDefault();
+				return;
+			}
+			if (!presentationHandle.isFocused()) {
+				return;
+			}
 			if (key.name === "enter" || key.name === "return") {
 				key.preventDefault();
 				done(input.current?.value ?? "custom complete");
@@ -50,7 +76,7 @@ const createCustomUIFixture = () => {
 					{`${theme.name}:${width}x${height}:${keybindings.composer.length}:${environment.executionMode}`}
 				</text>
 				<input
-					focused
+					focused={presentationHandle.isFocused()}
 					onContentChange={() => undefined}
 					placeholder="Custom response"
 					ref={input}
@@ -63,6 +89,7 @@ const createCustomUIFixture = () => {
 	): Promise<PluginUICustomComponent<string>> => {
 		state.factoryCalls += 1;
 		state.lastContext = context;
+		state.lastFactoryBounds = context.presentationHandle.getBounds();
 		return component;
 	};
 	return { component, factory, state };
@@ -113,6 +140,32 @@ const pluginUiFixture: PluginFactory = (api) => {
 			output:
 				(await ui.custom(customFactory, {
 					title: "Fixture event custom UI",
+				})) ?? "undefined",
+			type: "success",
+		}),
+	});
+	plugin.registerTool({
+		description: "Request an overlay through host-mediated Plugin UI.",
+		inputSchema: z.object({}),
+		name: "ui_custom_overlay",
+		handler: async (_input, { ui }) => ({
+			output:
+				(await ui.custom(customFactory, {
+					presentation: "overlay",
+					title: "Fixture event custom overlay",
+				})) ?? "undefined",
+			type: "success",
+		}),
+	});
+	plugin.registerTool({
+		description: "Request a full-screen custom UI through host mediation.",
+		inputSchema: z.object({}),
+		name: "ui_custom_full_screen",
+		handler: async (_input, { ui }) => ({
+			output:
+				(await ui.custom(customFactory, {
+					presentation: "full-screen",
+					title: "Fixture event full-screen UI",
 				})) ?? "undefined",
 			type: "success",
 		}),
@@ -249,6 +302,24 @@ const pluginUiFixture: PluginFactory = (api) => {
 			"undefined",
 	});
 	plugin.registerCommand({
+		description: "Open a custom React overlay directly from a user command.",
+		name: "custom-overlay",
+		handler: async ({ ui }) =>
+			(await ui.custom(customFactory, {
+				presentation: "overlay",
+				title: "Fixture custom overlay",
+			})) ?? "undefined",
+	});
+	plugin.registerCommand({
+		description: "Open full-screen custom React UI from a user command.",
+		name: "custom-full-screen",
+		handler: async ({ ui }) =>
+			(await ui.custom(customFactory, {
+				presentation: "full-screen",
+				title: "Fixture full-screen custom UI",
+			})) ?? "undefined",
+	});
+	plugin.registerCommand({
 		description: "Return the stable busy error for a competing custom UI.",
 		name: "custom-busy",
 		handler: async ({ ui }) => {
@@ -267,6 +338,19 @@ const pluginUiFixture: PluginFactory = (api) => {
 			customUIState.throwComponent = true;
 			try {
 				await ui.custom(customFactory);
+				return "unexpected-success";
+			} catch (error) {
+				return errorCode(error);
+			}
+		},
+	});
+	plugin.registerCommand({
+		description: "Return the stable error for a failing full-screen component.",
+		name: "custom-full-screen-component-failure",
+		handler: async ({ ui }) => {
+			customUIState.throwComponent = true;
+			try {
+				await ui.custom(customFactory, { presentation: "full-screen" });
 				return "unexpected-success";
 			} catch (error) {
 				return errorCode(error);

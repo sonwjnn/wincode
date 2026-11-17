@@ -2,12 +2,14 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { InputRenderable } from "@opentui/core";
+import { type CapturedFrame, type InputRenderable, RGBA } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type {
+	PluginUICustomBounds,
 	PluginUICustomComponent,
 	PluginUICustomContext,
+	PluginUICustomPresentationMode,
 	SessionSdk,
 	SessionSdkEvent,
 	SessionSdkHandle,
@@ -18,7 +20,7 @@ import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginTools } from "@/modules/plugins/tools";
 import type { PluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
 import {
-	PluginUICustomEditor,
+	PluginUICustomPresentation,
 	PluginUIHostProvider,
 	usePluginUIHost,
 } from "@/modules/plugins/ui/plugin-ui-host";
@@ -60,6 +62,48 @@ const textFromSessionTranscript = (transcript: readonly object[]): string =>
 		)
 		.join(" ");
 
+const getRenderedBackgroundBounds = (
+	frame: CapturedFrame,
+	background: RGBA
+):
+	| Readonly<{
+			cellCount: number;
+			height: number;
+			left: number;
+			top: number;
+			width: number;
+	  }>
+	| undefined => {
+	let cellCount = 0;
+	let left = Number.POSITIVE_INFINITY;
+	let top = Number.POSITIVE_INFINITY;
+	let right = Number.NEGATIVE_INFINITY;
+	let bottom = Number.NEGATIVE_INFINITY;
+	for (const [row, line] of frame.lines.entries()) {
+		let column = 0;
+		for (const span of line.spans) {
+			if (span.bg.equals(background)) {
+				cellCount += span.width;
+				left = Math.min(left, column);
+				top = Math.min(top, row);
+				right = Math.max(right, column + span.width - 1);
+				bottom = Math.max(bottom, row);
+			}
+			column += span.width;
+		}
+	}
+	if (cellCount === 0) {
+		return;
+	}
+	return {
+		cellCount,
+		height: bottom - top + 1,
+		left,
+		top,
+		width: right - left + 1,
+	};
+};
+
 type OpenedPluginUITestAgentSession = Readonly<{
 	dispose: () => Promise<void>;
 	handle: SessionSdkHandle;
@@ -73,6 +117,15 @@ type CustomUIState = {
 		| Readonly<{ height: number; width: number }>
 		| undefined;
 	lastContext: PluginUICustomContext<string> | undefined;
+	lastFactoryBounds: PluginUICustomBounds | undefined;
+	lastPresentationState:
+		| Readonly<{
+				bounds: PluginUICustomBounds;
+				focused: boolean;
+				hidden: boolean;
+				presentation: PluginUICustomPresentationMode;
+		  }>
+		| undefined;
 	resolveAsyncFactory: (component: PluginUICustomComponent<string>) => void;
 	throwComponent: boolean;
 };
@@ -169,12 +222,12 @@ const pluginUiTestEnvironment = async (
 			return <FixtureComposer />;
 		}
 		return (
-			<PluginUICustomEditor
+			<PluginUICustomPresentation
 				{...(bindPluginUIHostInEditor ? { pluginRuntime: runtime } : {})}
 				sessionId={sessionId}
 			>
 				<FixtureComposer />
-			</PluginUICustomEditor>
+			</PluginUICustomPresentation>
 		);
 	}
 	const openAgentSession = async (
@@ -392,6 +445,16 @@ test("a direct Plugin Command opens custom UI, returns once, and restores its co
 		expect(environment.customUIState.factoryCalls).toBe(
 			initialFactoryCalls + 1
 		);
+		expect(environment.customUIState.lastContext?.presentation).toBe("editor");
+		const editorBounds =
+			environment.customUIState.lastContext?.presentationHandle.getBounds();
+		if (editorBounds === undefined) {
+			throw new Error(
+				"The custom editor did not receive its presentation handle."
+			);
+		}
+		expect(editorBounds.width).toBeGreaterThan(0);
+		expect(editorBounds.height).toBeGreaterThan(0);
 
 		await act(() => environment.setup.mockInput.typeText("local response"));
 		await act(() => environment.setup.mockInput.pressEnter());
@@ -403,6 +466,145 @@ test("a direct Plugin Command opens custom UI, returns once, and restores its co
 		expect(environment.setup.captureCharFrame()).not.toContain(
 			"Fixture custom UI"
 		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("an overlay keeps the live application visible and returns its component result", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 16,
+		width: 64,
+	});
+	try {
+		await act(() => environment.setup.mockInput.typeText("overlay draft"));
+		await flushTestRenderer(environment.setup, 2);
+		const renderer = environment.setup.renderer;
+		const rendererRoot = renderer.root;
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay"
+		);
+		await flushTestRenderer(environment.setup, 2);
+
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Fixture custom UI");
+		expect(frame).toContain("Ctrl+C reclaim app");
+		expect(frame).toContain("Fixture composer");
+		expect(frame).toContain("Plugin UI host fixture · update 0");
+		expect(environment.setup.renderer).toBe(renderer);
+		expect(environment.setup.renderer.root).toBe(rendererRoot);
+		expect(environment.customUIState.lastContext?.presentation).toBe("overlay");
+		expect(environment.customUIState.lastFactoryBounds).toEqual({
+			left: 2,
+			top: 2,
+			width: 60,
+			height: 12,
+		});
+		expect(
+			environment.customUIState.lastContext?.presentationHandle.getBounds()
+		).toEqual({ left: 2, top: 2, width: 60, height: 12 });
+		const dimensions = environment.customUIState.lastComponentDimensions;
+		if (dimensions === undefined) {
+			throw new Error("The custom overlay did not render its component.");
+		}
+		expect(dimensions.width).toBeGreaterThan(0);
+		expect(dimensions.width).toBeLessThanOrEqual(64);
+		expect(dimensions.height).toBeGreaterThan(0);
+		expect(dimensions.height).toBeLessThanOrEqual(16);
+
+		await act(() => environment.setup.mockInput.typeText("overlay response"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+		expect(await result).toBe("overlay response");
+		await act(() => environment.setup.mockInput.typeText(" restored"));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"overlay draft restored"
+		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("custom UI focus and visibility are independent and do not settle the request", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const presentationHandle =
+			environment.customUIState.lastContext?.presentationHandle;
+		if (presentationHandle === undefined) {
+			throw new Error(
+				"The custom overlay did not receive its presentation handle."
+			);
+		}
+		let settled = false;
+		void result.then(() => {
+			settled = true;
+		});
+
+		await act(() => presentationHandle.unfocus());
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(false);
+		expect(presentationHandle.isHidden()).toBe(false);
+		expect(environment.customUIState.lastPresentationState).toMatchObject({
+			focused: false,
+			hidden: false,
+			presentation: "overlay",
+		});
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(settled).toBe(false);
+
+		await act(() => presentationHandle.setHidden(true));
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(false);
+		expect(presentationHandle.isHidden()).toBe(true);
+		expect(environment.customUIState.lastPresentationState).toMatchObject({
+			focused: false,
+			hidden: true,
+		});
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture custom UI"
+		);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		expect(settled).toBe(false);
+
+		await act(() => presentationHandle.focus());
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(true);
+		expect(presentationHandle.isHidden()).toBe(true);
+		expect(environment.customUIState.lastPresentationState).toMatchObject({
+			focused: true,
+			hidden: true,
+		});
+		expect(settled).toBe(false);
+
+		await act(() => presentationHandle.setHidden(false));
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(true);
+		expect(presentationHandle.isHidden()).toBe(false);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(settled).toBe(false);
+
+		await act(() => presentationHandle.unfocus());
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		await act(() => presentationHandle.focus());
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(true);
+		expect(presentationHandle.isHidden()).toBe(false);
+		expect(settled).toBe(false);
+
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		await act(() => environment.setup.mockInput.typeText("restored focus"));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("restored focus");
 	} finally {
 		await environment.dispose();
 	}
@@ -508,6 +710,35 @@ test("the verified author example opens a React editor and returns its response"
 	}
 });
 
+test("the author example returns responses from its overlay and full-screen commands", async () => {
+	for (const [command, composerVisible] of [
+		["reply-overlay", true],
+		["reply-full-screen", false],
+	] as const) {
+		const environment = await pluginUiTestEnvironment();
+		try {
+			const { result } = await environment.executeCommand(
+				"custom_editor",
+				command
+			);
+			await flushTestRenderer(environment.setup, 2);
+			const frame = environment.setup.captureCharFrame();
+			expect(frame).toContain("Reply to the current message");
+			expect(frame.includes("Fixture composer")).toBe(composerVisible);
+
+			await act(() => environment.setup.mockInput.typeText("Example response"));
+			await act(() => environment.setup.mockInput.pressEnter());
+			await flushTestRenderer(environment.setup, 2);
+			expect(await result).toBe("Example response");
+			expect(environment.setup.captureCharFrame()).toContain(
+				"Fixture composer"
+			);
+		} finally {
+			await environment.dispose();
+		}
+	}
+});
+
 test("custom editor preserves the live composer draft and transcript through restoration", async () => {
 	const environment = await pluginUiTestEnvironment();
 	try {
@@ -555,7 +786,7 @@ test("custom editor preserves the live composer draft and transcript through res
 	}
 });
 
-test("Agent Turn completion leaves custom editor open and restores the live transcript", async () => {
+test("Agent Turn completion continues behind full-screen custom UI and restores current state", async () => {
 	const environment = await pluginUiTestEnvironment();
 	const recorder = createFakeProviderRecorder();
 	recorder.stepScript = async function* () {
@@ -566,11 +797,19 @@ test("Agent Turn completion leaves custom editor open and restores the live tran
 	let stopObservingSession: (() => void) | undefined;
 	let stopObservingTurn: (() => void) | undefined;
 	try {
+		await act(() => environment.setup.mockInput.typeText("preserved draft"));
+		await flushTestRenderer(environment.setup, 2);
 		const { result: customResult } = await environment.executeCommand(
 			"plugin_ui_fixture",
-			"custom"
+			"custom-full-screen"
 		);
 		await flushTestRenderer(environment.setup, 2);
+		const fullScreenContext = environment.customUIState.lastContext;
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture composer"
+		);
+		expect(fullScreenContext).toMatchObject({ height: 16, width: 64 });
 		agentSession = await environment.openAgentSession(recorder);
 		const handle = agentSession.handle;
 		await act(() => {
@@ -600,7 +839,7 @@ test("Agent Turn completion leaves custom editor open and restores the live tran
 		await flushTestRenderer(environment.setup, 2);
 
 		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
-		expect(environment.setup.captureCharFrame()).toContain(
+		expect(environment.setup.captureCharFrame()).not.toContain(
 			"Fresh provider response"
 		);
 		expect(environment.customUIState.lastContext?.signal.aborted).toBe(false);
@@ -608,6 +847,12 @@ test("Agent Turn completion leaves custom editor open and restores the live tran
 		await environment.pressEscape();
 		expect(await customResult).toBe("undefined");
 		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		expect(environment.setup.captureCharFrame()).toContain("preserved draft");
+		await act(() => environment.setup.mockInput.typeText(" restored"));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"preserved draft restored"
+		);
 		expect(environment.setup.captureCharFrame()).toContain(
 			"Fresh provider response"
 		);
@@ -875,6 +1120,111 @@ test("custom UI receives resized dimensions without losing keyboard dismissal", 
 	}
 });
 
+test("overlay is painted at its terminal-cell bounds and resizes with the terminal", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 8,
+		width: 18,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const context = environment.customUIState.lastContext;
+		if (context === undefined) {
+			throw new Error("The custom overlay did not receive its context.");
+		}
+		const panelBackground = RGBA.fromHex(
+			context.theme.colors.backgroundElement
+		);
+
+		expect(
+			getRenderedBackgroundBounds(
+				environment.setup.captureSpans(),
+				panelBackground
+			)
+		).toEqual({ cellCount: 56, height: 4, left: 2, top: 2, width: 14 });
+
+		await act(() => environment.setup.resize(22, 10));
+		await flushTestRenderer(environment.setup, 2);
+		expect(
+			getRenderedBackgroundBounds(
+				environment.setup.captureSpans(),
+				panelBackground
+			)
+		).toEqual({ cellCount: 108, height: 6, left: 2, top: 2, width: 18 });
+
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("overlay and full-screen component bounds track terminal resize", async () => {
+	for (const [command, isOverlay] of [
+		["custom-overlay", true],
+		["custom-full-screen", false],
+	] as const) {
+		const environment = await pluginUiTestEnvironment("interactive", {
+			height: 8,
+			width: 18,
+		});
+		try {
+			const { result } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				command
+			);
+			await flushTestRenderer(environment.setup, 2);
+			const initialDimensions =
+				environment.customUIState.lastComponentDimensions;
+			const presentationHandle =
+				environment.customUIState.lastContext?.presentationHandle;
+			if (presentationHandle === undefined) {
+				throw new Error(`${command} did not receive its presentation handle.`);
+			}
+			if (initialDimensions === undefined) {
+				throw new Error(`${command} did not render its component.`);
+			}
+			expect(initialDimensions.width).toBeLessThanOrEqual(18);
+			expect(initialDimensions.height).toBeLessThanOrEqual(8);
+			expect(presentationHandle.getBounds()).toEqual(
+				isOverlay
+					? { left: 2, top: 2, width: 14, height: 4 }
+					: { left: 0, top: 0, width: 18, height: 8 }
+			);
+			if (!isOverlay) {
+				expect(initialDimensions).toEqual({ height: 8, width: 18 });
+			}
+
+			await act(() => environment.setup.resize(22, 10));
+			await flushTestRenderer(environment.setup, 2);
+			const resizedDimensions =
+				environment.customUIState.lastComponentDimensions;
+			if (resizedDimensions === undefined) {
+				throw new Error(`${command} lost its component during resize.`);
+			}
+			expect(resizedDimensions.width).toBeLessThanOrEqual(22);
+			expect(resizedDimensions.height).toBeLessThanOrEqual(10);
+			expect(resizedDimensions.width).toBeGreaterThan(initialDimensions.width);
+			expect(resizedDimensions.height).toBeGreaterThan(
+				initialDimensions.height
+			);
+			expect(presentationHandle.getBounds()).toEqual(
+				isOverlay
+					? { left: 2, top: 2, width: 18, height: 6 }
+					: { left: 0, top: 0, width: 22, height: 10 }
+			);
+
+			await environment.pressEscape();
+			expect(await result).toBe("undefined");
+		} finally {
+			await environment.dispose();
+		}
+	}
+});
+
 test("reserved Ctrl+C reclaims the composer without terminating the host", async () => {
 	const environment = await pluginUiTestEnvironment();
 	try {
@@ -899,21 +1249,60 @@ test("reserved Ctrl+C reclaims the composer without terminating the host", async
 	}
 });
 
-test("renderer teardown aborts and settles an active custom editor", async () => {
-	const environment = await pluginUiTestEnvironment();
-	try {
-		const { result } = await environment.executeCommand(
-			"plugin_ui_fixture",
-			"custom"
-		);
-		await flushTestRenderer(environment.setup, 2);
-		await act(async () => environment.destroyRenderer());
+test("overlay and full-screen UI reserve Ctrl+C for host reclamation", async () => {
+	for (const command of ["custom-overlay", "custom-full-screen"] as const) {
+		const environment = await pluginUiTestEnvironment();
+		try {
+			const { result } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				command
+			);
+			await flushTestRenderer(environment.setup, 2);
+			expect(environment.setup.captureCharFrame()).toContain(
+				"Fixture custom UI"
+			);
+			expect(environment.isCustomLayerTop()).toBe(true);
 
-		expect(await result).toBe("undefined");
-		expect(environment.customUIState.lastContext?.signal.aborted).toBe(true);
-		expect(environment.pluginUIHost?.getCustomUI()).toBeNull();
-	} finally {
-		await environment.dispose();
+			await environment.pressReclaim();
+			expect(await result).toBe("undefined");
+			expect(environment.setup.captureCharFrame()).toContain(
+				"Fixture composer"
+			);
+			expect(environment.setup.captureCharFrame()).not.toContain(
+				"Fixture custom UI"
+			);
+			const { result: hostStillActive } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				"notify"
+			);
+			expect(await hostStillActive).toBe("notified");
+		} finally {
+			await environment.dispose();
+		}
+	}
+});
+
+test("renderer teardown aborts and settles every custom UI presentation", async () => {
+	for (const command of [
+		"custom",
+		"custom-overlay",
+		"custom-full-screen",
+	] as const) {
+		const environment = await pluginUiTestEnvironment();
+		try {
+			const { result } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				command
+			);
+			await flushTestRenderer(environment.setup, 2);
+			await act(async () => environment.destroyRenderer());
+
+			expect(await result).toBe("undefined");
+			expect(environment.customUIState.lastContext?.signal.aborted).toBe(true);
+			expect(environment.pluginUIHost?.getCustomUI()).toBeNull();
+		} finally {
+			await environment.dispose();
+		}
 	}
 });
 
@@ -1014,6 +1403,43 @@ test("event-originated custom UI asks for fresh consent before factory execution
 	}
 });
 
+test("overlay and full-screen event requests wait for consent before mounting", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		for (const [toolName, presentation] of [
+			["ui_custom_overlay", "overlay"],
+			["ui_custom_full_screen", "full-screen"],
+		] as const) {
+			const initialFactoryCalls = environment.customUIState.factoryCalls;
+			const pending = environment.executePluginTool(
+				toolName,
+				`plugin-ui-${presentation}-consent`
+			);
+			await flushTestRenderer(environment.setup, 2);
+			const invitationFrame = environment.setup.captureCharFrame();
+			expect(invitationFrame).toContain("Plugin UI invitation");
+			expect(invitationFrame).not.toContain("Fixture custom UI");
+			expect(environment.customUIState.factoryCalls).toBe(initialFactoryCalls);
+
+			await act(() => environment.setup.mockInput.pressArrow("up"));
+			await act(() => environment.setup.mockInput.pressEnter());
+			await flushTestRenderer(environment.setup, 2);
+			const activeFrame = environment.setup.captureCharFrame();
+			expect(activeFrame).toContain("Fixture custom UI");
+			expect(activeFrame.includes("Fixture composer")).toBe(
+				presentation === "overlay"
+			);
+			await environment.pressEscape();
+			expect(await pending).toMatchObject({
+				output: "undefined",
+				type: "success",
+			});
+		}
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("declining an event-originated custom UI resolves undefined and releases admission", async () => {
 	const environment = await pluginUiTestEnvironment();
 	try {
@@ -1103,6 +1529,16 @@ test("factory and component failures reject with stable codes and release the sl
 		await flushTestRenderer(environment.setup, 2);
 		expect(await componentFailure).toBe("plugin_ui_custom_failed");
 		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+
+		const { result: fullScreenComponentFailure } =
+			await environment.executeCommand(
+				"plugin_ui_fixture",
+				"custom-full-screen-component-failure"
+			);
+		await flushTestRenderer(environment.setup, 2);
+		expect(await fullScreenComponentFailure).toBe("plugin_ui_custom_failed");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		expect(environment.pluginUIHost?.getCustomUI()).toBeNull();
 
 		environment.customUIState.throwComponent = false;
 		const { result: recovered } = await environment.executeCommand(

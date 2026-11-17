@@ -1,11 +1,12 @@
 import * as path from "node:path";
-import type { InputRenderable } from "@opentui/core";
+import type { InputRenderable, KeyEvent } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type {
 	PluginFactory,
 	PluginSessionContext,
 	PluginUICustomComponent,
 	PluginUICustomFactory,
+	PluginUICustomPresentationHandle,
 	SessionSdkEvent,
 } from "@wincode/coding-agent";
 import { useEffect, useRef } from "react";
@@ -64,6 +65,39 @@ const waitForSessionTurn = async (
 	}
 };
 
+const handleSmokeOverlayKey = (
+	key: KeyEvent,
+	presentationHandle: PluginUICustomPresentationHandle,
+	input: InputRenderable | null,
+	done: (value: string) => void
+): void => {
+	if (key.name === "escape" || (key.ctrl && key.name === "c")) {
+		key.preventDefault();
+		return;
+	}
+	if (key.name === "f") {
+		key.preventDefault();
+		if (presentationHandle.isFocused()) {
+			presentationHandle.unfocus();
+		} else {
+			presentationHandle.focus();
+		}
+		return;
+	}
+	if (key.name === "h") {
+		key.preventDefault();
+		presentationHandle.setHidden(!presentationHandle.isHidden());
+		return;
+	}
+	if (
+		presentationHandle.isFocused() &&
+		(key.name === "enter" || key.name === "return")
+	) {
+		key.preventDefault();
+		done(input?.value ?? "smoke editor dismissed");
+	}
+};
+
 const createSmokeEditorFactory =
 	(
 		sessionSdk: NonNullable<PluginSessionContext["sessionSdk"]>,
@@ -71,8 +105,31 @@ const createSmokeEditorFactory =
 		workspace: string
 	): PluginUICustomFactory<string> =>
 	async () => {
-		const component: PluginUICustomComponent<string> = ({ done, theme }) => {
+		const component: PluginUICustomComponent<string> = ({
+			done,
+			height,
+			presentation,
+			presentationHandle,
+			theme,
+			width,
+		}) => {
 			const input = useRef<InputRenderable>(null);
+			const focused = presentationHandle.isFocused();
+			const hidden = presentationHandle.isHidden();
+			const bounds = presentationHandle.getBounds();
+			useEffect(() => {
+				void Bun.write(
+					path.join(workspace, ".smoke-custom-overlay-state"),
+					JSON.stringify({
+						bounds,
+						focused,
+						height,
+						hidden,
+						presentation,
+						width,
+					})
+				);
+			}, [bounds, focused, height, hidden, presentation, width]);
 			useEffect(() => {
 				let mounted = true;
 				let disposeHandle: (() => Promise<void>) | undefined;
@@ -111,20 +168,21 @@ const createSmokeEditorFactory =
 					}
 				};
 			}, []);
-			useKeyboard((key) => {
-				if (key.name === "enter" || key.name === "return") {
-					key.preventDefault();
-					done(input.current?.value ?? "smoke editor dismissed");
-				}
-			});
+			useKeyboard((key) =>
+				handleSmokeOverlayKey(key, presentationHandle, input.current, done)
+			);
 			return (
 				<box flexDirection="column" gap={1} paddingX={1} width="100%">
-					<text fg={theme.colors.text}>Smoke custom editor</text>
+					<text fg={theme.colors.text}>Smoke custom overlay</text>
 					<text fg={theme.colors.textMuted}>
-						The fake Agent Turn starts after this editor mounts.
+						{`Focus: ${focused} · Hidden: ${hidden} · Bounds: ${bounds.left},${bounds.top} ${bounds.width}x${bounds.height} · Content: ${width}x${height}`}
+					</text>
+					<text fg={theme.colors.textMuted}>
+						F toggles focus, H toggles visibility; the fake Agent Turn runs
+						while open.
 					</text>
 					<input
-						focused
+						focused={focused}
 						onContentChange={() => undefined}
 						placeholder="Write a reply"
 						ref={input}
@@ -142,7 +200,7 @@ const interactivePluginUISmoke: PluginFactory = (api) => {
 		sessionSdk = operations;
 	});
 	plugin.registerCommand({
-		description: "Show custom editor while a fake Agent Turn completes.",
+		description: "Show custom overlay while a fake Agent Turn completes.",
 		name: "smoke-editor-turn",
 		handler: async ({ sessionId, ui, workspace }) => {
 			await Bun.write(
@@ -158,7 +216,10 @@ const interactivePluginUISmoke: PluginFactory = (api) => {
 			}
 			const result = await ui.custom(
 				createSmokeEditorFactory(sessionSdk, sessionId, workspace),
-				{ title: "Smoke custom editor during Agent progress" }
+				{
+					presentation: "overlay",
+					title: "Smoke custom overlay during Agent progress",
+				}
 			);
 			await Bun.write(
 				path.join(workspace, ".smoke-editor-command-result"),
