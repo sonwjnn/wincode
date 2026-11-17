@@ -490,11 +490,8 @@ describe("composer autocomplete", () => {
 					prefix: "@src",
 				});
 				await deferredCompletion.promise;
-				await Promise.resolve();
-				await setup.renderOnce();
-				await Promise.resolve();
-				await setup.renderOnce();
 			});
+			await waitForControllerEffects(setup);
 			expect(holder.current?.state.overlay.kind).toBe(null);
 
 			await act(async () => holder.current?.actions.onEnter());
