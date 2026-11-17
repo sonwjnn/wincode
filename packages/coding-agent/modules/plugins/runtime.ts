@@ -482,6 +482,34 @@ export const createPluginRuntime = (
 	const backgroundWorkErrors = new Map<string, unknown[]>();
 	const backgroundWorkListeners = new Map<string, Set<() => void>>();
 	const pluginUIHosts = new Map<string, PluginUIHostRegistration>();
+	// Host chrome outlives a Session view, but this registry must not retain an unmounted host.
+	const pluginUIHostReferences = new Set<WeakRef<PluginUIHostBinding>>();
+	const forEachPluginUIHost = (
+		visit: (host: PluginUIHostBinding) => void
+	): void => {
+		for (const reference of pluginUIHostReferences) {
+			const host = reference.deref();
+			if (host === undefined) {
+				pluginUIHostReferences.delete(reference);
+				continue;
+			}
+			visit(host);
+		}
+	};
+	const trackPluginUIHost = (host: PluginUIHostBinding): void => {
+		let tracked = false;
+		for (const reference of pluginUIHostReferences) {
+			const currentHost = reference.deref();
+			if (currentHost === undefined) {
+				pluginUIHostReferences.delete(reference);
+			} else if (currentHost === host) {
+				tracked = true;
+			}
+		}
+		if (!tracked) {
+			pluginUIHostReferences.add(new WeakRef(host));
+		}
+	};
 	const pluginUIHandles = new Map<string, Map<string, PluginUIHandleBinding>>();
 	const pluginUIPromptSpans = new Map<string, PluginUIPromptSpan>();
 	const closingPluginUISessions = new Set<string>();
@@ -632,6 +660,9 @@ export const createPluginRuntime = (
 		if (handles.size === 0) {
 			pluginUIHandles.delete(sessionId);
 		}
+	};
+	const clearPluginUIContributions = (pluginId: string): void => {
+		forEachPluginUIHost((host) => host.clearPlugin?.(pluginId));
 	};
 	const getPluginUI = (
 		pluginId: string,
@@ -1748,6 +1779,7 @@ export const createPluginRuntime = (
 
 		bindPromptSelectionTarget: promptSelectionBridge.bindPromptSelectionTarget,
 		bindPluginUIHost(sessionId, host) {
+			trackPluginUIHost(host);
 			const binding: PluginUIHostRegistration = Object.freeze({
 				host,
 				shortcutUnsubscribers: new Map(),
@@ -1793,6 +1825,7 @@ export const createPluginRuntime = (
 			for (const sessionId of sessionIds) {
 				closePluginUIHandles(sessionId, undefined, pluginId);
 			}
+			clearPluginUIContributions(pluginId);
 			addDiagnostic(plugin, message);
 		},
 		async executeCommand(pluginId, name, context) {
@@ -2051,6 +2084,12 @@ export const createPluginRuntime = (
 					pluginUIHosts.delete(sessionId);
 					closePluginUIHandles(sessionId, binding);
 				}
+				forEachPluginUIHost((host) => {
+					for (const plugin of plugins) {
+						host.clearPlugin?.(plugin.id);
+					}
+				});
+				pluginUIHostReferences.clear();
 				await shutdownStartedPlugins();
 			})();
 			shutdownPromise = closing;

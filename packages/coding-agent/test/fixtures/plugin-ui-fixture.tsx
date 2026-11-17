@@ -7,9 +7,29 @@ import type {
 	PluginUICustomContext,
 	PluginUICustomFactory,
 	PluginUICustomPresentationMode,
+	PluginUIFooterComponent,
+	PluginUIHeaderComponent,
 } from "@wincode/coding-agent";
 import { useRef, useState } from "react";
 import { z } from "zod";
+
+const fixtureHeader: PluginUIHeaderComponent = ({ height, theme, width }) => (
+	<text>{`Fixture header ${theme.name} ${width}x${height}`}</text>
+);
+
+const replacementHeader: PluginUIHeaderComponent = ({ theme }) => (
+	<text>{`Replacement header ${theme.name}`}</text>
+);
+
+const fixtureFooter: PluginUIFooterComponent = ({
+	branch,
+	height,
+	statuses,
+	theme,
+	width,
+}) => (
+	<text>{`Fixture footer ${theme.name} ${width}x${height} ${branch ?? "no branch"} ${statuses.map(({ value }) => value).join("|")}`}</text>
+);
 
 const createCustomUIFixture = () => {
 	const customFactoryStarted = Promise.withResolvers<void>();
@@ -432,7 +452,105 @@ const pluginUiFixture: PluginFactory = (api) => {
 		},
 	});
 	plugin.registerCommand({
+		description: "Set namespaced Plugin UI status and widgets.",
+		name: "ui-contributions",
+		handler: ({ ui }) => {
+			ui.setStatus("shared", "Fixture shared status");
+			ui.setStatus("alpha", "Fixture alpha status");
+			ui.setWidget("shared", ["Fixture shared widget"], {
+				placement: "aboveEditor",
+			});
+			ui.setWidget("alpha", ["Fixture alpha widget"], {
+				placement: "aboveEditor",
+			});
+			ui.setWidget("below", ["Fixture below widget"], {
+				placement: "belowEditor",
+			});
+			return "contributions set";
+		},
+	});
+	plugin.registerCommand({
+		description: "Clear this Plugin's namespaced status and widgets.",
+		name: "clear-ui-contributions",
+		handler: ({ ui }) => {
+			ui.setStatus("shared", undefined);
+			ui.setStatus("alpha", undefined);
+			ui.setWidget("shared", undefined);
+			ui.setWidget("alpha", undefined);
+			ui.setWidget("below", undefined);
+			return "contributions cleared";
+		},
+	});
+	plugin.registerCommand({
+		description: "Own and replace the host Plugin UI header and footer.",
+		name: "set-ui-chrome",
+		handler: ({ ui }) =>
+			JSON.stringify({
+				header: ui.setHeader(fixtureHeader),
+				footer: ui.setFooter(fixtureFooter),
+			}),
+	});
+	plugin.registerCommand({
+		description: "Replace this Plugin's owned header without stacking.",
+		name: "replace-ui-header",
+		handler: ({ ui }) => JSON.stringify(ui.setHeader(replacementHeader)),
+	});
+	plugin.registerCommand({
+		description: "Release this Plugin's host header and footer ownership.",
+		name: "clear-ui-chrome",
+		handler: ({ ui }) =>
+			JSON.stringify({
+				header: ui.setHeader(undefined),
+				footer: ui.setFooter(undefined),
+			}),
+	});
+	plugin.registerCommand({
+		description:
+			"Set view-scoped presentation controls and the terminal title.",
+		name: "set-presentation",
+		handler: ({ ui }) => {
+			ui.setWorkingMessage("Fixture working message");
+			ui.setWorkingVisible(false);
+			ui.setWorkingIndicator({ frames: ["A", "B"], intervalMs: 120 });
+			ui.setTitle("Fixture terminal title");
+			ui.setHiddenThinkingLabel("Fixture reasoning label");
+			ui.setToolsExpanded(true);
+			return String(ui.getToolsExpanded());
+		},
+	});
+	plugin.registerCommand({
+		description: "Reset this Plugin's active presentation controls.",
+		name: "clear-presentation",
+		handler: ({ ui }) => {
+			ui.setWorkingMessage(undefined);
+			ui.setWorkingIndicator(undefined);
+			ui.setTitle(undefined);
+			ui.setHiddenThinkingLabel(undefined);
+			return String(ui.getToolsExpanded());
+		},
+	});
+	plugin.registerCommand({
+		description: "Read explicit terminal-free presentation defaults.",
+		name: "presentation-defaults",
+		handler: ({ ui }) => {
+			ui.setStatus("ignored", "ignored");
+			ui.setWidget("ignored", ["ignored"]);
+			ui.setWorkingMessage("ignored");
+			ui.setWorkingVisible(false);
+			ui.setWorkingIndicator({ frames: ["ignored"] });
+			ui.setTitle("ignored");
+			ui.setHiddenThinkingLabel("ignored");
+			ui.setToolsExpanded(true);
+			return JSON.stringify({
+				expanded: ui.getToolsExpanded(),
+				footer: ui.setFooter(fixtureFooter),
+				header: ui.setHeader(fixtureHeader),
+			});
+		},
+	});
+	plugin.registerCommand({
 		description: "Open a custom React editor directly from a user command.",
+
 		name: "custom",
 		handler: async ({ ui }) =>
 			(await ui.custom(customFactory, { title: "Fixture custom editor" })) ??

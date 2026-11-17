@@ -11,12 +11,13 @@ import {
 	useRenderer,
 	useTerminalDimensions,
 } from "@opentui/react";
-import { isUndefined, logger } from "@wincode/utils";
+import { isUndefined, logger, omitUndefined } from "@wincode/utils";
 import {
 	Component,
 	createContext,
 	createElement,
 	type ReactNode,
+	useCallback,
 	useContext,
 	useEffect,
 	useLayoutEffect,
@@ -51,6 +52,8 @@ import type {
 	PluginNotificationLevel,
 	PluginThemeChangeResult,
 	PluginUI,
+	PluginUIChromeContext,
+	PluginUIContributionResult,
 	PluginUICustomBounds,
 	PluginUICustomComponent,
 	PluginUICustomContext,
@@ -59,10 +62,24 @@ import type {
 	PluginUICustomPresentationHandle,
 	PluginUICustomPresentationMode,
 	PluginUIDialogOptions,
+	PluginUIFooterContext,
 	PluginUIPromptKind,
+	PluginUIUpdate,
+	PluginUIWidgetPlacement,
 } from "../public";
 import { PluginUICustomError } from "../public";
 import type { PluginRuntime } from "../runtime";
+import {
+	createPluginUIContributionStore,
+	createPluginUIUpdateControls,
+	EMPTY_PLUGIN_UI_CHROME,
+	EMPTY_PLUGIN_UI_VIEW,
+	type PluginUIChromeSnapshot,
+	type PluginUIContributionStore,
+	type PluginUITitleSnapshot,
+	type PluginUIUpdateSink,
+	type PluginUIViewContributions,
+} from "./plugin-ui-contributions";
 import type {
 	PluginUIHostBinding,
 	PluginUIOwner as PluginUIOwnerType,
@@ -212,12 +229,25 @@ export type PluginUIHost = PluginUIHostBinding &
 			shortcut: string,
 			handler: () => void
 		) => () => void;
+		clearPlugin: (pluginId: string) => void;
+		getChrome: () => PluginUIChromeSnapshot;
+		getContributions: (sessionId: string) => PluginUIViewContributions;
+		getTitle: () => PluginUITitleSnapshot;
+		setToolsExpanded: (sessionId: string, expanded: boolean) => void;
 		getCustomUI: () => PluginUICustomHostRequest | null;
+		subscribeChrome: (listener: () => void) => () => void;
+		subscribeTitle: (listener: () => void) => () => void;
+		subscribeContributions: (
+			sessionId: string,
+			listener: () => void
+		) => () => void;
 		subscribeCustomUI: (listener: () => void) => () => void;
 	}>;
 
 type PluginUIHostDependencies = Readonly<{
+	contributions: PluginUIContributionStore;
 	customUI: PluginUICustomStore;
+	onUpdate?: PluginUIUpdateSink;
 	dialog: () => DialogContextValue;
 	keyboardLayer: () => PluginUIKeyboardLayer;
 	theme: () => Readonly<{ setTheme: (theme: Theme) => void }>;
@@ -503,6 +533,38 @@ class PluginUICustomErrorBoundary extends Component<
 	}
 }
 
+type PluginUIChromeErrorBoundaryProps = Readonly<{
+	children: ReactNode;
+	fallback: ReactNode;
+	pluginId: string;
+	surface: "header" | "footer";
+}>;
+
+class PluginUIChromeErrorBoundary extends Component<
+	PluginUIChromeErrorBoundaryProps,
+	Readonly<{ failed: boolean }>
+> {
+	override state = { failed: false };
+
+	static getDerivedStateFromError(): Readonly<{ failed: boolean }> {
+		return { failed: true };
+	}
+
+	override componentDidCatch(error: Error): void {
+		void logger
+			.error("Plugin UI chrome failed to render", {
+				cause: error.message,
+				operation: `plugin.ui.${this.props.surface}`,
+				pluginId: this.props.pluginId,
+			})
+			.catch(() => undefined);
+	}
+
+	override render(): ReactNode {
+		return this.state.failed ? this.props.fallback : this.props.children;
+	}
+}
+
 const CUSTOM_UI_KEYBINDINGS = Object.freeze({
 	composer: Object.freeze(
 		CHAT_TEXT_AREA_KEY_BINDINGS.map((binding) => Object.freeze({ ...binding }))
@@ -690,6 +752,7 @@ export function PluginUICustomPresentation({
 		host?.getCustomUI ?? EMPTY_PLUGIN_CUSTOM_UI.get,
 		host?.getCustomUI ?? EMPTY_PLUGIN_CUSTOM_UI.get
 	);
+	const contributions = usePluginUIContributions(sessionId);
 	const activeRequest = getSessionCustomUIRequest(request, sessionId);
 	useSyncExternalStore(
 		activeRequest?.presentationHandle.subscribe ?? subscribeToNoCustomUI,
@@ -834,9 +897,34 @@ export function PluginUICustomPresentation({
 						currentTheme
 					),
 				};
+	const renderWidgets = (placement: PluginUIWidgetPlacement) => {
+		const widgets = contributions.widgets.filter(
+			(widget) => widget.placement === placement
+		);
+		if (widgets.length === 0) {
+			return null;
+		}
+		return (
+			<box flexDirection="column" flexShrink={0} width="100%">
+				{widgets.map(({ key, lines, pluginId }) => (
+					<box
+						flexDirection="column"
+						key={`${pluginId}:${key}`}
+						paddingX={1}
+						width="100%"
+					>
+						<text fg={currentTheme.colors.textMuted} wrapMode="word">
+							{lines.join("\n")}
+						</text>
+					</box>
+				))}
+			</box>
+		);
+	};
 	if (activeRequest?.presentation === "editor") {
 		return (
 			<>
+				{renderWidgets("aboveEditor")}
 				<box flexShrink={0} visible={isPresentationHidden} width="100%">
 					{children}
 				</box>
@@ -869,6 +957,7 @@ export function PluginUICustomPresentation({
 						{getCustomUIFooterHint(activeRequest.presentation)}
 					</text>
 				</box>
+				{renderWidgets("belowEditor")}
 			</>
 		);
 	}
@@ -892,13 +981,19 @@ export function PluginUICustomPresentation({
 				);
 	return (
 		<>
+			{renderWidgets("aboveEditor")}
 			<box flexShrink={0} width="100%">
 				{children}
 			</box>
 			{portal}
+			{renderWidgets("belowEditor")}
 		</>
 	);
 }
+
+const successfulContribution: PluginUIContributionResult = Object.freeze({
+	success: true,
+});
 
 const unsupportedThemeChange = (error: string): PluginThemeChangeResult => ({
 	error,
@@ -953,7 +1048,9 @@ const isValidTheme = (candidate: unknown): candidate is Theme => {
 };
 
 const createPluginUIHost = ({
+	contributions,
 	customUI,
+	onUpdate,
 	dialog: getDialog,
 	keyboardLayer: getKeyboardLayer,
 	theme: getThemeContext,
@@ -975,6 +1072,13 @@ const createPluginUIHost = ({
 			}
 			for (const unsubscribe of [...terminalInputSubscriptions]) {
 				unsubscribe();
+			}
+			const title = contributions.getTitle();
+			contributions.close();
+			if (title !== null) {
+				createPluginUIUpdateControls(title.pluginId, (update) =>
+					onUpdate?.(update)
+				).setTitle(undefined);
 			}
 		},
 		registerShortcut(owner, shortcut, handler) {
@@ -998,12 +1102,36 @@ const createPluginUIHost = ({
 			shortcutSubscriptions.add(unsubscribe);
 			return unsubscribe;
 		},
+		clearPlugin(pluginId) {
+			const title = contributions.getTitle();
+			contributions.clearPlugin(pluginId);
+			if (title?.pluginId === pluginId) {
+				createPluginUIUpdateControls(pluginId, (update) =>
+					onUpdate?.(update)
+				).setTitle(undefined);
+			}
+		},
+		getChrome: contributions.getChromeSnapshot,
+		getContributions: contributions.getSnapshot,
+		getTitle: contributions.getTitle,
+		setToolsExpanded(sessionId, expanded) {
+			if (!hostClosed) {
+				contributions.setToolsExpanded(sessionId, "\0host", expanded);
+			}
+		},
 		getCustomUI: customUI.get,
+		subscribeChrome: contributions.subscribeChrome,
+		subscribeTitle: contributions.subscribeTitle,
+		subscribeContributions: contributions.subscribe,
 		subscribeCustomUI: customUI.subscribe,
 		create(owner, beginPrompt, invocation) {
 			const activeRequests = new Set<() => void>();
 			const ownerInputSubscriptions = new Set<() => void>();
 			let closed = false;
+			const updateControls = createPluginUIUpdateControls(
+				owner.pluginId,
+				(update) => onUpdate?.(update)
+			);
 
 			const request = <Value,>(
 				kind: PluginUIPromptKind,
@@ -1292,6 +1420,97 @@ const createPluginUIHost = ({
 							})
 					),
 				custom: (factory, options) => requestCustom(factory, options),
+				setStatus: (key, value) => {
+					if (closed || hostClosed || owner.sessionId === undefined) {
+						return;
+					}
+					contributions.setStatus(owner.sessionId, owner.pluginId, key, value);
+					updateControls.setStatus(key, value);
+				},
+				setWidget: (key, lines, options) => {
+					if (closed || hostClosed || owner.sessionId === undefined) {
+						return;
+					}
+					const placement = options?.placement ?? "aboveEditor";
+					contributions.setWidget(
+						owner.sessionId,
+						owner.pluginId,
+						key,
+						lines,
+						placement
+					);
+					updateControls.setWidget(key, lines, { placement });
+				},
+				setHeader: (component) => {
+					if (closed || hostClosed) {
+						return successfulContribution;
+					}
+					return contributions.setHeader(owner.pluginId, component);
+				},
+				setFooter: (component) => {
+					if (closed || hostClosed) {
+						return successfulContribution;
+					}
+					return contributions.setFooter(owner.pluginId, component);
+				},
+				setTitle: (title) => {
+					if (closed || hostClosed) {
+						return;
+					}
+					if (contributions.setTitle(owner.pluginId, title)) {
+						updateControls.setTitle(title);
+					}
+				},
+				setWorkingMessage: (message) => {
+					if (!(closed || hostClosed) && owner.sessionId !== undefined) {
+						contributions.setWorkingMessage(
+							owner.sessionId,
+							owner.pluginId,
+							message
+						);
+					}
+				},
+				setWorkingVisible: (visible) => {
+					if (!(closed || hostClosed) && owner.sessionId !== undefined) {
+						contributions.setWorkingVisible(
+							owner.sessionId,
+							owner.pluginId,
+							visible
+						);
+					}
+				},
+				setWorkingIndicator: (indicator) => {
+					if (!(closed || hostClosed) && owner.sessionId !== undefined) {
+						contributions.setWorkingIndicator(
+							owner.sessionId,
+							owner.pluginId,
+							indicator
+						);
+					}
+				},
+				setHiddenThinkingLabel: (label) => {
+					if (!(closed || hostClosed) && owner.sessionId !== undefined) {
+						contributions.setHiddenThinkingLabel(
+							owner.sessionId,
+							owner.pluginId,
+							label
+						);
+					}
+				},
+				getToolsExpanded: () =>
+					owner.sessionId === undefined
+						? false
+						: (contributions.getSnapshot(owner.sessionId).toolsExpanded ??
+							false),
+				setToolsExpanded: (expanded) => {
+					if (!(closed || hostClosed) && owner.sessionId !== undefined) {
+						contributions.setToolsExpanded(
+							owner.sessionId,
+							owner.pluginId,
+							expanded
+						);
+					}
+				},
 				onTerminalInput: (handler) => {
 					if (closed || hostClosed) {
 						return () => undefined;
@@ -1367,6 +1586,9 @@ const createPluginUIHost = ({
 					for (const unsubscribe of [...ownerInputSubscriptions]) {
 						unsubscribe();
 					}
+					if (owner.sessionId !== undefined) {
+						contributions.clearView(owner.sessionId, owner.pluginId);
+					}
 				},
 				ui,
 			});
@@ -1376,14 +1598,136 @@ const createPluginUIHost = ({
 
 const PluginUIHostContext = createContext<PluginUIHost | null>(null);
 
+export function usePluginUIChrome(): PluginUIChromeSnapshot {
+	const host = useOptionalPluginUIHost();
+	const subscribe = useCallback(
+		(listener: () => void) =>
+			host?.subscribeChrome(listener) ?? (() => undefined),
+		[host]
+	);
+	const getSnapshot = useCallback(
+		() => host?.getChrome() ?? EMPTY_PLUGIN_UI_CHROME,
+		[host]
+	);
+	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export function usePluginUIContributions(
+	sessionId: string
+): PluginUIViewContributions {
+	const host = useOptionalPluginUIHost();
+	const subscribe = useCallback(
+		(listener: () => void) =>
+			host?.subscribeContributions(sessionId, listener) ?? (() => undefined),
+		[host, sessionId]
+	);
+	const getSnapshot = useCallback(
+		() => host?.getContributions(sessionId) ?? EMPTY_PLUGIN_UI_VIEW,
+		[host, sessionId]
+	);
+	return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export function PluginUIContributionStatus({
+	sessionId,
+}: Readonly<{ sessionId: string }>) {
+	const contributions = usePluginUIContributions(sessionId);
+	const { colors } = useTheme();
+	if (contributions.statuses.length === 0) {
+		return null;
+	}
+	return (
+		<box flexDirection="column" paddingX={1} width="100%">
+			{contributions.statuses.map(({ key, pluginId, value }) => (
+				<text
+					fg={colors.textMuted}
+					key={`${pluginId}:${key}`}
+					width="100%"
+					wrapMode="word"
+				>
+					{value}
+				</text>
+			))}
+		</box>
+	);
+}
+
+export function PluginUIHeader({
+	children,
+}: Readonly<{ children?: ReactNode }>) {
+	const chrome = usePluginUIChrome();
+	const { currentTheme } = useTheme();
+	const { height, width } = useTerminalDimensions();
+	if (chrome.header === null) {
+		return children ?? null;
+	}
+	const context: PluginUIChromeContext = Object.freeze({
+		height,
+		theme: currentTheme,
+		width,
+	});
+	return (
+		<PluginUIChromeErrorBoundary
+			fallback={children ?? null}
+			key={chrome.header.revision}
+			pluginId={chrome.header.pluginId}
+			surface="header"
+		>
+			{createElement(chrome.header.component, context)}
+		</PluginUIChromeErrorBoundary>
+	);
+}
+
+export function PluginUIFooter({
+	branch,
+	children,
+	sessionId,
+}: Readonly<{
+	branch?: string;
+	children?: ReactNode;
+	sessionId: string;
+}>) {
+	const chrome = usePluginUIChrome();
+	const contributions = usePluginUIContributions(sessionId);
+	const { currentTheme } = useTheme();
+	const { height, width } = useTerminalDimensions();
+	if (chrome.footer === null) {
+		return children ?? null;
+	}
+	const context: PluginUIFooterContext = Object.freeze({
+		height,
+		statuses: contributions.statuses,
+		theme: currentTheme,
+		width,
+		...omitUndefined({ branch }),
+	});
+	return (
+		<PluginUIChromeErrorBoundary
+			fallback={children ?? null}
+			key={chrome.footer.revision}
+			pluginId={chrome.footer.pluginId}
+			surface="footer"
+		>
+			{createElement(chrome.footer.component, context)}
+		</PluginUIChromeErrorBoundary>
+	);
+}
+
 export function PluginUIHostProvider({
 	children,
-}: Readonly<{ children: ReactNode }>) {
+	onUpdate,
+}: Readonly<{
+	children: ReactNode;
+	onUpdate?: (update: PluginUIUpdate) => void;
+}>) {
 	const dialog = useDialog();
 	const keyboardLayer = useKeyboardLayer();
 	const theme = useTheme();
 	const toast = useToast();
+	const renderer = useRenderer();
 	const customUI = useMemo(createPluginUICustomStore, []);
+	const contributions = useMemo(createPluginUIContributionStore, []);
+	const onUpdateRef = useRef(onUpdate);
 	const dialogRef = useRef(dialog);
 	const keyboardLayerRef = useRef(keyboardLayer);
 	const themeRef = useRef(theme);
@@ -1391,17 +1735,39 @@ export function PluginUIHostProvider({
 	dialogRef.current = dialog;
 	keyboardLayerRef.current = keyboardLayer;
 	themeRef.current = theme;
+	onUpdateRef.current = onUpdate;
 	toastRef.current = toast;
 	const host = useMemo(
 		() =>
 			createPluginUIHost({
+				contributions,
 				customUI,
+				onUpdate: (update) => onUpdateRef.current?.(update),
 				dialog: () => dialogRef.current,
 				keyboardLayer: () => keyboardLayerRef.current,
 				theme: () => themeRef.current,
 				toast: () => toastRef.current,
 			}),
-		[customUI]
+		[contributions, customUI]
+	);
+	const subscribeTitle = useCallback(
+		(listener: () => void) => host.subscribeTitle(listener),
+		[host]
+	);
+	const getTitle = useCallback(() => host.getTitle(), [host]);
+	const title = useSyncExternalStore(subscribeTitle, getTitle, getTitle);
+	useEffect(() => {
+		if (renderer.isRunning) {
+			renderer.setTerminalTitle(title?.value ?? "");
+		}
+	}, [renderer, title]);
+	useEffect(
+		() => () => {
+			if (renderer.isRunning) {
+				renderer.setTerminalTitle("");
+			}
+		},
+		[renderer]
 	);
 	useEffect(() => () => host.close(), [host]);
 	return (

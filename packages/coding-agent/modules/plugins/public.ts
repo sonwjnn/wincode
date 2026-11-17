@@ -252,13 +252,78 @@ export type PluginThemeChangeResult =
 	| Readonly<{ success: true }>
 	| Readonly<{ success: false; error: string }>;
 
+export type PluginUIContributionSurface =
+	| "header"
+	| "footer"
+	| "editor"
+	| "entry"
+	| "message";
 export type PluginUIContributionResult =
 	| Readonly<{ success: true }>
 	| Readonly<{
-			code: "plugin_ui_contribution_conflict";
 			success: false;
-			surface: "entry" | "message";
+			code: "plugin_ui_contribution_conflict";
+			surface: PluginUIContributionSurface;
 	  }>;
+
+export type PluginUIWidgetPlacement = "aboveEditor" | "belowEditor";
+export type PluginUIWorkingIndicator = Readonly<{
+	frames: readonly string[];
+	intervalMs?: number;
+}>;
+export type PluginUIWidgetOptions = Readonly<{
+	placement?: PluginUIWidgetPlacement;
+}>;
+
+export type PluginUIStatusContribution = Readonly<{
+	key: string;
+	pluginId: string;
+	value: string;
+}>;
+
+export type PluginUIWidgetContribution = Readonly<{
+	key: string;
+	lines: readonly string[];
+	placement: PluginUIWidgetPlacement;
+	pluginId: string;
+}>;
+
+/** Data-only status, widget, and title payloads for RPC UI update mapping. */
+export type PluginUIUpdate =
+	| Readonly<{
+			type: "status";
+			pluginId: string;
+			key: string;
+			value: string | null;
+	  }>
+	| Readonly<{
+			type: "widget";
+			pluginId: string;
+			key: string;
+			value: readonly string[] | null;
+			placement: PluginUIWidgetPlacement;
+	  }>
+	| Readonly<{
+			type: "title";
+			pluginId: string;
+			value: string | null;
+	  }>;
+
+export type PluginUIChromeContext = Readonly<{
+	theme: Theme;
+	width: number;
+	height: number;
+}>;
+
+export type PluginUIHeaderComponent = ComponentType<PluginUIChromeContext>;
+
+export type PluginUIFooterContext = PluginUIChromeContext &
+	Readonly<{
+		branch?: string;
+		statuses: readonly PluginUIStatusContribution[];
+	}>;
+
+export type PluginUIFooterComponent = ComponentType<PluginUIFooterContext>;
 
 export type PluginUIDimensions = Readonly<{ height: number; width: number }>;
 export type PluginMessageRole = "assistant" | "system" | "user";
@@ -316,6 +381,34 @@ export type PluginUI = Readonly<{
 		factory: PluginUICustomFactory<Value>,
 		options?: PluginUICustomOptions
 	) => Promise<Value | undefined>;
+	/** Sets or clears one Plugin-owned status value in the Session footer. */
+	setStatus: (key: string, value: string | undefined) => void;
+	/** Sets or clears one Plugin-owned widget above or below the composer. */
+	setWidget: (
+		key: string,
+		lines: readonly string[] | undefined,
+		options?: PluginUIWidgetOptions
+	) => void;
+	/** Registers or clears the Plugin-owned React header replacement. */
+	setHeader: (
+		component: PluginUIHeaderComponent | undefined
+	) => PluginUIContributionResult;
+	/** Registers or clears the Plugin-owned React footer replacement. */
+	setFooter: (
+		component: PluginUIFooterComponent | undefined
+	) => PluginUIContributionResult;
+	/** Overrides or restores the terminal title. */
+	setTitle: (title?: string) => void;
+	/** Overrides the built-in working text; undefined restores the default. */
+	setWorkingMessage: (message?: string) => void;
+	/** Shows or hides the built-in working indicator row. */
+	setWorkingVisible: (visible: boolean) => void;
+	/** Overrides the working indicator; undefined restores the default spinner. */
+	setWorkingIndicator: (indicator?: PluginUIWorkingIndicator) => void;
+	/** Overrides the label shown instead of hidden reasoning content. */
+	setHiddenThinkingLabel: (label?: string) => void;
+	getToolsExpanded: () => boolean;
+	setToolsExpanded: (expanded: boolean) => void;
 	/** Observes raw terminal sequences in Interactive Mode; return consume to stop host parsing. */
 	onTerminalInput: (handler: PluginTerminalInputHandler) => () => void;
 }>;

@@ -16,6 +16,7 @@ import {
 	createElement,
 	memo,
 	type ReactNode,
+	useCallback,
 	useMemo,
 	useRef,
 	useState,
@@ -31,6 +32,10 @@ import type {
 	PluginRuntime,
 	PluginToolPresentationDescriptor,
 } from "@/modules/plugins/runtime";
+import {
+	useOptionalPluginUIHost,
+	usePluginUIContributions,
+} from "@/modules/plugins/ui/plugin-ui-host";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useHideThinking } from "@/modules/settings/hide-thinking-settings";
 import {
@@ -407,9 +412,13 @@ const ToolFailureMessage = ({
 
 function HostToolMessagePart({
 	agent,
+	expanded,
+	onExpandedChange,
 	part,
 }: {
 	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
 	part: ToolPart;
 }) {
 	const { colors } = useTheme();
@@ -444,7 +453,13 @@ function HostToolMessagePart({
 	return (
 		<>
 			{toolLine}
-			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
+			{isShellOutput ? (
+				<ShellOutputBlock
+					expanded={expanded}
+					onExpandedChange={onExpandedChange}
+					part={part}
+				/>
+			) : null}
 			{isEditPreview && part.type === "tool-edit" ? (
 				<EditDiffBlock agent={agent} part={part} />
 			) : null}
@@ -529,17 +544,29 @@ const pluginToolResultFor = (
 
 function PluginToolPresentation({
 	agent,
+	expanded: expandedOverride,
+	onExpandedChange,
 	part,
 	tool,
 }: {
 	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
 	part: Extract<ToolPart, { type: "dynamic-tool" }>;
 	tool: PluginToolPresentationDescriptor;
 }) {
 	const { colors, currentTheme } = useTheme();
 	const dimensions = useTerminalDimensions();
-	const [expanded, setExpanded] = useState(false);
-	const onToggleExpanded = () => setExpanded((value) => !value);
+	const [localExpanded, setLocalExpanded] = useState(false);
+	const expanded = expandedOverride ?? localExpanded;
+	const onToggleExpanded = useCallback(() => {
+		const next = !expanded;
+		if (onExpandedChange === undefined) {
+			setLocalExpanded(next);
+		} else {
+			onExpandedChange(next);
+		}
+	}, [expanded, onExpandedChange]);
 	const call = useMemo(() => pluginToolCallFor(part), [part]);
 	const result = useMemo(() => pluginToolResultFor(part), [part]);
 	useToggleShortcut(
@@ -598,29 +625,50 @@ function PluginToolPresentation({
 
 function PluginToolMessagePart({
 	agent,
+	expanded,
+	onExpandedChange,
 	part,
 	tool,
 }: {
 	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
 	part: Extract<ToolPart, { type: "dynamic-tool" }>;
 	tool: PluginToolPresentationDescriptor;
 }) {
 	return (
 		<PluginToolRendererErrorBoundary
-			fallback={<HostToolMessagePart agent={agent} part={part} />}
+			fallback={
+				<HostToolMessagePart
+					agent={agent}
+					expanded={expanded}
+					onExpandedChange={onExpandedChange}
+					part={part}
+				/>
+			}
 			tool={tool}
 		>
-			<PluginToolPresentation agent={agent} part={part} tool={tool} />
+			<PluginToolPresentation
+				agent={agent}
+				expanded={expanded}
+				onExpandedChange={onExpandedChange}
+				part={part}
+				tool={tool}
+			/>
 		</PluginToolRendererErrorBoundary>
 	);
 }
 
 function ToolMessagePart({
 	agent,
+	expanded,
+	onExpandedChange,
 	part,
 	pluginTool,
 }: {
 	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
 	part: ToolPart;
 	pluginTool?: PluginToolPresentationDescriptor;
 }) {
@@ -631,13 +679,54 @@ function ToolMessagePart({
 			pluginTool.renderResult !== undefined)
 	) {
 		return (
-			<PluginToolMessagePart agent={agent} part={part} tool={pluginTool} />
+			<PluginToolMessagePart
+				agent={agent}
+				expanded={expanded}
+				onExpandedChange={onExpandedChange}
+				part={part}
+				tool={pluginTool}
+			/>
 		);
 	}
-	return <HostToolMessagePart agent={agent} part={part} />;
+	return (
+		<HostToolMessagePart
+			agent={agent}
+			expanded={expanded}
+			onExpandedChange={onExpandedChange}
+			part={part}
+		/>
+	);
 }
 
 const MemoizedToolMessagePart = memo(ToolMessagePart);
+
+const renderReasoningGroup = (
+	group: PartGroup,
+	hideThinking: boolean,
+	hiddenThinkingLabel: string | undefined,
+	streaming: boolean,
+	colors: ThemeColors
+): ReactNode => {
+	if (hideThinking) {
+		return (
+			<box marginBottom={1} width="100%">
+				<box paddingX={1} width="100%">
+					<text fg={colors.thinkingText}>
+						<em>{hiddenThinkingLabel ?? "Thinking..."}</em>
+					</text>
+				</box>
+			</box>
+		);
+	}
+	return (
+		<box marginBottom={1} width="100%">
+			<ReasoningMessagePart
+				streaming={streaming}
+				text={getReasoningText(group.parts)}
+			/>
+		</box>
+	);
+};
 
 /**
  * The themed session block for a completed `shell` call: the bounded
@@ -649,11 +738,20 @@ const MemoizedToolMessagePart = memo(ToolMessagePart);
  * output and the measured width, so streamed updates of neighboring parts
  * never re-sanitize or re-lay-out settled results.
  */
-function ShellOutputBlock({ part }: { part: ToolPart }) {
+function ShellOutputBlock({
+	expanded: expandedOverride,
+	onExpandedChange,
+	part,
+}: {
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
 	const [contentWidth, setContentWidth] = useState(0);
-	const [expanded, setExpanded] = useState(false);
+	const [localExpanded, setLocalExpanded] = useState(false);
+	const expanded = expandedOverride ?? localExpanded;
 	const output = getToolOutputRecord(part);
 	const rawText = formatUnknown(output.output);
 	const exitCode = isNumber(output.exitCode) ? output.exitCode : null;
@@ -678,7 +776,15 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	);
 	const indicator = resolveOverflowIndicator(preview);
 	const canExpand = preview.hasOverflow;
-	useToggleShortcut("ctrl+o", () => setExpanded((value) => !value), canExpand);
+	const toggleExpanded = useCallback(() => {
+		const next = !expanded;
+		if (onExpandedChange === undefined) {
+			setLocalExpanded(next);
+		} else {
+			onExpandedChange(next);
+		}
+	}, [expanded, onExpandedChange]);
+	useToggleShortcut("ctrl+o", toggleExpanded, canExpand);
 
 	// The measured content width drives preview wrapping and the header bound.
 	// Reflowing on real size changes (terminal resize, sidebar toggle) keeps the
@@ -853,6 +959,50 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 	);
 }
 
+type BotMessagePartRenderOptions = Readonly<{
+	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	pluginToolsByName: ReadonlyMap<string, PluginToolPresentationDescriptor>;
+	streaming: boolean;
+}>;
+
+const renderBotMessagePart = (
+	part: MessagePart,
+	index: number,
+	options: BotMessagePartRenderOptions
+): ReactNode => {
+	if (part.type === "reasoning") {
+		return null;
+	}
+	if (isToolPart(part)) {
+		return (
+			<MemoizedToolMessagePart
+				agent={options.agent}
+				expanded={options.expanded}
+				key={getToolKey(part, index)}
+				onExpandedChange={options.onExpandedChange}
+				part={part}
+				pluginTool={
+					part.type === "dynamic-tool"
+						? options.pluginToolsByName.get(part.toolName)
+						: undefined
+				}
+			/>
+		);
+	}
+	if (part.type === "text") {
+		return (
+			<MarkdownMessagePart
+				key={getContentPartKey(part, index)}
+				streaming={options.streaming}
+				text={part.text}
+			/>
+		);
+	}
+	return null;
+};
+
 export function BotMessageContent({
 	agent = buildAgent.id,
 	parts,
@@ -879,6 +1029,31 @@ export function BotMessageContent({
 			}
 		}
 	}
+	const pluginUIHost = useOptionalPluginUIHost();
+	const contributions = usePluginUIContributions(sessionId ?? "");
+	const hasHostedToolExpansion =
+		pluginUIHost !== null && sessionId !== undefined;
+	const expandedTools = contributions.toolsExpanded;
+	const onExpandedToolsChange = useCallback(
+		(expanded: boolean) => {
+			if (sessionId !== undefined) {
+				pluginUIHost?.setToolsExpanded(sessionId, expanded);
+			}
+		},
+		[pluginUIHost, sessionId]
+	);
+	const shellOutputExpanded = hasHostedToolExpansion
+		? expandedTools
+		: undefined;
+	const partRenderOptions: BotMessagePartRenderOptions = {
+		agent,
+		expanded: shellOutputExpanded,
+		onExpandedChange: hasHostedToolExpansion
+			? onExpandedToolsChange
+			: undefined,
+		pluginToolsByName,
+		streaming,
+	};
 	const groups = groupConsecutiveParts(parts).filter(
 		(group) => group.type !== "step-start"
 	);
@@ -897,55 +1072,17 @@ export function BotMessageContent({
 					}
 					width="100%"
 				>
-					{group.type === "reasoning" ? (
-						<box marginBottom={1} width="100%">
-							{hideThinking ? (
-								<box paddingX={1} width="100%">
-									<text fg={colors.thinkingText}>
-										<em>Thinking...</em>
-									</text>
-								</box>
-							) : (
-								<ReasoningMessagePart
-									streaming={streaming}
-									text={getReasoningText(group.parts)}
-								/>
+					{group.type === "reasoning"
+						? renderReasoningGroup(
+								group,
+								hideThinking,
+								contributions.hiddenThinkingLabel,
+								streaming,
+								colors
+							)
+						: group.parts.map((part, index) =>
+								renderBotMessagePart(part, index, partRenderOptions)
 							)}
-						</box>
-					) : (
-						group.parts.map((part, index) => {
-							if (part.type === "reasoning") {
-								return null;
-							}
-
-							if (isToolPart(part)) {
-								return (
-									<MemoizedToolMessagePart
-										agent={agent}
-										key={getToolKey(part, index)}
-										part={part}
-										pluginTool={
-											part.type === "dynamic-tool"
-												? pluginToolsByName.get(part.toolName)
-												: undefined
-										}
-									/>
-								);
-							}
-
-							if (part.type === "text") {
-								return (
-									<MarkdownMessagePart
-										key={getContentPartKey(part, index)}
-										streaming={streaming}
-										text={part.text}
-									/>
-								);
-							}
-
-							return null;
-						})
-					)}
 				</box>
 			))}
 		</box>
