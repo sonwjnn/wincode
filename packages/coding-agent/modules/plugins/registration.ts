@@ -214,29 +214,34 @@ export const validatePluginProvider = (
 
 /** Validates one Plugin Command before it can replace an owner's registration. */
 export const validatePluginCommand = (candidate: unknown): PluginCommand => {
+	if (!isPlainObject(candidate)) {
+		throw new Error(
+			"Plugin Command registrations require a short name and description."
+		);
+	}
+	const { name, description, handler, statusPanelId, getArgumentCompletions } =
+		candidate as unknown as PluginCommandRegistration;
 	if (
-		!isPlainObject(candidate) ||
-		typeof candidate.name !== "string" ||
-		!pluginCommandNamePattern.test(candidate.name) ||
-		!isNonEmptyString(candidate.description)
+		typeof name !== "string" ||
+		!pluginCommandNamePattern.test(name) ||
+		!isNonEmptyString(description)
 	) {
 		throw new Error(
 			"Plugin Command registrations require a short name and description."
 		);
 	}
-	const command = candidate as unknown as PluginCommandRegistration;
-	const hasHandler = command.handler !== undefined;
-	const validHandler = typeof command.handler === "function";
-	const hasStatusPanel = command.statusPanelId !== undefined;
+	const hasHandler = handler !== undefined;
+	const validHandler = typeof handler === "function";
+	const hasStatusPanel = statusPanelId !== undefined;
 	if (
-		command.getArgumentCompletions !== undefined &&
-		typeof command.getArgumentCompletions !== "function"
+		getArgumentCompletions !== undefined &&
+		typeof getArgumentCompletions !== "function"
 	) {
 		throw new Error("Plugin Command argument completions must be a function.");
 	}
 	const validStatusPanel =
-		typeof command.statusPanelId === "string" &&
-		pluginStatusPanelIdPattern.test(command.statusPanelId);
+		typeof statusPanelId === "string" &&
+		pluginStatusPanelIdPattern.test(statusPanelId);
 	if (
 		(hasHandler && !validHandler) ||
 		(hasStatusPanel && !validStatusPanel) ||
@@ -247,12 +252,10 @@ export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 		);
 	}
 	return Object.freeze({
-		description: command.description,
-		...omitUndefined({
-			getArgumentCompletions: command.getArgumentCompletions,
-		}),
-		...omitUndefined({ handler: command.handler }),
-		name: command.name,
-		...omitUndefined({ statusPanelId: command.statusPanelId }),
+		description,
+		...omitUndefined({ getArgumentCompletions }),
+		...omitUndefined({ handler }),
+		name,
+		...omitUndefined({ statusPanelId }),
 	});
 };
