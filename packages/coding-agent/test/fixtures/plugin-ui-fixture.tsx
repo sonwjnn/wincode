@@ -2,8 +2,10 @@ import type { InputRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type {
 	PluginFactory,
+	PluginUICustomBounds,
 	PluginUICustomComponent,
 	PluginUICustomContext,
+	PluginUICustomPresentationMode,
 } from "@wincode/coding-agent";
 import { useRef } from "react";
 import { z } from "zod";
@@ -20,6 +22,15 @@ const createCustomUIFixture = () => {
 			| Readonly<{ height: number; width: number }>
 			| undefined,
 		lastContext: undefined as PluginUICustomContext<string> | undefined,
+		lastFactoryBounds: undefined as PluginUICustomBounds | undefined,
+		lastPresentationState: undefined as
+			| Readonly<{
+					bounds: PluginUICustomBounds;
+					focused: boolean;
+					hidden: boolean;
+					presentation: PluginUICustomPresentationMode;
+			  }>
+			| undefined,
 		resolveAsyncFactory: customFactoryResult.resolve,
 		startAsyncFactory: customFactoryStarted.resolve,
 		throwComponent: false,
@@ -29,15 +40,30 @@ const createCustomUIFixture = () => {
 		environment,
 		height,
 		keybindings,
+		presentation,
+		presentationHandle,
 		theme,
 		width,
 	}) => {
 		state.lastComponentDimensions = { height, width };
+		state.lastPresentationState = {
+			bounds: presentationHandle.getBounds(),
+			focused: presentationHandle.isFocused(),
+			hidden: presentationHandle.isHidden(),
+			presentation,
+		};
 		if (state.throwComponent) {
 			throw new Error("Fixture custom component failed.");
 		}
 		const input = useRef<InputRenderable>(null);
 		useKeyboard((key) => {
+			if (key.name === "escape" || (key.ctrl && key.name === "c")) {
+				key.preventDefault();
+				return;
+			}
+			if (!presentationHandle.isFocused()) {
+				return;
+			}
 			if (key.name === "enter" || key.name === "return") {
 				key.preventDefault();
 				done(input.current?.value ?? "custom complete");
@@ -50,7 +76,7 @@ const createCustomUIFixture = () => {
 					{`${theme.name}:${width}x${height}:${keybindings.composer.length}:${environment.executionMode}`}
 				</text>
 				<input
-					focused
+					focused={presentationHandle.isFocused()}
 					onContentChange={() => undefined}
 					placeholder="Custom response"
 					ref={input}
@@ -63,6 +89,7 @@ const createCustomUIFixture = () => {
 	): Promise<PluginUICustomComponent<string>> => {
 		state.factoryCalls += 1;
 		state.lastContext = context;
+		state.lastFactoryBounds = context.presentationHandle.getBounds();
 		return component;
 	};
 	return { component, factory, state };

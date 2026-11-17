@@ -144,6 +144,34 @@ export type PluginUICustomKeybindings = Readonly<{
 	reclaim: "ctrl+c";
 }>;
 
+/** The host-owned placement used for a custom Plugin UI interaction. */
+export type PluginUICustomPresentationMode =
+	| "editor"
+	| "overlay"
+	| "full-screen";
+
+export type PluginUICustomBounds = Readonly<{
+	left: number;
+	top: number;
+	width: number;
+	height: number;
+}>;
+
+export type PluginUICustomPresentationHandle = Readonly<{
+	/** Mark the custom UI focused without changing its visibility or result. */
+	focus: () => void;
+	/** Mark the custom UI unfocused without changing its visibility or result. */
+	unfocus: () => void;
+	/** Hide or show the presentation without settling the interaction. */
+	setHidden: (hidden: boolean) => void;
+	/** Return whether the presentation is hidden. */
+	isHidden: () => boolean;
+	/** Return whether the presentation is focused. */
+	isFocused: () => boolean;
+	/** Return the current host-owned bounds in terminal cells. */
+	getBounds: () => PluginUICustomBounds;
+}>;
+
 export type PluginUICustomContext<Value> = Readonly<{
 	done: (value: Value) => void;
 	environment: Readonly<{
@@ -153,6 +181,10 @@ export type PluginUICustomContext<Value> = Readonly<{
 	/** Available presentation height, updated when the terminal is resized. */
 	height: number;
 	keybindings: PluginUICustomKeybindings;
+	/** Selected custom UI placement. */
+	presentation: PluginUICustomPresentationMode;
+	/** Host-owned focus, visibility, and bounds controls; these do not settle UI. */
+	presentationHandle: PluginUICustomPresentationHandle;
 	signal: AbortSignal;
 	theme: Theme;
 	/** Available presentation width, updated when the terminal is resized. */
@@ -175,7 +207,7 @@ export type PluginUICustomOptions = Readonly<{
 	 * `overlay` uses a centered bounded layer, and `full-screen` covers the app.
 	 * All modes use the host's renderer and root. Defaults to `editor`.
 	 */
-	presentation?: "editor" | "overlay" | "full-screen";
+	presentation?: PluginUICustomPresentationMode;
 	title?: string;
 }>;
 

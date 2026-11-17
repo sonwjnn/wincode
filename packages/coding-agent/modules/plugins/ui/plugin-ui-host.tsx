@@ -1,4 +1,5 @@
 import type {
+	BoxRenderable,
 	InputRenderable,
 	SelectRenderable,
 	TextareaRenderable,
@@ -47,10 +48,13 @@ import type {
 	PluginNotificationLevel,
 	PluginThemeChangeResult,
 	PluginUI,
+	PluginUICustomBounds,
 	PluginUICustomComponent,
 	PluginUICustomContext,
 	PluginUICustomFactory,
 	PluginUICustomOptions,
+	PluginUICustomPresentationHandle,
+	PluginUICustomPresentationMode,
 	PluginUIDialogOptions,
 	PluginUIPromptKind,
 } from "../public";
@@ -67,6 +71,13 @@ type PluginUIHandle = Readonly<{
 	ui: PluginUI;
 }>;
 
+type PluginUICustomPresentationState = Readonly<{
+	getRevision: () => number;
+	handle: PluginUICustomPresentationHandle;
+	setBounds: (bounds: PluginUICustomBounds) => void;
+	subscribe: (listener: () => void) => () => void;
+}>;
+
 type PluginUICustomHostRequest = Readonly<{
 	dismiss: () => void;
 	done: (value: unknown) => void;
@@ -80,7 +91,8 @@ type PluginUICustomHostRequest = Readonly<{
 	sessionId: string;
 	signal: AbortSignal;
 	title: string;
-	presentation: NonNullable<PluginUICustomOptions["presentation"]>;
+	presentation: PluginUICustomPresentationMode;
+	presentationHandle: PluginUICustomPresentationState;
 }>;
 
 type PluginUICustomStore = Readonly<{
@@ -116,7 +128,75 @@ const createPluginUICustomStore = (): PluginUICustomStore => {
 	});
 };
 
+const createPluginUICustomPresentationState =
+	(): PluginUICustomPresentationState => {
+		let revision = 0;
+		let focused = true;
+		let hidden = false;
+		let bounds: PluginUICustomBounds = Object.freeze({
+			left: 0,
+			top: 0,
+			width: 0,
+			height: 0,
+		});
+		const listeners = new Set<() => void>();
+		const notify = (): void => {
+			revision += 1;
+			for (const listener of [...listeners]) {
+				listener();
+			}
+		};
+		const handle: PluginUICustomPresentationHandle = Object.freeze({
+			focus() {
+				if (focused) {
+					return;
+				}
+				focused = true;
+				notify();
+			},
+			unfocus() {
+				if (!focused) {
+					return;
+				}
+				focused = false;
+				notify();
+			},
+			setHidden(nextHidden) {
+				if (hidden === nextHidden) {
+					return;
+				}
+				hidden = nextHidden;
+				notify();
+			},
+			isHidden: () => hidden,
+			isFocused: () => focused,
+			getBounds: () => bounds,
+		});
+		return Object.freeze({
+			getRevision: () => revision,
+			handle,
+			setBounds(nextBounds) {
+				if (
+					bounds.left === nextBounds.left &&
+					bounds.top === nextBounds.top &&
+					bounds.width === nextBounds.width &&
+					bounds.height === nextBounds.height
+				) {
+					return;
+				}
+				bounds = Object.freeze({ ...nextBounds });
+				notify();
+			},
+			subscribe(listener) {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+		});
+	};
+
 const EMPTY_PLUGIN_CUSTOM_UI = createPluginUICustomStore();
+const subscribeToNoCustomUI = (_listener: () => void) => () => undefined;
+const getNoCustomUIRevision = () => 0;
 
 export type PluginUIHost = Readonly<{
 	close: () => void;
@@ -423,13 +503,6 @@ const CUSTOM_UI_KEYBINDINGS = Object.freeze({
 	reclaim: "ctrl+c",
 } as const);
 
-type PluginUICustomBounds = Readonly<{
-	height: number;
-	left: number;
-	top: number;
-	width: number;
-}>;
-
 type PluginUICustomPresentationProps = Readonly<{
 	children: ReactNode;
 	pluginRuntime?: PluginRuntime;
@@ -440,6 +513,7 @@ type PluginUICustomPresentationLayerProps = Readonly<{
 	component: PluginUICustomComponent<unknown> | null;
 	context: PluginUICustomContext<unknown>;
 	height: number;
+	isHidden: boolean;
 	request: PluginUICustomHostRequest;
 	theme: Theme;
 	width: number;
@@ -496,9 +570,26 @@ const customUIContext = (
 		}),
 		height: bounds.height,
 		keybindings: CUSTOM_UI_KEYBINDINGS,
+		presentation: request.presentation,
+		presentationHandle: request.presentationHandle.handle,
 		signal: request.signal,
 		theme,
 		width: bounds.width,
+	});
+};
+
+const updateCustomUIPresentationBounds = (
+	presentationHandle: PluginUICustomPresentationState,
+	renderable: BoxRenderable | null
+): void => {
+	if (renderable === null) {
+		return;
+	}
+	presentationHandle.setBounds({
+		left: renderable.screenX,
+		top: renderable.screenY,
+		width: renderable.width,
+		height: renderable.height,
 	});
 };
 
@@ -506,11 +597,17 @@ function PluginUICustomPresentationLayer({
 	component,
 	context,
 	height,
+	isHidden,
 	request,
 	theme,
 	width,
 }: PluginUICustomPresentationLayerProps) {
 	const bounds = getPluginUICustomBounds(request.presentation, width, height);
+	useLayoutEffect(() => {
+		request.presentationHandle.setBounds(
+			getPluginUICustomBounds(request.presentation, width, height)
+		);
+	}, [height, request.presentation, request.presentationHandle, width]);
 	const content =
 		component === null ? (
 			<text fg={theme.colors.textMuted}>Loading custom Plugin UI…</text>
@@ -527,6 +624,7 @@ function PluginUICustomPresentationLayer({
 			onMouseDown={(event) => event.stopPropagation()}
 			position="absolute"
 			top={0}
+			visible={!isHidden}
 			width={width}
 			zIndex={100}
 		>
@@ -565,6 +663,12 @@ function PluginUICustomPresentationLayer({
 	);
 }
 
+const getSessionCustomUIRequest = (
+	request: PluginUICustomHostRequest | null,
+	sessionId: string
+): PluginUICustomHostRequest | null =>
+	request?.sessionId === sessionId ? request : null;
+
 /** Mounts host-mediated custom UI without taking ownership of the renderer. */
 export function PluginUICustomPresentation({
 	children,
@@ -578,7 +682,15 @@ export function PluginUICustomPresentation({
 		host?.getCustomUI ?? EMPTY_PLUGIN_CUSTOM_UI.get,
 		host?.getCustomUI ?? EMPTY_PLUGIN_CUSTOM_UI.get
 	);
-	const activeRequest = request?.sessionId === sessionId ? request : null;
+	const activeRequest = getSessionCustomUIRequest(request, sessionId);
+	useSyncExternalStore(
+		activeRequest?.presentationHandle.subscribe ?? subscribeToNoCustomUI,
+		activeRequest?.presentationHandle.getRevision ?? getNoCustomUIRevision,
+		activeRequest?.presentationHandle.getRevision ?? getNoCustomUIRevision
+	);
+	const isPresentationHidden =
+		activeRequest?.presentationHandle.handle.isHidden() ?? false;
+	const editorBoundsRef = useRef<BoxRenderable>(null);
 	const activeRequestRef = useRef(activeRequest);
 	activeRequestRef.current = activeRequest;
 	const { isTopLayer, pop, push } = useKeyboardLayer();
@@ -637,6 +749,16 @@ export function PluginUICustomPresentation({
 		key.preventDefault();
 		current.dismiss();
 	});
+
+	useLayoutEffect(() => {
+		if (activeRequest?.presentation !== "editor") {
+			return;
+		}
+		updateCustomUIPresentationBounds(
+			activeRequest.presentationHandle,
+			editorBoundsRef.current
+		);
+	}, [activeRequest]);
 
 	useEffect(() => {
 		if (host === null || activeRequest === null) {
@@ -701,10 +823,22 @@ export function PluginUICustomPresentation({
 	if (activeRequest?.presentation === "editor") {
 		return (
 			<>
-				<box flexShrink={0} visible={false} width="100%">
+				<box flexShrink={0} visible={isPresentationHidden} width="100%">
 					{children}
 				</box>
-				<box flexDirection="column" flexShrink={0} width="100%">
+				<box
+					flexDirection="column"
+					flexShrink={0}
+					onSizeChange={() =>
+						updateCustomUIPresentationBounds(
+							activeRequest.presentationHandle,
+							editorBoundsRef.current
+						)
+					}
+					ref={editorBoundsRef}
+					visible={!isPresentationHidden}
+					width="100%"
+				>
 					{customContent?.component === null || customContent === null ? (
 						<text fg={currentTheme.colors.textMuted}>
 							Loading custom Plugin UI…
@@ -733,6 +867,7 @@ export function PluginUICustomPresentation({
 						component={customContent.component}
 						context={customContent.context}
 						height={dimensions.height}
+						isHidden={isPresentationHidden}
 						request={activeRequest}
 						theme={currentTheme}
 						width={dimensions.width}
@@ -917,6 +1052,7 @@ const createPluginUIHost = ({
 				const invitationLayerId = `${requestId}-invitation`;
 				const title = options?.title ?? "Custom Plugin UI";
 				const presentationMode = options?.presentation ?? "editor";
+				const presentationHandle = createPluginUICustomPresentationState();
 				let accepted = invocation === "command";
 				let settled = false;
 				let invitationOpen = false;
@@ -1005,6 +1141,7 @@ const createPluginUIHost = ({
 					signal: controller.signal,
 					title,
 					presentation: presentationMode,
+					presentationHandle,
 				});
 				activeCustomRequest = cancel;
 				activeRequests.add(cancel);

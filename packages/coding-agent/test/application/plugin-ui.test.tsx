@@ -6,8 +6,10 @@ import type { InputRenderable } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type {
+	PluginUICustomBounds,
 	PluginUICustomComponent,
 	PluginUICustomContext,
+	PluginUICustomPresentationMode,
 	SessionSdk,
 	SessionSdkEvent,
 	SessionSdkHandle,
@@ -73,6 +75,15 @@ type CustomUIState = {
 		| Readonly<{ height: number; width: number }>
 		| undefined;
 	lastContext: PluginUICustomContext<string> | undefined;
+	lastFactoryBounds: PluginUICustomBounds | undefined;
+	lastPresentationState:
+		| Readonly<{
+				bounds: PluginUICustomBounds;
+				focused: boolean;
+				hidden: boolean;
+				presentation: PluginUICustomPresentationMode;
+		  }>
+		| undefined;
 	resolveAsyncFactory: (component: PluginUICustomComponent<string>) => void;
 	throwComponent: boolean;
 };
@@ -392,6 +403,16 @@ test("a direct Plugin Command opens custom UI, returns once, and restores its co
 		expect(environment.customUIState.factoryCalls).toBe(
 			initialFactoryCalls + 1
 		);
+		expect(environment.customUIState.lastContext?.presentation).toBe("editor");
+		const editorBounds =
+			environment.customUIState.lastContext?.presentationHandle.getBounds();
+		if (editorBounds === undefined) {
+			throw new Error(
+				"The custom editor did not receive its presentation handle."
+			);
+		}
+		expect(editorBounds.width).toBeGreaterThan(0);
+		expect(editorBounds.height).toBeGreaterThan(0);
 
 		await act(() => environment.setup.mockInput.typeText("local response"));
 		await act(() => environment.setup.mockInput.pressEnter());
@@ -431,6 +452,16 @@ test("an overlay keeps the live application visible and returns its component re
 		expect(frame).toContain("Plugin UI host fixture · update 0");
 		expect(environment.setup.renderer).toBe(renderer);
 		expect(environment.setup.renderer.root).toBe(rendererRoot);
+		expect(environment.customUIState.lastContext?.presentation).toBe("overlay");
+		expect(environment.customUIState.lastFactoryBounds).toEqual({
+			left: 2,
+			top: 2,
+			width: 60,
+			height: 12,
+		});
+		expect(
+			environment.customUIState.lastContext?.presentationHandle.getBounds()
+		).toEqual({ left: 2, top: 2, width: 60, height: 12 });
 		const dimensions = environment.customUIState.lastComponentDimensions;
 		if (dimensions === undefined) {
 			throw new Error("The custom overlay did not render its component.");
@@ -449,6 +480,89 @@ test("an overlay keeps the live application visible and returns its component re
 		expect(environment.setup.captureCharFrame()).toContain(
 			"overlay draft restored"
 		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("custom UI focus and visibility are independent and do not settle the request", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const presentationHandle =
+			environment.customUIState.lastContext?.presentationHandle;
+		if (presentationHandle === undefined) {
+			throw new Error(
+				"The custom overlay did not receive its presentation handle."
+			);
+		}
+		let settled = false;
+		void result.then(() => {
+			settled = true;
+		});
+
+		await act(() => presentationHandle.unfocus());
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(false);
+		expect(presentationHandle.isHidden()).toBe(false);
+		expect(environment.customUIState.lastPresentationState).toMatchObject({
+			focused: false,
+			hidden: false,
+			presentation: "overlay",
+		});
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(settled).toBe(false);
+
+		await act(() => presentationHandle.setHidden(true));
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(false);
+		expect(presentationHandle.isHidden()).toBe(true);
+		expect(environment.customUIState.lastPresentationState).toMatchObject({
+			focused: false,
+			hidden: true,
+		});
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture custom UI"
+		);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		expect(settled).toBe(false);
+
+		await act(() => presentationHandle.focus());
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(true);
+		expect(presentationHandle.isHidden()).toBe(true);
+		expect(environment.customUIState.lastPresentationState).toMatchObject({
+			focused: true,
+			hidden: true,
+		});
+		expect(settled).toBe(false);
+
+		await act(() => presentationHandle.setHidden(false));
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(true);
+		expect(presentationHandle.isHidden()).toBe(false);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		expect(settled).toBe(false);
+
+		await act(() => presentationHandle.unfocus());
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		await act(() => presentationHandle.focus());
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.isFocused()).toBe(true);
+		expect(presentationHandle.isHidden()).toBe(false);
+		expect(settled).toBe(false);
+
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		await act(() => environment.setup.mockInput.typeText("restored focus"));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("restored focus");
 	} finally {
 		await environment.dispose();
 	}
@@ -981,11 +1095,21 @@ test("overlay and full-screen component bounds track terminal resize", async () 
 			await flushTestRenderer(environment.setup, 2);
 			const initialDimensions =
 				environment.customUIState.lastComponentDimensions;
+			const presentationHandle =
+				environment.customUIState.lastContext?.presentationHandle;
+			if (presentationHandle === undefined) {
+				throw new Error(`${command} did not receive its presentation handle.`);
+			}
 			if (initialDimensions === undefined) {
 				throw new Error(`${command} did not render its component.`);
 			}
 			expect(initialDimensions.width).toBeLessThanOrEqual(18);
 			expect(initialDimensions.height).toBeLessThanOrEqual(8);
+			expect(presentationHandle.getBounds()).toEqual(
+				isOverlay
+					? { left: 2, top: 2, width: 14, height: 4 }
+					: { left: 0, top: 0, width: 18, height: 8 }
+			);
 			if (!isOverlay) {
 				expect(initialDimensions).toEqual({ height: 8, width: 18 });
 			}
@@ -1002,6 +1126,11 @@ test("overlay and full-screen component bounds track terminal resize", async () 
 			expect(resizedDimensions.width).toBeGreaterThan(initialDimensions.width);
 			expect(resizedDimensions.height).toBeGreaterThan(
 				initialDimensions.height
+			);
+			expect(presentationHandle.getBounds()).toEqual(
+				isOverlay
+					? { left: 2, top: 2, width: 18, height: 6 }
+					: { left: 0, top: 0, width: 22, height: 10 }
 			);
 
 			await environment.pressEscape();
