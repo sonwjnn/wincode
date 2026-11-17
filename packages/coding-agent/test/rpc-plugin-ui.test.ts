@@ -34,6 +34,45 @@ type RpcFrame = Record<string, unknown>;
 
 const reactRuntimeModulePattern = /(^|\/)react(\/|$)|@opentui\/react/;
 
+type ScheduledRpcUITimer = {
+	callback: () => void;
+	delayMs: number;
+	handle: NodeJS.Timeout;
+	cancelled: boolean;
+};
+
+const withMockedRpcUITimers = async (
+	run: (scheduledTimers: ScheduledRpcUITimer[]) => Promise<void>
+): Promise<void> => {
+	const scheduledTimers: ScheduledRpcUITimer[] = [];
+	const originalSetTimeout = globalThis.setTimeout;
+	const originalClearTimeout = globalThis.clearTimeout;
+	globalThis.setTimeout = ((callback: () => void, delayMs?: number) => {
+		const timer: ScheduledRpcUITimer = {
+			callback,
+			delayMs: delayMs ?? 0,
+			handle: {} as NodeJS.Timeout,
+			cancelled: false,
+		};
+		scheduledTimers.push(timer);
+		return timer.handle;
+	}) as typeof globalThis.setTimeout;
+	globalThis.clearTimeout = ((handle: NodeJS.Timeout) => {
+		const timer = scheduledTimers.find(
+			(scheduled) => scheduled.handle === handle
+		);
+		if (timer !== undefined) {
+			timer.cancelled = true;
+		}
+	}) as typeof globalThis.clearTimeout;
+	try {
+		await run(scheduledTimers);
+	} finally {
+		globalThis.setTimeout = originalSetTimeout;
+		globalThis.clearTimeout = originalClearTimeout;
+	}
+};
+
 const initialize = (
 	capabilities: Record<string, unknown>,
 	cwd: string
@@ -302,6 +341,99 @@ test("RPC UI routes only matching, kind-valid responses to each interaction", as
 	host.close();
 });
 
+test("RPC UI preserves and cancels caller timeouts above the maximum timer delay", () =>
+	withMockedRpcUITimers(async (scheduledTimeouts) => {
+		const cancellations: string[] = [];
+		const requestIds: string[] = [];
+		const channel = createRpcPluginUIChannel({
+			sendCancellation: (id) => cancellations.push(id),
+			sendNotification: () => undefined,
+			sendRequest: (id) => requestIds.push(id),
+		});
+		try {
+			const maximumDelay = 2_147_483_647;
+			const maximumTimeout = channel.transport.request({
+				kind: "confirm",
+				pluginId: "rpc_ui_test",
+				title: "Maximum timeout",
+				timeoutMs: 2_147_483_647,
+			});
+			const maximumRequestId = requestIds[0];
+			if (maximumRequestId === undefined) {
+				throw new Error("RPC UI did not send the maximum-timeout request.");
+			}
+			expect(scheduledTimeouts[0]?.delayMs).toBe(maximumDelay);
+			scheduledTimeouts[0]?.callback();
+			expect(await maximumTimeout).toBe(false);
+			expect(cancellations).toEqual([maximumRequestId]);
+
+			const longerTimeout = channel.transport.request({
+				kind: "confirm",
+				pluginId: "rpc_ui_test",
+				title: "Longer timeout",
+				timeoutMs: 2_147_483_648,
+			});
+			const longerRequestId = requestIds[1];
+			if (longerRequestId === undefined) {
+				throw new Error("RPC UI did not send the longer-timeout request.");
+			}
+			expect(scheduledTimeouts[1]?.delayMs).toBe(maximumDelay);
+			scheduledTimeouts[1]?.callback();
+			expect(scheduledTimeouts[2]?.delayMs).toBe(1);
+			expect(
+				await Promise.race([longerTimeout, Promise.resolve("still pending")])
+			).toBe("still pending");
+			expect(cancellations).toEqual([maximumRequestId]);
+			scheduledTimeouts[2]?.callback();
+			expect(await longerTimeout).toBe(false);
+			expect(cancellations).toEqual([maximumRequestId, longerRequestId]);
+
+			const caller = new AbortController();
+			const cancelledTimeout = channel.transport.request(
+				{
+					kind: "confirm",
+					pluginId: "rpc_ui_test",
+					title: "Cancelled timeout",
+					timeoutMs: 2_147_483_648,
+				},
+				caller.signal
+			);
+			const cancelledRequestId = requestIds[2];
+			if (cancelledRequestId === undefined) {
+				throw new Error("RPC UI did not send the cancellable request.");
+			}
+			scheduledTimeouts[3]?.callback();
+			expect(scheduledTimeouts[4]?.delayMs).toBe(1);
+			caller.abort();
+			expect(await cancelledTimeout).toBe(false);
+			expect(scheduledTimeouts[4]?.cancelled).toBe(true);
+			expect(cancellations).toEqual([
+				maximumRequestId,
+				longerRequestId,
+				cancelledRequestId,
+			]);
+			scheduledTimeouts[4]?.callback();
+			expect(scheduledTimeouts).toHaveLength(5);
+
+			const noTimeout = channel.transport.request({
+				kind: "input",
+				pluginId: "rpc_ui_test",
+				title: "No hidden timeout",
+			});
+			expect(scheduledTimeouts).toHaveLength(5);
+			const noTimeoutId = requestIds[3];
+			if (noTimeoutId === undefined) {
+				throw new Error("RPC UI did not send the request without a timeout.");
+			}
+			expect(channel.receiveResponse(noTimeoutId, "later", false, true)).toBe(
+				true
+			);
+			expect(await noTimeout).toBe("later");
+		} finally {
+			channel.close();
+		}
+	}));
+
 test("RPC UI cancellation, timeouts and disconnects settle to method defaults", async () => {
 	const requests: Array<{ id: string; params: RpcPluginUIRequest }> = [];
 	const cancellations: string[] = [];
@@ -337,17 +469,11 @@ test("RPC UI cancellation, timeouts and disconnects settle to method defaults", 
 	expect(await timedOut).toBe(false);
 	expect(cancellations).toEqual([abortRequest.id, timeoutRequest.id]);
 
-	let noTimeoutSettled = false;
-	const noTimeout = handle.ui.input("No hidden timeout").then((value) => {
-		noTimeoutSettled = true;
-		return value;
-	});
+	const noTimeout = handle.ui.input("No hidden timeout");
 	const noTimeoutRequest = requests[2];
 	if (noTimeoutRequest === undefined) {
 		throw new Error("The RPC UI host did not send the unbounded request.");
 	}
-	await Bun.sleep(5);
-	expect(noTimeoutSettled).toBe(false);
 	expect(noTimeoutRequest.params.timeoutMs).toBeUndefined();
 	expect(
 		channel.receiveResponse(noTimeoutRequest.id, "later", false, true)

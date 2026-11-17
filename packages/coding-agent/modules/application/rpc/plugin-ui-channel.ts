@@ -43,6 +43,8 @@ export type RpcPluginUIChannelOptions = Readonly<{
 	sendRequest: (id: string, params: RpcPluginUIRequest) => void;
 }>;
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 const defaultValueFor = (
 	kind: RpcPluginUIRequest["kind"]
 ): RpcPluginUIWireResult => (kind === "confirm" ? false : null);
@@ -142,7 +144,22 @@ export const createRpcPluginUIChannel = (
 			return deferred.promise;
 		}
 		if (requestValue.timeoutMs !== undefined) {
-			active.timeout = setTimeout(onAbort, requestValue.timeoutMs);
+			let remainingMs = requestValue.timeoutMs;
+			const scheduleTimeout = (): void => {
+				const delayMs = Math.min(remainingMs, MAX_TIMER_DELAY_MS);
+				active.timeout = setTimeout(() => {
+					if (pending.get(id) !== active) {
+						return;
+					}
+					remainingMs -= delayMs;
+					if (remainingMs > 0) {
+						scheduleTimeout();
+						return;
+					}
+					finish(id, active, defaultValue, true);
+				}, delayMs);
+			};
+			scheduleTimeout();
 		}
 		try {
 			options.sendRequest(id, requestValue);
