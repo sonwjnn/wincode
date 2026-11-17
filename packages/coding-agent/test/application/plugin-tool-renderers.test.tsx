@@ -3,12 +3,27 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testRender } from "@opentui/react/test-utils";
-import { agentIdSchema } from "@wincode/agent-core";
+import { fromPartial } from "@total-typescript/shoehorn";
+import {
+	agentIdSchema,
+	createAgentRuntime,
+	createStatefulAgent,
+} from "@wincode/agent-core";
+import type { ProviderChatEvent } from "@wincode/ai";
 import type { PluginFactory } from "@wincode/coding-agent";
 import { act, useState } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginTools } from "@/modules/plugins/tools";
+import type { SessionCacheWarming } from "@/modules/prompt-cache/cache-warming";
+import { projectAgentTurnEvent } from "@/modules/sessions/agent-session/turn";
+import type {
+	SessionQueuedSubmission,
+	SessionSkillCatalog,
+} from "@/modules/sessions/agent-session/types";
+import { createAgentSessionTurnRunner } from "@/modules/sessions/host/agent-session-turn-runner";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionLifecycle } from "@/modules/sessions/storage/session-lifecycle";
+import type { SessionRecords } from "@/modules/sessions/storage/session-records";
 import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
 import { createConfigStore } from "@/shared/config/config-store";
 import { toSessionId } from "@/shared/identifiers";
@@ -19,7 +34,16 @@ import pluginToolRendererFixture, {
 	pluginToolRendererFixtureState,
 	resetPluginToolRendererFixtureState,
 } from "../fixtures/plugin-tool-renderer-fixture";
-import { toolCallId } from "../support/identifiers";
+import {
+	createFakeProviderCollection,
+	createFakeProviderRecorder,
+} from "../support/e2e-fake-runtime";
+import {
+	agentTurnId,
+	modelId,
+	sessionMessageId,
+	toolCallId,
+} from "../support/identifiers";
 import { flushTestRenderer } from "../support/opentui";
 
 type DynamicToolPart = Extract<
@@ -307,94 +331,171 @@ test("Session-scoped Plugin Tool renderers follow the owning Session lifecycle",
 	}
 });
 
-test("turn-scoped Plugin Tool renderers fall back when their turn ends before the next tool build", async () => {
+test("turn-scoped Plugin Tool renderer metadata expires in the real turn runner finalizer", async () => {
 	resetPluginToolRendererFixtureState();
 	const environment = await createRendererEnvironment();
+	const recorder = createFakeProviderRecorder();
+	const providerCollection = createFakeProviderCollection(recorder);
+	const selectedModel = {
+		modelId: modelId("gpt-5.6-luna"),
+		providerId: "openai",
+	};
+	const agentId = agentIdSchema.parse("build");
+	const sourceMessageId = sessionMessageId("plugin-turn-renderer-user");
+	const execution = {
+		agent: agentId,
+		assistantId: sessionMessageId("plugin-turn-renderer-assistant"),
+		model: selectedModel,
+		sessionModel: selectedModel,
+		sourceUserMessageId: sourceMessageId,
+		startedAt: 1,
+		turnId: agentTurnId("plugin-turn-renderer-turn"),
+	};
+	const statefulAgent = createStatefulAgent<SessionQueuedSubmission>({
+		runtime: createAgentRuntime({ providerCollection }),
+	});
+	let modelSteps = 0;
+	let turnToolName: string | undefined;
+	recorder.stepScript = async function* (
+		request
+	): AsyncGenerator<ProviderChatEvent> {
+		modelSteps += 1;
+		if (modelSteps === 1) {
+			const turnTool = request.tools?.find(({ name }) =>
+				name.includes("turn_scoped")
+			);
+			if (turnTool === undefined) {
+				throw new Error(
+					"The deterministic model did not receive the turn Tool."
+				);
+			}
+			turnToolName = turnTool.name;
+			yield {
+				input: { query: "WCO-288" },
+				toolCallId: "plugin-turn-renderer-call",
+				toolName: turnTool.name,
+				type: "tool-call",
+			};
+		} else {
+			yield { delta: "Turn complete", type: "text-delta" };
+		}
+		yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+		yield { completion: { kind: "completed" }, type: "finish" };
+	};
 	try {
-		const agentId = agentIdSchema.parse("build");
-		const turnTools = await environment.runtime.resolveToolsForTurn({
-			agentId,
-			executionMode: "interactive",
+		await providerCollection.setCredential("openai", "fixture-credential");
+		await act(() => environment.updateParts([]));
+		await flushTestRenderer(environment.setup, 2);
+		const configStore = createConfigStore({
+			homeRoot: environment.workspace,
+		});
+		const configRuntime = {
+			configStore,
+			cwd: environment.workspace,
+			homeRoot: environment.workspace,
+			workspace: environment.workspace,
+		};
+		const runner = createAgentSessionTurnRunner({
+			cacheWarming: fromPartial<SessionCacheWarming>({}),
+			capabilities: {
+				getCapabilityCeiling: () => undefined,
+				getConfig: () => configRuntime,
+				getPluginRuntime: () => environment.runtime,
+				getRegistry: () => null,
+			},
+			editMode: fromPartial<Pick<SessionLifecycle, "getEditMode">>({}),
+			providerCollection,
+			records: fromPartial<SessionRecords>({}),
 			sessionId: environment.sessionId,
+			statefulAgent,
+		});
+		let projectedMessages: SessionMessage[] = [];
+		let callRenderedDuringTurn = false;
+		let resultRenderedDuringTurn = false;
+		const ignoreAsync = async (): Promise<void> => undefined;
+		const ignore = (): void => undefined;
+		const outcome = await runner.run({
+			armedSkill: fromPartial<SessionSkillCatalog>({
+				agentId,
+				diagnostic: null,
+			}),
+			callbacks: {
+				commitStep: ignoreAsync,
+				commitTerminal: ignoreAsync,
+				commitToolCall: ignoreAsync,
+				onEvent: async (event) => {
+					const projected = projectAgentTurnEvent(
+						projectedMessages,
+						execution,
+						event
+					);
+					if (projected === undefined) {
+						return;
+					}
+					projectedMessages = projected.messages;
+					if (
+						event.type !== "tool-call-started" &&
+						event.type !== "tool-call-finished"
+					) {
+						return;
+					}
+					const toolPart = projected.message.parts.find(
+						(part): part is DynamicToolPart => part.type === "dynamic-tool"
+					);
+					if (toolPart === undefined) {
+						throw new Error(
+							"The real turn did not project its Plugin Tool Call."
+						);
+					}
+					await act(() => environment.updateParts([toolPart]));
+					await flushTestRenderer(environment.setup, 2);
+					const frame = environment.setup.captureCharFrame();
+					if (event.type === "tool-call-started") {
+						expect(frame).toContain("turn-scoped call input-available");
+						callRenderedDuringTurn = true;
+					} else {
+						expect(frame).toContain("turn-scoped result success");
+						resultRenderedDuringTurn = true;
+					}
+				},
+				onTerminal: ignore,
+				onViewState: ignore,
+			},
+			execution,
+			messages: [
+				{
+					id: sourceMessageId,
+					metadata: { agent: agentId, model: selectedModel },
+					parts: [{ text: "Use the turn-scoped fixture Tool.", type: "text" }],
+					role: "user",
+				},
+			],
+			prepareNextStep: async () => undefined,
+			resolvedAgent: {
+				displayName: "Build",
+				id: agentId,
+				instructions: "Use the available fixture Tool.",
+				role: "primary",
+				visibleCodingTools: [],
+			},
 			signal: new AbortController().signal,
-			workspace: environment.workspace,
+			takeSteeringMessages: async () => [],
 		});
-		const turnTool = turnTools.find((tool) => tool.localName === "turn_scoped");
-		if (turnTool === undefined) {
-			throw new Error("The turn-scoped Plugin Tool was not registered.");
-		}
-		expect(
-			environment.runtime
-				.getToolDescriptors(environment.sessionId)
-				.some((tool) => tool.name === turnTool.name)
-		).toBe(false);
-		const turnCleanups: (() => void)[] = [];
-		const resolvedTool = createPluginTools({
-			agentId,
-			existingToolNames: [],
-			pluginRuntime: environment.runtime,
-			pluginTools: turnTools,
-			registerTurnCleanup: (cleanup) => turnCleanups.push(cleanup),
-			sessionId: environment.sessionId,
-			workspace: environment.workspace,
-		}).find(({ definition }) => definition.name === turnTool.name);
-		if (resolvedTool === undefined) {
-			throw new Error("The turn-scoped Plugin Tool was not executable.");
-		}
-		const presentationDescriptor = environment.runtime
-			.getToolDescriptors(environment.sessionId, {
-				includeTurnRenderers: true,
-			})
-			.find((tool) => tool.name === turnTool.name);
-		expect(presentationDescriptor?.renderCall).toBeDefined();
-		expect(presentationDescriptor?.renderResult).toBeDefined();
-		const toolCallIdValue = toolCallId("plugin-turn-scoped-renderer-call");
-		const runningPart: DynamicToolPart = {
-			input: { query: "WCO-288" },
-			state: "input-available",
-			toolCallId: toolCallIdValue,
-			toolName: turnTool.name,
-			type: "dynamic-tool",
-		};
-		await act(() => environment.updateParts([runningPart]));
-		await flushTestRenderer(environment.setup, 2);
-		expect(environment.setup.captureCharFrame()).toContain(
-			"turn-scoped call input-available"
-		);
-		const outcome = await resolvedTool.execute({
-			input: { query: "WCO-288" },
-			toolCallId: toolCallIdValue,
-		});
-		if (outcome.type !== "success") {
-			throw new Error(`The turn-scoped Tool failed: ${outcome.errorText}`);
-		}
-		expect(outcome).toEqual({
-			output: { answer: "turn result for WCO-288" },
-			type: "success",
-		});
-		const resultPart: DynamicToolPart = {
-			...runningPart,
-			output: outcome.output,
-			state: "output-available",
-		};
-		await act(() => environment.updateParts([resultPart]));
-		await flushTestRenderer(environment.setup, 2);
-		expect(environment.setup.captureCharFrame()).toContain(
-			"turn-scoped result success"
-		);
 
-		// The turn runner invokes registered callbacks in its finalizer. No next
-		// turn registration or tool build occurs before this lookup.
-		expect(turnCleanups).toHaveLength(1);
-		for (const cleanup of turnCleanups.reverse()) {
-			cleanup();
+		expect(callRenderedDuringTurn).toBe(true);
+		expect(resultRenderedDuringTurn).toBe(true);
+		expect(modelSteps).toBe(2);
+		expect(outcome.error).toBeUndefined();
+		expect(outcome.turn).toBeDefined();
+		if (turnToolName === undefined) {
+			throw new Error("The deterministic model did not call the turn Tool.");
 		}
 		const descriptorsAfterTurnEnd = environment.runtime.getToolDescriptors(
 			environment.sessionId,
 			{ includeTurnRenderers: true }
 		);
 		expect(
-			descriptorsAfterTurnEnd.some((tool) => tool.name === turnTool.name)
+			descriptorsAfterTurnEnd.some((tool) => tool.name === turnToolName)
 		).toBe(false);
 		expect(
 			descriptorsAfterTurnEnd.some(
@@ -403,17 +504,32 @@ test("turn-scoped Plugin Tool renderers fall back when their turn ends before th
 			)
 		).toBe(true);
 
-		await act(() => environment.updateParts([resultPart]));
+		const assistantMessage = projectedMessages.find(
+			({ id }) => id === execution.assistantId
+		);
+		const resultPart = assistantMessage?.parts.find(
+			(part): part is DynamicToolPart =>
+				part.type === "dynamic-tool" && part.state === "output-available"
+		);
+		if (resultPart === undefined) {
+			throw new Error(
+				"The real turn did not retain the completed Tool result."
+			);
+		}
+		await act(() => environment.updateParts([{ ...resultPart }]));
 		await flushTestRenderer(environment.setup, 2);
 		const fallbackFrame = environment.setup.captureCharFrame();
-		expect(fallbackFrame).toContain("plugin_tool_renderer_fixture_turn_scoped");
+		expect(fallbackFrame).toContain(turnToolName);
 		expect(fallbackFrame).not.toContain("turn-scoped call");
 		expect(fallbackFrame).not.toContain("turn-scoped result");
-		const sessionTool = turnTools.find(
+
+		const sessionTool = descriptorsAfterTurnEnd.find(
 			(tool) => tool.localName === "session_scoped"
 		);
-		if (sessionTool === undefined) {
-			throw new Error("The Session-scoped Plugin Tool was not registered.");
+		if (sessionTool?.renderCall === undefined) {
+			throw new Error(
+				"The Session-scoped Plugin Tool renderer was not retained."
+			);
 		}
 		await act(() =>
 			environment.updateParts([
@@ -431,6 +547,8 @@ test("turn-scoped Plugin Tool renderers fall back when their turn ends before th
 			"session-scoped call input-available"
 		);
 	} finally {
+		await statefulAgent.shutdown();
+		await providerCollection.close();
 		await environment.dispose();
 	}
 });
