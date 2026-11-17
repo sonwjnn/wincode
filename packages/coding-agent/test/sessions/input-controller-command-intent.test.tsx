@@ -232,6 +232,15 @@ describe("composer autocomplete", () => {
 			expect(holder.current?.state.text).toBe("ask WCO-12");
 
 			await setText("/rev");
+			await act(async () => {
+				const document = documentHolder.current;
+				if (document === null) {
+					throw new Error("expected the composer document");
+				}
+				document.replaceText("/rev", 2);
+				holder.current?.actions.onCursorChange();
+			});
+			await waitForControllerEffects(setup);
 			expect(holder.current?.state.overlay.kind).toBe("command");
 		} finally {
 			await act(async () => setup.renderer.destroy());
@@ -289,6 +298,21 @@ describe("composer autocomplete", () => {
 			if (overlay?.kind !== "plugin-autocomplete") {
 				throw new Error("expected Plugin-composed path suggestions");
 			}
+			await act(async () => {
+				const document = documentHolder.current;
+				if (document === null) {
+					throw new Error("expected the composer document");
+				}
+				document.replaceText("See @src", "See @s".length);
+				holder.current?.actions.onCursorChange();
+			});
+			await waitForControllerEffects(setup);
+			overlay = holder.current?.state.overlay;
+			if (overlay?.kind !== "plugin-autocomplete") {
+				throw new Error(
+					"expected Plugin path suggestions while caret is in the mention"
+				);
+			}
 			const directoryIndex = overlay.items.findIndex(
 				({ value }) => value === "src"
 			);
@@ -312,6 +336,60 @@ describe("composer autocomplete", () => {
 			await act(async () => holder.current?.actions.onItemExecute(fileIndex));
 			await renderController(setup);
 			expect(holder.current?.state.text).toBe("See @src/main.tsx ");
+		} finally {
+			await act(async () => setup.renderer.destroy());
+		}
+	});
+
+	test("moving the caret away from a file mention prevents Enter replacing it", async () => {
+		const holder: { current: ChatInputController | null } = { current: null };
+		const documentHolder: { current: ComposerDocument | null } = {
+			current: null,
+		};
+		const setup = await testRenderWithClipboard(
+			<ControllerProbe
+				commandController={createCommandController([])}
+				documentHolder={documentHolder}
+				getFileMentionOptions={async () => [
+					{ label: "src/main.tsx", path: "src/main.tsx", type: "file" },
+				]}
+				holder={holder}
+				onSubmit={() => true}
+				promptHistoryStore={createPromptHistoryStore([])}
+			/>,
+			{ height: 12, width: 80 }
+		);
+
+		try {
+			await waitForControllerEffects(setup);
+			const text = "See @src now";
+			const mentionCursorOffset = text.indexOf("@src") + "@src".length;
+			await act(async () => {
+				const document = documentHolder.current;
+				if (document === null) {
+					throw new Error("expected the composer document");
+				}
+				const snapshot = document.replaceText(text, mentionCursorOffset);
+				holder.current?.actions.onTextChange(snapshot, mentionCursorOffset, "");
+			});
+			await waitForControllerEffects(setup);
+			expect(holder.current?.state.overlay.kind).toBe("file-mention");
+
+			await act(async () => {
+				const document = documentHolder.current;
+				if (document === null) {
+					throw new Error("expected the composer document");
+				}
+				document.replaceText(text, text.indexOf("@"));
+				holder.current?.actions.onCursorChange();
+			});
+			await renderController(setup);
+			const overlayAfterMovingCaret = holder.current?.state.overlay;
+			await act(async () => holder.current?.actions.onEnter());
+			await renderController(setup);
+
+			expect(holder.current?.state.text).toBe(text);
+			expect(overlayAfterMovingCaret?.kind).toBe(null);
 		} finally {
 			await act(async () => setup.renderer.destroy());
 		}

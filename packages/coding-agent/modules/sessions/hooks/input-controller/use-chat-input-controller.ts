@@ -564,7 +564,12 @@ export function useChatInputController({
 		[]
 	);
 	const onCursorChange = useCallback(() => {
-		setComposerCursorOffset(composerDocument.capture().cursorOffset);
+		const { cursorOffset, text } = composerDocument.capture();
+		setComposerCursorOffset(cursorOffset);
+		const nextTrigger = detectTrigger(text, cursorOffset);
+		setActiveTrigger(nextTrigger);
+		setOverlayKind(nextTrigger?.kind ?? null);
+		setSelectedIndex(0);
 	}, [composerDocument]);
 	const navigateHistory = useCallback(
 		(direction: -1 | 1): boolean => {
