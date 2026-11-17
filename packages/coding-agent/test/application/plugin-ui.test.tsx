@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { InputRenderable } from "@opentui/core";
+import { type CapturedFrame, type InputRenderable, RGBA } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type {
@@ -61,6 +61,48 @@ const textFromSessionTranscript = (transcript: readonly object[]): string =>
 			parts.flatMap((part) => (part.type === "text" ? [part.text] : []))
 		)
 		.join(" ");
+
+const getRenderedBackgroundBounds = (
+	frame: CapturedFrame,
+	background: RGBA
+):
+	| Readonly<{
+			cellCount: number;
+			height: number;
+			left: number;
+			top: number;
+			width: number;
+	  }>
+	| undefined => {
+	let cellCount = 0;
+	let left = Number.POSITIVE_INFINITY;
+	let top = Number.POSITIVE_INFINITY;
+	let right = Number.NEGATIVE_INFINITY;
+	let bottom = Number.NEGATIVE_INFINITY;
+	for (const [row, line] of frame.lines.entries()) {
+		let column = 0;
+		for (const span of line.spans) {
+			if (span.bg.equals(background)) {
+				cellCount += span.width;
+				left = Math.min(left, column);
+				top = Math.min(top, row);
+				right = Math.max(right, column + span.width - 1);
+				bottom = Math.max(bottom, row);
+			}
+			column += span.width;
+		}
+	}
+	if (cellCount === 0) {
+		return;
+	}
+	return {
+		cellCount,
+		height: bottom - top + 1,
+		left,
+		top,
+		width: right - left + 1,
+	};
+};
 
 type OpenedPluginUITestAgentSession = Readonly<{
 	dispose: () => Promise<void>;
@@ -1071,6 +1113,48 @@ test("custom UI receives resized dimensions without losing keyboard dismissal", 
 			height: 10,
 			width: 22,
 		});
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("overlay is painted at its terminal-cell bounds and resizes with the terminal", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 8,
+		width: 18,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const context = environment.customUIState.lastContext;
+		if (context === undefined) {
+			throw new Error("The custom overlay did not receive its context.");
+		}
+		const panelBackground = RGBA.fromHex(
+			context.theme.colors.backgroundElement
+		);
+
+		expect(
+			getRenderedBackgroundBounds(
+				environment.setup.captureSpans(),
+				panelBackground
+			)
+		).toEqual({ cellCount: 56, height: 4, left: 2, top: 2, width: 14 });
+
+		await act(() => environment.setup.resize(22, 10));
+		await flushTestRenderer(environment.setup, 2);
+		expect(
+			getRenderedBackgroundBounds(
+				environment.setup.captureSpans(),
+				panelBackground
+			)
+		).toEqual({ cellCount: 108, height: 6, left: 2, top: 2, width: 18 });
+
 		await environment.pressEscape();
 		expect(await result).toBe("undefined");
 	} finally {
