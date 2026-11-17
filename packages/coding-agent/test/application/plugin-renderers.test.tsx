@@ -194,6 +194,28 @@ const createActiveSessionPluginHistory = async (): Promise<{
 		if (persistedEntry === undefined) {
 			throw new Error("The Plugin Session History entry was not persisted.");
 		}
+		const followupTurnCompleted = Promise.withResolvers<boolean>();
+		const unsubscribeFollowupTurn = activeHandle.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed"
+			) {
+				followupTurnCompleted.resolve(event.type === "agent-turn-completed");
+			}
+		});
+		try {
+			expect(
+				(
+					await activeHandle.deliver({
+						idempotencyKey: "plugin-renderer-active-session-followup-turn",
+						text: "Write a release note update.",
+					})
+				).rejected
+			).toBe(false);
+			expect(await followupTurnCompleted.promise).toBe(true);
+		} finally {
+			unsubscribeFollowupTurn();
+		}
 		const readContext = (): readonly object[] => {
 			let context: readonly object[] | undefined;
 			const unsubscribe = activeHandle.subscribe((snapshot) => {
@@ -460,15 +482,14 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 		api.registerEntryRenderer("status", renderer);
 	};
 	const readCursors: Array<string | undefined> = [];
-	const storedPage = await activeHistory.read({ limit: 20 });
-	const storedEntry = storedPage.entries.find(
-		({ id }) => id === persistedEntry.id
-	);
-	if (storedEntry === undefined) {
-		throw new Error("The Plugin Session History entry was not persisted.");
-	}
+	let activeHistoryPreviewReads = 0;
+	const readActiveHistory: PluginSessionHistory["read"] = async (options) => {
+		activeHistoryPreviewReads += 1;
+		return activeHistory.read(options);
+	};
 	let activeLeafId = unsupportedTreeEntry.id;
 	let historyGeneration = 0;
+	let activeHistoryReadPoint: string | undefined;
 	let currentHistoryEntries = [unsupportedEntry];
 	const historyPersistence: PluginSessionHistoryPersistence = {
 		append: async (_pluginId, input) => {
@@ -491,16 +512,26 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 		},
 		read: async (_pluginId, options) => {
 			readCursors.push(options?.cursor);
-			const readPoint = `${storedPage.readPoint}:${historyGeneration}`;
-			if (options?.cursor !== "older") {
-				return { entries: [], nextCursor: "older", readPoint };
+			if (options?.cursor === "older") {
+				if (activeHistoryReadPoint === undefined) {
+					throw new Error("The active Plugin history page was not read first.");
+				}
+				return {
+					entries:
+						historyGeneration > 0
+							? currentHistoryEntries
+							: [persistedEntry, unsupportedEntry],
+					readPoint: activeHistoryReadPoint,
+				};
 			}
-			if (historyGeneration > 0) {
-				return { entries: currentHistoryEntries, readPoint };
-			}
+			const activePage = await readActiveHistory(options);
+			activeHistoryReadPoint = `${activePage.readPoint}:${historyGeneration}`;
 			return {
-				entries: [storedEntry, unsupportedEntry],
-				readPoint,
+				...activePage,
+				entries:
+					historyGeneration > 0 ? currentHistoryEntries : activePage.entries,
+				nextCursor: activePage.nextCursor ?? "older",
+				readPoint: activeHistoryReadPoint,
 			};
 		},
 	};
@@ -638,11 +669,16 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 				const sessionContext = readContext();
 				const serializedContext = JSON.stringify(sessionContext);
 				expect(serializedContext).toContain("Prepare a release note.");
+				expect(serializedContext).toContain("Write a release note update.");
+				expect(serializedContext).not.toContain(
+					JSON.stringify(persistedEntry.payload)
+				);
 				expect(serializedContext).not.toContain("plugin-history-payload-only");
 				expect(serializedContext).not.toContain(
 					"plugin-rendered:status:restored"
 				);
-				expect(readCursors).toEqual([undefined, "older"]);
+				expect(activeHistoryPreviewReads).toBeGreaterThan(0);
+				expect(readCursors).toEqual([undefined]);
 				const previewHistory = runtime.getSessionHistoryForPlugin(
 					"history_renderer",
 					previewSessionId
