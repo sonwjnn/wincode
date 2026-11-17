@@ -17,7 +17,7 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
-import { PluginUICustomEditor } from "@/modules/plugins/ui/plugin-ui-host";
+import { PluginUICustomPresentation } from "@/modules/plugins/ui/plugin-ui-host";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
@@ -621,7 +621,7 @@ export function ChatShell({
 				<WaitingMessageStrip queued={queuedSubmissions} />
 
 				<box flexShrink={0} position="relative" width="100%">
-					<PluginUICustomEditor sessionId={viewId}>
+					<PluginUICustomPresentation sessionId={viewId}>
 						<ChatTextArea
 							activityIndicator={
 								isBusy ? (
@@ -651,7 +651,7 @@ export function ChatShell({
 							sessionId={viewId}
 							sessionPromptHistory={promptHistory}
 						/>
-					</PluginUICustomEditor>
+					</PluginUICustomPresentation>
 				</box>
 				<SessionFooterStatuses scope={viewId} />
 				<box
