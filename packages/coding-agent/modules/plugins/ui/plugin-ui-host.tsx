@@ -33,7 +33,10 @@ import {
 	useDialogLayer,
 } from "../../../shared/providers/dialog/dialog-provider";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "../../../shared/providers/keyboard-layer/constants";
-import { useKeyboardLayer } from "../../../shared/providers/keyboard-layer/keyboard-layer-provider";
+import {
+	type KeyboardLayerContextValue,
+	useKeyboardLayer,
+} from "../../../shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../../../shared/providers/theme/theme-provider";
 import type { Theme } from "../../../shared/providers/theme/themes";
 import {
@@ -60,9 +63,20 @@ import type {
 } from "../public";
 import { PluginUICustomError } from "../public";
 import type { PluginRuntime } from "../runtime";
-import type { PluginUIHostBinding } from "./plugin-ui-host-contract";
+import type {
+	PluginUIHostBinding,
+	PluginUIOwner as PluginUIOwnerType,
+} from "./plugin-ui-host-contract";
 
 export type { PluginUIHandle, PluginUIOwner } from "./plugin-ui-host-contract";
+
+type PluginUIKeyboardLayer = Pick<
+	KeyboardLayerContextValue,
+	"registerShortcut" | "registerTerminalInput"
+>;
+
+const keyboardOwnerId = (owner: PluginUIOwnerType): string =>
+	`${owner.sessionId ?? "process"}:${owner.pluginId}`;
 
 type PluginUICustomPresentationState = Readonly<{
 	getRevision: () => number;
@@ -193,6 +207,11 @@ const getNoCustomUIRevision = () => 0;
 
 export type PluginUIHost = PluginUIHostBinding &
 	Readonly<{
+		registerShortcut: (
+			owner: PluginUIOwnerType,
+			shortcut: string,
+			handler: () => void
+		) => () => void;
 		getCustomUI: () => PluginUICustomHostRequest | null;
 		subscribeCustomUI: (listener: () => void) => () => void;
 	}>;
@@ -200,6 +219,7 @@ export type PluginUIHost = PluginUIHostBinding &
 type PluginUIHostDependencies = Readonly<{
 	customUI: PluginUICustomStore;
 	dialog: () => DialogContextValue;
+	keyboardLayer: () => PluginUIKeyboardLayer;
 	theme: () => Readonly<{ setTheme: (theme: Theme) => void }>;
 	toast: () => ToastContextValue;
 }>;
@@ -714,10 +734,17 @@ export function PluginUICustomPresentation({
 		if (activeRequest === null || layerId === undefined) {
 			return;
 		}
-		push(layerId, () => {
-			activeRequest.dismiss();
-			return true;
-		});
+		push(
+			layerId,
+			() => {
+				activeRequest.dismiss();
+				return true;
+			},
+			() => {
+				activeRequest.dismiss();
+				return true;
+			}
+		);
 		return () => {
 			if (!renderer.isDestroyed) {
 				pop(layerId);
@@ -747,7 +774,6 @@ export function PluginUICustomPresentation({
 			editorBoundsRef.current
 		);
 	}, [activeRequest]);
-
 	useEffect(() => {
 		if (host === null || activeRequest === null) {
 			setLoadedComponent(null);
@@ -929,11 +955,14 @@ const isValidTheme = (candidate: unknown): candidate is Theme => {
 const createPluginUIHost = ({
 	customUI,
 	dialog: getDialog,
+	keyboardLayer: getKeyboardLayer,
 	theme: getThemeContext,
 	toast: getToast,
 }: PluginUIHostDependencies): PluginUIHost => {
 	let activeCustomRequest: (() => void) | undefined;
 	let hostClosed = false;
+	const shortcutSubscriptions = new Set<() => void>();
+	const terminalInputSubscriptions = new Set<() => void>();
 	return Object.freeze({
 		close() {
 			if (hostClosed) {
@@ -941,11 +970,39 @@ const createPluginUIHost = ({
 			}
 			hostClosed = true;
 			activeCustomRequest?.();
+			for (const unsubscribe of [...shortcutSubscriptions]) {
+				unsubscribe();
+			}
+			for (const unsubscribe of [...terminalInputSubscriptions]) {
+				unsubscribe();
+			}
+		},
+		registerShortcut(owner, shortcut, handler) {
+			if (hostClosed) {
+				return () => undefined;
+			}
+			const remove = getKeyboardLayer().registerShortcut(
+				keyboardOwnerId(owner),
+				shortcut,
+				handler
+			);
+			let active = true;
+			const unsubscribe = (): void => {
+				if (!active) {
+					return;
+				}
+				active = false;
+				shortcutSubscriptions.delete(unsubscribe);
+				remove();
+			};
+			shortcutSubscriptions.add(unsubscribe);
+			return unsubscribe;
 		},
 		getCustomUI: customUI.get,
 		subscribeCustomUI: customUI.subscribe,
 		create(owner, beginPrompt, invocation) {
 			const activeRequests = new Set<() => void>();
+			const ownerInputSubscriptions = new Set<() => void>();
 			let closed = false;
 
 			const request = <Value,>(
@@ -1235,6 +1292,28 @@ const createPluginUIHost = ({
 							})
 					),
 				custom: (factory, options) => requestCustom(factory, options),
+				onTerminalInput: (handler) => {
+					if (closed || hostClosed) {
+						return () => undefined;
+					}
+					const remove = getKeyboardLayer().registerTerminalInput(
+						keyboardOwnerId(owner),
+						(data) => handler(data)?.consume === true
+					);
+					let active = true;
+					const unsubscribe = (): void => {
+						if (!active) {
+							return;
+						}
+						active = false;
+						ownerInputSubscriptions.delete(unsubscribe);
+						terminalInputSubscriptions.delete(unsubscribe);
+						remove();
+					};
+					ownerInputSubscriptions.add(unsubscribe);
+					terminalInputSubscriptions.add(unsubscribe);
+					return unsubscribe;
+				},
 				notify: (message, level: PluginNotificationLevel = "info") => {
 					if (closed) {
 						return;
@@ -1285,6 +1364,9 @@ const createPluginUIHost = ({
 					for (const cancel of [...activeRequests]) {
 						cancel();
 					}
+					for (const unsubscribe of [...ownerInputSubscriptions]) {
+						unsubscribe();
+					}
 				},
 				ui,
 			});
@@ -1298,13 +1380,16 @@ export function PluginUIHostProvider({
 	children,
 }: Readonly<{ children: ReactNode }>) {
 	const dialog = useDialog();
+	const keyboardLayer = useKeyboardLayer();
 	const theme = useTheme();
 	const toast = useToast();
 	const customUI = useMemo(createPluginUICustomStore, []);
 	const dialogRef = useRef(dialog);
+	const keyboardLayerRef = useRef(keyboardLayer);
 	const themeRef = useRef(theme);
 	const toastRef = useRef(toast);
 	dialogRef.current = dialog;
+	keyboardLayerRef.current = keyboardLayer;
 	themeRef.current = theme;
 	toastRef.current = toast;
 	const host = useMemo(
@@ -1312,6 +1397,7 @@ export function PluginUIHostProvider({
 			createPluginUIHost({
 				customUI,
 				dialog: () => dialogRef.current,
+				keyboardLayer: () => keyboardLayerRef.current,
 				theme: () => themeRef.current,
 				toast: () => toastRef.current,
 			}),

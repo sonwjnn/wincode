@@ -94,6 +94,47 @@ Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeA
 
 Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened; selecting one from the command menu is its explicit execution intent.
 
+### Keyboard shortcuts
+
+After `definePlugin()`, register a keyboard shortcut with `PluginAPI.registerShortcut()` or the returned Plugin definition. The host matches it through the existing keyboard layer. A match consumes the key and invokes all Plugin handlers registered for that shortcut in registration order. Host controls run first, and a focused Plugin UI receives its local input before Plugin shortcuts. Shortcuts are active only while the Plugin's Interactive Session view is bound; they are removed with that view or Plugin. Escape and Ctrl+C are reserved for host dismissal/reclaim actions and cannot be registered.
+
+This keyboard-only editor opens from `Ctrl+Shift+P`, completes on Enter, and leaves Escape/Ctrl+C to the host:
+
+```tsx
+import { useKeyboard } from "@opentui/react";
+import type {
+  PluginFactory,
+  PluginUICustomComponent,
+} from "@wincode/coding-agent";
+
+const KeyboardHelp: PluginUICustomComponent<string> = ({ done }) => {
+  useKeyboard((key) => {
+    if (key.name !== "enter" && key.name !== "return") return;
+    key.preventDefault();
+    done("Keyboard help closed");
+  });
+  return (
+    <box>
+      <text>Enter closes · Escape dismisses · Ctrl+C returns to the composer</text>
+    </box>
+  );
+};
+
+const keyboardHelpPlugin: PluginFactory = (api) => {
+  api.definePlugin({ id: "keyboard_help" });
+  api.registerShortcut("ctrl+shift+p", {
+    description: "Open keyboard help.",
+    handler: async ({ ui }) => {
+      await ui.custom(() => KeyboardHelp, { title: "Keyboard help" });
+    },
+  });
+};
+
+export default keyboardHelpPlugin;
+```
+
+Handlers receive `pluginId`, `sessionId`, the normalized `shortcut`, and the host-mediated `ui`. `description` identifies the shortcut's purpose for Plugin authors. The public exports include `PluginShortcutContext`, `PluginShortcutHandler`, `PluginShortcutOptions`, and `PluginShortcutRegistration`. Shortcuts do not run while a modal keyboard layer is focused and are inert in RPC, JSON, and Print.
+
 ### Prompt selection
 
 The root `PluginAPI` exposes `setModel(model)` and `setThinkingLevel(level)` for the focused Interactive composer. They change the effective selection for future Submissions, taking precedence over model and ThinkingLevel defaults on the selected Agent while preserving the Agent's identity, instructions, and tools. They do not change an in-flight Agent Turn or configured defaults for new Wincode processes. On an actual model change, Thinking Level starts at `low` when supported; otherwise the host searches higher supported levels first, then lower ones. `Off` is an explicit level and may be the final fallback if declared. `setModel` returns `false` when there is no Interactive composer, the model is unsupported or retired, or its Connection Provider is not connected. Thinking-level requests are checked against the effective model; unsupported non-`undefined` levels are ignored. Pass `undefined` to use the provider default, including when the Agent has a configured ThinkingLevel. Outside Interactive Mode, `setModel` returns `false` and `setThinkingLevel` has no effect.
@@ -141,6 +182,41 @@ Pass `{ signal, timeout }` as the final dialog argument to cancel a request or s
 Prompt observers can use `onUIPromptStart` and `onUIPromptEnd`. Their context identifies the Plugin, Session, prompt kind, title, execution mode, and `reason: "ui_prompt"`. Concurrent or nested dialogs for one Plugin and Session share one start/end span. Observer callbacks run best-effort and never delay the dialog; failures are logged without blocking it. These hooks report a UI-request span, not Agent Turn state: they do not pause or resume a Turn, while a Tool or Command that awaits a request remains pending until the request settles.
 
 One-Shot, JSON, and Print never render Plugin UI and use terminal-free defaults: selection/input/editor/custom return `undefined`, confirmation returns `false`, notifications do nothing, theme listing is empty, theme lookup returns `undefined`, and theme changes return `{ success: false, error: "Theme changes are available only in Interactive Mode." }`. RPC remains React-free. Without the client's negotiated `pluginUi` capability, it uses those same defaults. A version-1 RPC UI client can handle select, confirm, input, editor, notifications, and data-only UI updates over JSON-RPC; `custom()` still returns `undefined` without invoking its component factory. See the [RPC Plugin UI protocol](../application/rpc/README.md) for capability negotiation, payloads, cancellation, ordering, and a protocol client example.
+
+`ctx.ui.onTerminalInput(handler)` subscribes to raw terminal sequences in Interactive Mode and returns an unsubscribe function. Return `{ consume: true }` to stop a sequence from reaching later Plugin handlers and the host keyboard parser. Returning nothing lets the sequence continue; a throwing handler is logged and does not block other subscribers. Plugin disable/unload, Session-view unbinding, and host shutdown release subscriptions even if the Plugin does not call the returned function.
+
+Raw input cannot take over host dismissal or reclaim actions: Escape and Ctrl+C sequences are not delivered to handlers. In noninteractive modes, `onTerminalInput()` returns a no-op unsubscribe function and does not invoke the handler. The public exports include `PluginTerminalInputHandler` and `PluginTerminalInputResult`.
+
+Using the `KeyboardHelp` component defined above, a command can keep a raw input listener only while its custom UI is active:
+
+```ts
+import type { PluginFactory } from "@wincode/coding-agent";
+
+const rawInputPlugin: PluginFactory = (api) => {
+  const plugin = api.definePlugin({ id: "raw_keyboard_help" });
+  plugin.registerCommand({
+    name: "raw-keyboard-help",
+    description: "Open keyboard help with a raw input listener.",
+    handler: async (ctx) => {
+      const unsubscribe = ctx.ui.onTerminalInput((data) => {
+        if (data === "?") return { consume: true };
+      });
+      try {
+        return (
+          (await ctx.ui.custom(() => KeyboardHelp, { title: "Keyboard help" })) ??
+          "Dismissed"
+        );
+      } finally {
+        unsubscribe();
+      }
+    },
+  });
+};
+
+export default rawInputPlugin;
+```
+
+The handler sees raw input data, not parsed key objects. Use the keyboard-layer shortcut API for key combinations; do not use a raw listener to claim Escape or Ctrl+C.
 
 ### Temporary React UI
 

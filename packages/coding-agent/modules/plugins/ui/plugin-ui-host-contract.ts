@@ -33,6 +33,11 @@ export type PluginUIUpdate =
 /** The UI-neutral host surface used by Interactive and RPC execution modes. */
 export type PluginUIHostBinding = Readonly<{
 	close: () => void;
+	registerShortcut?: (
+		owner: PluginUIOwner,
+		shortcut: string,
+		handler: () => void
+	) => () => void;
 	create: (
 		owner: PluginUIOwner,
 		beginPrompt: (kind: PluginUIPromptKind, title: string) => () => void,

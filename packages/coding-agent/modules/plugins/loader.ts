@@ -50,6 +50,7 @@ import type {
 	PluginSessionHistoryNavigatedHook,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
+	PluginShortcutRegistration,
 	PluginShutdownHook,
 	PluginStatusPanelRegistration,
 	PluginUIContributionResult,
@@ -59,6 +60,7 @@ import {
 	validatePluginAgent,
 	validatePluginCommand,
 	validatePluginProvider,
+	validatePluginShortcut,
 	validatePluginTool,
 } from "./registration";
 import {
@@ -105,6 +107,7 @@ type MutablePluginDraft = {
 	mcpServers: Map<string, PluginJsonValue>;
 	providers: Map<string, PluginProviderRegistration>;
 	resources: Map<string, PluginResourceDescriptor>;
+	shortcuts: Map<string, PluginShortcutRegistration>;
 	statusPanels: Map<string, PluginStatusPanelRegistration>;
 	id: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
@@ -483,6 +486,25 @@ const createRegistrationAPI = (
 				}
 			);
 		},
+		registerShortcut(shortcut, options) {
+			assertOpen();
+			try {
+				const validated = validatePluginShortcut(shortcut, options);
+				if (plugin.shortcuts.has(validated.shortcut)) {
+					throw new Error(
+						`Plugin Shortcut '${validated.shortcut}' is already registered by this Plugin.`
+					);
+				}
+				plugin.shortcuts.set(validated.shortcut, validated);
+			} catch (error) {
+				addDiagnostic(
+					diagnostics,
+					`Plugin Shortcut registration failed: ${messageFor(error)}`,
+					plugin.sourcePath
+				);
+				throw error;
+			}
+		},
 		registerProvider(provider) {
 			assertOpen();
 			try {
@@ -571,6 +593,7 @@ const createPluginAPI = (
 	promptSelectionBridge: PluginPromptSelectionBridge
 ): PluginAPI => {
 	let draft: MutablePluginDraft | undefined;
+	let definitionAPI: PluginDefinitionAPI | undefined;
 	const assertOpen = (): void => {
 		if (!isOpen()) {
 			throw new Error("Plugin registration is closed.");
@@ -592,6 +615,13 @@ const createPluginAPI = (
 	return Object.freeze({
 		setModel: promptSelectionBridge.setModel,
 		setThinkingLevel: promptSelectionBridge.setThinkingLevel,
+		registerShortcut(shortcut, options) {
+			assertOpen();
+			if (definitionAPI === undefined) {
+				throw new Error("Define the Plugin before registering its shortcuts.");
+			}
+			definitionAPI.registerShortcut(shortcut, options);
+		},
 		registerMessageRenderer(role, renderer) {
 			assertOpen();
 			if (
@@ -645,6 +675,7 @@ const createPluginAPI = (
 				mcpServers: new Map(),
 				providers: new Map(),
 				resources: new Map(),
+				shortcuts: new Map(),
 				statusPanels: new Map(),
 				id: identity.id,
 				...omitUndefined({ sessionStateVersion: identity.sessionStateVersion }),
@@ -654,7 +685,7 @@ const createPluginAPI = (
 			};
 			setDraft(nextDraft);
 			draft = nextDraft;
-			return createRegistrationAPI(
+			definitionAPI = createRegistrationAPI(
 				nextDraft,
 				isOpen,
 				diagnostics,
@@ -662,6 +693,7 @@ const createPluginAPI = (
 				commandNames,
 				customCommandNames
 			);
+			return definitionAPI;
 		},
 	});
 };
@@ -779,6 +811,7 @@ const loadedPluginFromDraft = (
 		),
 		id: draft.id,
 		resources: Object.freeze([...draft.resources.values()]),
+		shortcuts: Object.freeze([...draft.shortcuts.values()]),
 		statusPanels: Object.freeze([...draft.statusPanels.values()]),
 		providers: Object.freeze(registeredProviders),
 		sourceIdentity,

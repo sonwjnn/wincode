@@ -5,9 +5,10 @@ import type {
 	PluginUICustomBounds,
 	PluginUICustomComponent,
 	PluginUICustomContext,
+	PluginUICustomFactory,
 	PluginUICustomPresentationMode,
 } from "@wincode/coding-agent";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { z } from "zod";
 
 const createCustomUIFixture = () => {
@@ -100,14 +101,66 @@ const errorCode = (error: unknown): string =>
 		? String(error.code)
 		: "missing-code";
 
+const createKeyboardFixture = () => {
+	const state = {
+		componentKeys: [] as string[],
+		consumingInputs: [] as string[],
+		inputEvents: [] as string[],
+		localInputs: [] as string[],
+		shortcutCalls: 0,
+		shortcutContexts: [] as string[],
+		shortcutThemeCount: 0,
+		stopInput: undefined as (() => void) | undefined,
+	};
+	const component: PluginUICustomComponent<string> = ({ done }) => {
+		const [localInputs, setLocalInputs] = useState<string[]>([]);
+		useKeyboard((key) => {
+			if (key.name === "escape" || (key.ctrl && key.name === "c")) {
+				state.componentKeys.push(key.name);
+				key.preventDefault();
+				return;
+			}
+			if (key.ctrl && key.shift && key.name === "p") {
+				key.preventDefault();
+				state.localInputs.push("Ctrl+Shift+P");
+				setLocalInputs((current) => [...current, "Ctrl+Shift+P"]);
+				return;
+			}
+			if (key.name === "x") {
+				key.preventDefault();
+				state.localInputs.push("x");
+				setLocalInputs((current) => [...current, "x"]);
+				return;
+			}
+			if (key.name === "enter" || key.name === "return") {
+				key.preventDefault();
+				done("keyboard complete");
+			}
+		});
+		return (
+			<box flexDirection="column">
+				<text>Keyboard fixture</text>
+				<text>Enter selects · Escape dismisses · Ctrl+C reclaims</text>
+				<text>{`Shortcut calls: ${state.shortcutCalls}`}</text>
+				<text>{`Local: ${localInputs.join(", ")}`}</text>
+			</box>
+		);
+	};
+	const factory: PluginUICustomFactory<string> = () => component;
+	return { factory, state };
+};
+
 const pluginUiFixture: PluginFactory = (api) => {
 	const plugin = api.definePlugin({ id: "plugin_ui_fixture" });
 	const { factory: customFactory, state: customUIState } =
 		createCustomUIFixture();
+	const { factory: keyboardFactory, state: keyboardState } =
+		createKeyboardFixture();
 	const promptEvents: string[] = [];
 	const nestedPromptResult = Promise.withResolvers<boolean>();
 	const inputAbortController = new AbortController();
 	plugin.registerResource("custom_ui_state", customUIState);
+	plugin.registerResource("keyboard_state", keyboardState);
 	plugin.registerResource("prompt_events", promptEvents);
 	plugin.registerResource("nested_prompt_result", nestedPromptResult.promise);
 	plugin.registerResource("input_abort", {
@@ -131,6 +184,90 @@ const pluginUiFixture: PluginFactory = (api) => {
 	});
 	plugin.onUIPromptEnd(({ kind, title }) => {
 		promptEvents.push(`end:${kind}:${title}`);
+	});
+	api.registerShortcut("ctrl+shift+p", {
+		description: "Show the keyboard fixture shortcut.",
+		handler: ({ pluginId, sessionId, shortcut, ui }) => {
+			keyboardState.shortcutCalls += 1;
+			keyboardState.shortcutContexts.push(
+				`${pluginId}:${sessionId}:${shortcut}`
+			);
+			keyboardState.shortcutThemeCount = ui.getAllThemes().length;
+		},
+	});
+	plugin.registerCommand({
+		description:
+			"Subscribe to terminal input while a keyboard-only UI is open.",
+		name: "keyboard",
+		handler: async ({ ui }) => {
+			const unsubscribe = ui.onTerminalInput((data) => {
+				keyboardState.inputEvents.push(data);
+				return data === "x" || data === "\u001b[120u"
+					? { consume: true }
+					: undefined;
+			});
+			try {
+				return (
+					(await ui.custom(keyboardFactory, {
+						title: "Keyboard fixture",
+					})) ?? "undefined"
+				);
+			} finally {
+				unsubscribe();
+			}
+		},
+	});
+	plugin.registerCommand({
+		description: "Try to consume every terminal input while the UI is open.",
+		name: "keyboard-consume",
+		handler: async ({ ui }) => {
+			const unsubscribe = ui.onTerminalInput((data) => {
+				keyboardState.consumingInputs.push(data);
+				return { consume: true };
+			});
+			try {
+				return (
+					(await ui.custom(keyboardFactory, {
+						title: "Keyboard fixture",
+					})) ?? "undefined"
+				);
+			} finally {
+				unsubscribe();
+			}
+		},
+	});
+	plugin.registerCommand({
+		description:
+			"Keep a raw input subscription until it is explicitly removed.",
+		name: "listen-terminal-input",
+		handler: ({ ui }) => {
+			keyboardState.stopInput?.();
+			keyboardState.stopInput = ui.onTerminalInput((data) => {
+				keyboardState.inputEvents.push(data);
+			});
+			return "listening";
+		},
+	});
+	plugin.registerCommand({
+		description: "Remove the fixture raw input subscription.",
+		name: "stop-terminal-input",
+		handler: () => {
+			keyboardState.stopInput?.();
+			keyboardState.stopInput = undefined;
+			return "stopped";
+		},
+	});
+	plugin.registerCommand({
+		description:
+			"Call a no-op raw input subscription in a noninteractive mode.",
+		name: "terminal-input-noop",
+		handler: ({ ui }) => {
+			keyboardState.stopInput = ui.onTerminalInput((data) => {
+				keyboardState.inputEvents.push(data);
+				return { consume: true };
+			});
+			return "terminal input disabled";
+		},
 	});
 	plugin.registerTool({
 		description: "Request custom React UI through host-mediated Plugin UI.",
