@@ -2048,6 +2048,9 @@ test("Plugin theme changes update shared theme state without replacing local sty
 test("JSON, Print, and RPC Plugins receive terminal-free UI defaults", async () => {
 	for (const executionMode of ["json", "print", "rpc"] as const) {
 		const environment = await pluginUiTestEnvironment(executionMode);
+		if (executionMode === "rpc") {
+			environment.unbindPluginUIHost();
+		}
 		try {
 			const { result: select } = await environment.executeCommand(
 				"plugin_ui_fixture",

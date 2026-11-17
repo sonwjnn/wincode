@@ -60,16 +60,9 @@ import type {
 } from "../public";
 import { PluginUICustomError } from "../public";
 import type { PluginRuntime } from "../runtime";
+import type { PluginUIHostBinding } from "./plugin-ui-host-contract";
 
-type PluginUIOwner = Readonly<{
-	pluginId: string;
-	sessionId?: string;
-}>;
-
-type PluginUIHandle = Readonly<{
-	close: () => void;
-	ui: PluginUI;
-}>;
+export type { PluginUIHandle, PluginUIOwner } from "./plugin-ui-host-contract";
 
 type PluginUICustomPresentationState = Readonly<{
 	getRevision: () => number;
@@ -198,16 +191,11 @@ const EMPTY_PLUGIN_CUSTOM_UI = createPluginUICustomStore();
 const subscribeToNoCustomUI = (_listener: () => void) => () => undefined;
 const getNoCustomUIRevision = () => 0;
 
-export type PluginUIHost = Readonly<{
-	close: () => void;
-	create: (
-		owner: PluginUIOwner,
-		beginPrompt: (kind: PluginUIPromptKind, title: string) => () => void,
-		invocation: "command" | "event"
-	) => PluginUIHandle;
-	getCustomUI: () => PluginUICustomHostRequest | null;
-	subscribeCustomUI: (listener: () => void) => () => void;
-}>;
+export type PluginUIHost = PluginUIHostBinding &
+	Readonly<{
+		getCustomUI: () => PluginUICustomHostRequest | null;
+		subscribeCustomUI: (listener: () => void) => () => void;
+	}>;
 
 type PluginUIHostDependencies = Readonly<{
 	customUI: PluginUICustomStore;
@@ -1348,5 +1336,3 @@ export function usePluginUIHost(): PluginUIHost {
 	}
 	return host;
 }
-
-export type { PluginUIHandle, PluginUIOwner };
