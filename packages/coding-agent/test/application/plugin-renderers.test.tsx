@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,11 +14,16 @@ import type {
 import { act, createElement, useEffect } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import { rebuildUneditedSessionContext } from "@/modules/sessions/context-projection";
+import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
 import {
 	filterSessionMessagesForActiveContext,
 	type SessionMessage,
 } from "@/modules/sessions/message";
+import { createSessionSdkWithRuntime } from "@/modules/sessions/sdk";
+import type {
+	SessionSdk,
+	SessionSdkHandle,
+} from "@/modules/sessions/sdk-contract";
 import type {
 	SessionHistoryTreePage,
 	SessionHistoryTreePluginEntry,
@@ -27,7 +32,7 @@ import type { PluginSessionHistoryPersistence } from "@/modules/sessions/session
 import { ChatMessage } from "@/modules/sessions/ui/components/chat-message";
 import { SessionHistoryTreeDialogContent } from "@/modules/sessions/ui/dialogs/session-history-tree-dialog";
 import { createConfigStore } from "@/shared/config/config-store";
-import { toSessionHistoryEntryId, toSessionId } from "@/shared/identifiers";
+import { type SessionId, toSessionHistoryEntryId } from "@/shared/identifiers";
 import {
 	DialogProvider,
 	useDialog,
@@ -38,6 +43,10 @@ import { DEFAULT_THEME } from "@/shared/providers/theme/themes";
 import { setInteractiveRuntimeContext } from "@/shared/runtime-context";
 import historyEntryRendererPlugin from "../../examples/history-entry-renderer-plugin";
 import { testRenderWithClipboard } from "../support/clipboard";
+import {
+	createFakeProviderCollection,
+	createFakeProviderRecorder,
+} from "../support/e2e-fake-runtime";
 import { sessionMessageId } from "../support/identifiers";
 import { captureTestFrame, flushTestRenderer } from "../support/opentui";
 import { successfulSessionWriteOutcome } from "../support/session-facets";
@@ -90,6 +99,117 @@ const withPluginRuntime = async (
 	} finally {
 		await runtime.shutdown();
 		await fs.rm(root, { force: true, recursive: true });
+	}
+};
+
+const activeSessionFixtureCleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+	await Promise.all(
+		activeSessionFixtureCleanups.splice(0).map((cleanup) => cleanup())
+	);
+});
+
+const createActiveSessionPluginHistory = async (): Promise<{
+	history: PluginSessionHistory;
+	persistedEntry: PluginSessionHistoryEntry;
+	readContext: () => readonly object[];
+	sessionId: SessionId;
+}> => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "plugin-renderer-active-session-")
+	);
+	const workspace = path.join(root, "workspace");
+	await fs.mkdir(workspace, { recursive: true });
+	let sdk: SessionSdk | undefined;
+	let handle: SessionSdkHandle | undefined;
+	let sessionHistory: PluginSessionHistory | undefined;
+	const dispose = async (): Promise<void> => {
+		try {
+			await handle?.dispose();
+		} finally {
+			try {
+				await sdk?.dispose();
+			} finally {
+				await fs.rm(root, { force: true, recursive: true });
+			}
+		}
+	};
+	const pluginFactory: PluginFactory = (api) => {
+		const definition = api.definePlugin({ id: "history_renderer" });
+		definition.onSessionStart(({ sessionHistory: activeHistory }) => {
+			if (activeHistory === undefined) {
+				throw new Error("The Plugin Session History capability is missing.");
+			}
+			sessionHistory = activeHistory;
+		});
+	};
+	const recorder = createFakeProviderRecorder();
+	try {
+		sdk = await createSessionSdkWithRuntime({
+			createProviderCollection: () => createFakeProviderCollection(recorder),
+			cwd: workspace,
+			databasePath: path.join(root, "sessions.sqlite"),
+			pluginFactories: [{ factory: pluginFactory, id: "history_renderer" }],
+			pluginPaths: [],
+			workspace,
+		});
+		const sessionId = await sdk.createEmptySession({
+			model: DEFAULT_PROVIDER_MODEL_SELECTION,
+		});
+		handle = await sdk.openSession(sessionId, { autoContinue: false });
+		const activeHandle = handle;
+		const turnCompleted = Promise.withResolvers<boolean>();
+		const unsubscribeTurn = activeHandle.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed"
+			) {
+				turnCompleted.resolve(event.type === "agent-turn-completed");
+			}
+		});
+		try {
+			expect(
+				(
+					await activeHandle.deliver({
+						idempotencyKey: "plugin-renderer-active-session-turn",
+						text: "Prepare a release note.",
+					})
+				).rejected
+			).toBe(false);
+			expect(await turnCompleted.promise).toBe(true);
+		} finally {
+			unsubscribeTurn();
+		}
+		const history = sessionHistory;
+		if (history === undefined) {
+			throw new Error("The Plugin Session History capability is missing.");
+		}
+		const entryId = await history.append(
+			"status",
+			{ label: "restored", privateNote: "plugin-history-payload-only" },
+			"plugin-renderer-active-session-history-write"
+		);
+		const historyPage = await history.read({ limit: 20 });
+		const persistedEntry = historyPage.entries.find(({ id }) => id === entryId);
+		if (persistedEntry === undefined) {
+			throw new Error("The Plugin Session History entry was not persisted.");
+		}
+		const readContext = (): readonly object[] => {
+			let context: readonly object[] | undefined;
+			const unsubscribe = activeHandle.subscribe((snapshot) => {
+				context = snapshot.context;
+			});
+			unsubscribe();
+			if (context === undefined) {
+				throw new Error("The active Session did not publish its context.");
+			}
+			return context;
+		};
+		activeSessionFixtureCleanups.push(dispose);
+		return { history, persistedEntry, readContext, sessionId };
+	} catch (error) {
+		await dispose();
+		throw error;
 	}
 };
 
@@ -270,15 +390,12 @@ test("a Plugin presents Session Transcript messages without changing their model
 });
 
 test("a rendered Plugin history payload remains excluded from Session Context", async () => {
-	const previewSessionId = toSessionId("plugin-entry-preview-session");
-	const persistedEntry: PluginSessionHistoryEntry = {
-		createdAt: new Date("2026-01-02T03:04:05.000Z"),
-		id: toSessionHistoryEntryId("plugin-entry-preview-entry"),
-		parentEntryId: null,
-		payload: { label: "restored", privateNote: "plugin-history-payload-only" },
-		sequence: 1,
-		type: "status",
-	};
+	const {
+		history: activeHistory,
+		persistedEntry,
+		readContext,
+		sessionId: previewSessionId,
+	} = await createActiveSessionPluginHistory();
 	const treeEntry: SessionHistoryTreePluginEntry = {
 		createdAt: persistedEntry.createdAt,
 		id: persistedEntry.id,
@@ -294,7 +411,7 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 		id: toSessionHistoryEntryId("plugin-entry-preview-inactive"),
 		parentEntryId: treeEntry.id,
 		selectedPath: false,
-		sequence: 2,
+		sequence: persistedEntry.sequence + 1,
 	};
 	const missingPluginTreeEntry: SessionHistoryTreePluginEntry = {
 		...inactiveTreeEntry,
@@ -302,7 +419,7 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 		parentEntryId: inactiveTreeEntry.id,
 		pluginId: "not_loaded",
 		selectedPath: true,
-		sequence: 3,
+		sequence: inactiveTreeEntry.sequence + 1,
 		type: "opaque-status",
 	};
 	const unsupportedEntry: PluginSessionHistoryEntry = {
@@ -310,7 +427,7 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 		id: toSessionHistoryEntryId("plugin-entry-preview-unsupported"),
 		parentEntryId: persistedEntry.id,
 		payload: { schemaVersion: 99 },
-		sequence: 4,
+		sequence: missingPluginTreeEntry.sequence + 1,
 	};
 	const unsupportedTreeEntry: SessionHistoryTreePluginEntry = {
 		...treeEntry,
@@ -325,12 +442,9 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 		payload: { label: "after navigation" },
 		sequence: inactiveTreeEntry.sequence,
 	};
-	const transcriptMessage: SessionMessage = {
-		id: sessionMessageId("plugin-entry-session-context-test"),
-		parts: [{ text: "Prepare a release note.", type: "text" }],
-		role: "user",
-	};
+	let renderedEntry: PluginSessionHistoryEntry | undefined;
 	const renderer: PluginEntryRenderer = ({ entry }) => {
+		renderedEntry = entry;
 		const payload = entry.payload;
 		const label =
 			typeof payload === "object" && payload !== null && "label" in payload
@@ -341,18 +455,18 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 		}
 		return <text>{`plugin-rendered:${entry.type}:${String(label)}`}</text>;
 	};
-	let pluginHistory: PluginSessionHistory | undefined;
 	const plugin: PluginFactory = (api) => {
-		const definition = api.definePlugin({ id: "history_renderer" });
-		definition.onSessionStart(({ sessionHistory }) => {
-			if (sessionHistory === undefined) {
-				throw new Error("The Plugin Session History capability is missing.");
-			}
-			pluginHistory = sessionHistory;
-		});
+		api.definePlugin({ id: "history_renderer" });
 		api.registerEntryRenderer("status", renderer);
 	};
 	const readCursors: Array<string | undefined> = [];
+	const storedPage = await activeHistory.read({ limit: 20 });
+	const storedEntry = storedPage.entries.find(
+		({ id }) => id === persistedEntry.id
+	);
+	if (storedEntry === undefined) {
+		throw new Error("The Plugin Session History entry was not persisted.");
+	}
 	let activeLeafId = unsupportedTreeEntry.id;
 	let historyGeneration = 0;
 	let currentHistoryEntries = [unsupportedEntry];
@@ -377,10 +491,17 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 		},
 		read: async (_pluginId, options) => {
 			readCursors.push(options?.cursor);
-			const readPoint = `history-snapshot-${historyGeneration}`;
-			return options?.cursor === "older"
-				? { entries: currentHistoryEntries, readPoint }
-				: { entries: [], nextCursor: "older", readPoint };
+			const readPoint = `${storedPage.readPoint}:${historyGeneration}`;
+			if (options?.cursor !== "older") {
+				return { entries: [], nextCursor: "older", readPoint };
+			}
+			if (historyGeneration > 0) {
+				return { entries: currentHistoryEntries, readPoint };
+			}
+			return {
+				entries: [storedEntry, unsupportedEntry],
+				readPoint,
+			};
 		},
 	};
 
@@ -396,17 +517,6 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 				undefined,
 				historyPersistence
 			);
-			const history = pluginHistory;
-			if (history === undefined) {
-				throw new Error("The Plugin Session History capability is missing.");
-			}
-			expect(
-				await history.append(
-					persistedEntry.type,
-					persistedEntry.payload,
-					"plugin-history-renderer-write"
-				)
-			).toBe(persistedEntry.id);
 			setInteractiveRuntimeContext({
 				args: [],
 				cwd: "/workspace",
@@ -524,19 +634,20 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 				expect(setup.captureCharFrame()).toContain(
 					"plugin-rendered:status:restored"
 				);
-				const sessionContext = rebuildUneditedSessionContext(
-					[transcriptMessage],
-					[]
-				);
-				expect(sessionContext).toEqual([transcriptMessage]);
-				expect(JSON.stringify(sessionContext)).not.toContain(
-					"plugin-history-payload-only"
-				);
-				expect(JSON.stringify(sessionContext)).not.toContain(
+				expect(renderedEntry).toEqual(persistedEntry);
+				const sessionContext = readContext();
+				const serializedContext = JSON.stringify(sessionContext);
+				expect(serializedContext).toContain("Prepare a release note.");
+				expect(serializedContext).not.toContain("plugin-history-payload-only");
+				expect(serializedContext).not.toContain(
 					"plugin-rendered:status:restored"
 				);
 				expect(readCursors).toEqual([undefined, "older"]);
-				expect(await history.read({ cursor: "older" })).toMatchObject({
+				const previewHistory = runtime.getSessionHistoryForPlugin(
+					"history_renderer",
+					previewSessionId
+				);
+				expect(await previewHistory?.read({ cursor: "older" })).toMatchObject({
 					entries: [persistedEntry, unsupportedEntry],
 				});
 				const readsBeforeFallback = [...readCursors];
@@ -566,7 +677,7 @@ test("a rendered Plugin history payload remains excluded from Session Context", 
 				expect(setup.captureCharFrame()).toContain(
 					"Plugin history payload is intentionally hidden"
 				);
-				const storedPage = await history.read({ cursor: "older" });
+				const storedPage = await previewHistory?.read({ cursor: "older" });
 				expect(storedPage?.entries).toEqual([persistedEntry, unsupportedEntry]);
 				await act(() => setup.mockInput.pressEscape());
 				await flushTestRenderer(setup, 2);
