@@ -7,14 +7,18 @@ import type {
 	PluginEntryRenderer,
 	PluginFactory,
 	PluginMessageRenderer,
+	PluginSessionHistory,
 	PluginSessionHistoryEntry,
 	PluginUIContributionResult,
 } from "@wincode/coding-agent";
 import { act, createElement, useEffect } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
-import type { SessionMessage } from "@/modules/sessions/message";
-import { filterSessionMessagesForActiveContext } from "@/modules/sessions/message";
+import { rebuildUneditedSessionContext } from "@/modules/sessions/context-projection";
+import {
+	filterSessionMessagesForActiveContext,
+	type SessionMessage,
+} from "@/modules/sessions/message";
 import type {
 	SessionHistoryTreePage,
 	SessionHistoryTreePluginEntry,
@@ -36,6 +40,7 @@ import historyEntryRendererPlugin from "../../examples/history-entry-renderer-pl
 import { testRenderWithClipboard } from "../support/clipboard";
 import { sessionMessageId } from "../support/identifiers";
 import { captureTestFrame, flushTestRenderer } from "../support/opentui";
+import { successfulSessionWriteOutcome } from "../support/session-facets";
 
 const FirstMessageRenderer: PluginMessageRenderer = ({ message }) => {
 	void message;
@@ -264,13 +269,13 @@ test("a Plugin presents Session Transcript messages without changing their model
 	);
 });
 
-test("a loaded Plugin renders durable Selected Path entries after navigation and reopen", async () => {
+test("a rendered Plugin history payload remains excluded from Session Context", async () => {
 	const previewSessionId = toSessionId("plugin-entry-preview-session");
 	const persistedEntry: PluginSessionHistoryEntry = {
 		createdAt: new Date("2026-01-02T03:04:05.000Z"),
 		id: toSessionHistoryEntryId("plugin-entry-preview-entry"),
 		parentEntryId: null,
-		payload: { label: "restored" },
+		payload: { label: "restored", privateNote: "plugin-history-payload-only" },
 		sequence: 1,
 		type: "status",
 	};
@@ -320,6 +325,11 @@ test("a loaded Plugin renders durable Selected Path entries after navigation and
 		payload: { label: "after navigation" },
 		sequence: inactiveTreeEntry.sequence,
 	};
+	const transcriptMessage: SessionMessage = {
+		id: sessionMessageId("plugin-entry-session-context-test"),
+		parts: [{ text: "Prepare a release note.", type: "text" }],
+		role: "user",
+	};
 	const renderer: PluginEntryRenderer = ({ entry }) => {
 		const payload = entry.payload;
 		const label =
@@ -331,17 +341,39 @@ test("a loaded Plugin renders durable Selected Path entries after navigation and
 		}
 		return <text>{`plugin-rendered:${entry.type}:${String(label)}`}</text>;
 	};
+	let pluginHistory: PluginSessionHistory | undefined;
 	const plugin: PluginFactory = (api) => {
-		api.definePlugin({ id: "history_renderer" });
+		const definition = api.definePlugin({ id: "history_renderer" });
+		definition.onSessionStart(({ sessionHistory }) => {
+			if (sessionHistory === undefined) {
+				throw new Error("The Plugin Session History capability is missing.");
+			}
+			pluginHistory = sessionHistory;
+		});
 		api.registerEntryRenderer("status", renderer);
 	};
 	const readCursors: Array<string | undefined> = [];
 	let activeLeafId = unsupportedTreeEntry.id;
 	let historyGeneration = 0;
-	let currentHistoryEntries = [persistedEntry, unsupportedEntry];
+	let currentHistoryEntries = [unsupportedEntry];
 	const historyPersistence: PluginSessionHistoryPersistence = {
-		append: async () => {
-			throw new Error("The preview must not append history.");
+		append: async (_pluginId, input) => {
+			const entry: PluginSessionHistoryEntry = {
+				...persistedEntry,
+				payload: input.payload,
+				type: input.type,
+			};
+			currentHistoryEntries = [
+				entry,
+				...currentHistoryEntries.filter(({ id }) => id !== entry.id),
+			];
+			return {
+				entryId: entry.id,
+				writeOutcome: successfulSessionWriteOutcome(
+					input.operationId,
+					entry.sequence
+				),
+			};
 		},
 		read: async (_pluginId, options) => {
 			readCursors.push(options?.cursor);
@@ -364,6 +396,17 @@ test("a loaded Plugin renders durable Selected Path entries after navigation and
 				undefined,
 				historyPersistence
 			);
+			const history = pluginHistory;
+			if (history === undefined) {
+				throw new Error("The Plugin Session History capability is missing.");
+			}
+			expect(
+				await history.append(
+					persistedEntry.type,
+					persistedEntry.payload,
+					"plugin-history-renderer-write"
+				)
+			).toBe(persistedEntry.id);
 			setInteractiveRuntimeContext({
 				args: [],
 				cwd: "/workspace",
@@ -481,12 +524,19 @@ test("a loaded Plugin renders durable Selected Path entries after navigation and
 				expect(setup.captureCharFrame()).toContain(
 					"plugin-rendered:status:restored"
 				);
-				expect(readCursors).toEqual([undefined, "older"]);
-				const history = runtime.getSessionHistoryForPlugin(
-					"history_renderer",
-					previewSessionId
+				const sessionContext = rebuildUneditedSessionContext(
+					[transcriptMessage],
+					[]
 				);
-				expect(await history?.read({ cursor: "older" })).toMatchObject({
+				expect(sessionContext).toEqual([transcriptMessage]);
+				expect(JSON.stringify(sessionContext)).not.toContain(
+					"plugin-history-payload-only"
+				);
+				expect(JSON.stringify(sessionContext)).not.toContain(
+					"plugin-rendered:status:restored"
+				);
+				expect(readCursors).toEqual([undefined, "older"]);
+				expect(await history.read({ cursor: "older" })).toMatchObject({
 					entries: [persistedEntry, unsupportedEntry],
 				});
 				const readsBeforeFallback = [...readCursors];
@@ -516,7 +566,7 @@ test("a loaded Plugin renders durable Selected Path entries after navigation and
 				expect(setup.captureCharFrame()).toContain(
 					"Plugin history payload is intentionally hidden"
 				);
-				const storedPage = await history?.read({ cursor: "older" });
+				const storedPage = await history.read({ cursor: "older" });
 				expect(storedPage?.entries).toEqual([persistedEntry, unsupportedEntry]);
 				await act(() => setup.mockInput.pressEscape());
 				await flushTestRenderer(setup, 2);
