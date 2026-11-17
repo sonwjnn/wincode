@@ -6,6 +6,7 @@ import type { InputRenderable } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type {
+	PluginFactory,
 	PluginUICustomComponent,
 	PluginUICustomContext,
 	SessionSdk,
@@ -75,6 +76,23 @@ type CustomUIState = {
 	lastContext: PluginUICustomContext<string> | undefined;
 	resolveAsyncFactory: (component: PluginUICustomComponent<string>) => void;
 	throwComponent: boolean;
+};
+
+type PluginKeyboardState = {
+	componentKeys: string[];
+	consumingInputs: string[];
+	inputEvents: string[];
+	localInputs: string[];
+	shortcutCalls: number;
+	shortcutContexts: string[];
+	shortcutThemeCount: number;
+	stopInput: (() => void) | undefined;
+};
+
+type OtherPluginKeyboardState = {
+	inputEvents: string[];
+	shortcutCalls: number;
+	stopInput: (() => void) | undefined;
 };
 
 const pluginUiTestEnvironment = async (
@@ -403,6 +421,240 @@ test("a direct Plugin Command opens custom UI, returns once, and restores its co
 		expect(environment.setup.captureCharFrame()).not.toContain(
 			"Fixture custom UI"
 		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Plugin shortcuts and raw input preserve focused UI and host key precedence", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		kittyKeyboard: true,
+	});
+	const keyboardState = environment.runtime.getResource<PluginKeyboardState>(
+		"plugin_ui_fixture",
+		"keyboard_state"
+	);
+	const otherKeyboardState =
+		environment.runtime.getResource<OtherPluginKeyboardState>(
+			"plugin_ui_other_fixture",
+			"keyboard_state"
+		);
+	if (keyboardState === undefined || otherKeyboardState === undefined) {
+		throw new Error(
+			`The keyboard fixture Plugin state was not registered: ${environment.runtime
+				.getLoadedPlugins()
+				.map(({ id }) => id)
+				.join(
+					","
+				)}; ${environment.runtime.diagnostics.map(({ message }) => message).join(" | ")}`
+		);
+	}
+	const pressShortcut = async (): Promise<void> => {
+		await act(async () => {
+			environment.setup.mockInput.pressKey("p", { ctrl: true, shift: true });
+			await flushTestRenderer(environment.setup, 2);
+		});
+	};
+	const pressX = async (): Promise<void> => {
+		await act(async () => {
+			environment.setup.mockInput.pressKey("x");
+			await flushTestRenderer(environment.setup, 2);
+		});
+	};
+	try {
+		await pressShortcut();
+		expect(keyboardState.shortcutCalls).toBe(1);
+		expect(otherKeyboardState.shortcutCalls).toBe(1);
+		expect(keyboardState.shortcutContexts).toEqual([
+			`plugin_ui_fixture:${environment.sessionId}:ctrl+shift+p`,
+		]);
+		expect(keyboardState.shortcutThemeCount).toBeGreaterThan(0);
+
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"keyboard"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Keyboard fixture");
+
+		await pressShortcut();
+		expect(keyboardState.shortcutCalls).toBe(1);
+		expect(keyboardState.localInputs).toEqual(["Ctrl+Shift+P"]);
+		expect(environment.setup.captureCharFrame()).toContain("Keyboard fixture");
+
+		await pressX();
+		expect(keyboardState.inputEvents).toContain("\u001b[120u");
+		expect(keyboardState.localInputs).toEqual(["Ctrl+Shift+P"]);
+
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+		expect(keyboardState.inputEvents).not.toContain("\u001b");
+		const inputCount = keyboardState.inputEvents.length;
+		await pressX();
+		expect(keyboardState.inputEvents).toHaveLength(inputCount);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("PluginAPI rejects shortcut registrations for host-owned keys", async () => {
+	const root = await fs.mkdtemp(
+		path.join(os.tmpdir(), "wincode-plugin-shortcut-")
+	);
+	const workspace = path.join(root, "workspace");
+	await fs.mkdir(workspace, { recursive: true });
+	const shortcuts = [
+		{ id: "plugin_escape_shortcut", shortcut: "escape" },
+		{ id: "plugin_ctrl_c_shortcut", shortcut: "ctrl+c" },
+	] as const;
+	const runtime = await loadPlugins({
+		bundledPlugins: shortcuts.map(
+			({ id, shortcut }): Readonly<{ factory: PluginFactory; id: string }> => ({
+				factory: (api) => {
+					api.definePlugin({ id });
+					api.registerShortcut(shortcut, {
+						description: "Attempt to replace a host-owned key.",
+						handler: () => undefined,
+					});
+				},
+				id,
+			})
+		),
+		cliPaths: [],
+		config: {
+			configStore: createConfigStore({
+				homeRoot: root,
+				trustedProjectRoots: [workspace],
+			}),
+			cwd: workspace,
+			homeRoot: root,
+			trustedProjectRoots: [workspace],
+			workspace,
+		},
+		userDataDir: root,
+	});
+	try {
+		const shortcutFailures = runtime.diagnostics.filter(({ message }) =>
+			message.includes("Plugin factory failed")
+		);
+		expect(shortcutFailures).toHaveLength(2);
+		expect(shortcutFailures.map(({ message }) => message)).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining("reserved Escape or Ctrl+C"),
+				expect.stringContaining("reserved Escape or Ctrl+C"),
+			])
+		);
+		for (const { id } of shortcuts) {
+			expect(
+				runtime.getLoadedPlugins().map(({ id: loadedId }) => loadedId)
+			).not.toContain(id);
+		}
+	} finally {
+		await runtime.shutdown();
+		await fs.rm(root, { force: true, recursive: true });
+	}
+});
+
+test("raw Plugin input cannot consume reserved dismissal or reclaim keys", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		kittyKeyboard: true,
+	});
+	const keyboardState = environment.runtime.getResource<PluginKeyboardState>(
+		"plugin_ui_fixture",
+		"keyboard_state"
+	);
+	if (keyboardState === undefined) {
+		throw new Error("The keyboard fixture Plugin state was not registered.");
+	}
+	try {
+		const { result: escapeResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"keyboard-consume"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await environment.pressEscape();
+		expect(await escapeResult).toBe("undefined");
+		expect(keyboardState.consumingInputs).toHaveLength(0);
+
+		const { result: reclaimResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"keyboard-consume"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await environment.pressReclaim();
+		expect(await reclaimResult).toBe("undefined");
+		expect(keyboardState.consumingInputs).toHaveLength(0);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Plugin view cleanup removes only that owner's shortcuts and raw listeners", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		kittyKeyboard: true,
+	});
+	const keyboardState = environment.runtime.getResource<PluginKeyboardState>(
+		"plugin_ui_fixture",
+		"keyboard_state"
+	);
+	const otherKeyboardState =
+		environment.runtime.getResource<OtherPluginKeyboardState>(
+			"plugin_ui_other_fixture",
+			"keyboard_state"
+		);
+	if (keyboardState === undefined || otherKeyboardState === undefined) {
+		throw new Error("The keyboard fixture Plugin state was not registered.");
+	}
+	const pressShortcut = async (): Promise<void> => {
+		await act(async () => {
+			environment.setup.mockInput.pressKey("p", { ctrl: true, shift: true });
+			await flushTestRenderer(environment.setup, 2);
+		});
+	};
+	const pressX = async (): Promise<void> => {
+		await act(async () => {
+			environment.setup.mockInput.pressKey("x");
+			await flushTestRenderer(environment.setup, 2);
+		});
+	};
+	try {
+		await environment.executeCommand(
+			"plugin_ui_fixture",
+			"listen-terminal-input"
+		);
+		await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"listen-other-terminal-input"
+		);
+		await pressX();
+		expect(keyboardState.inputEvents).toHaveLength(1);
+		expect(otherKeyboardState.inputEvents).toHaveLength(1);
+		await pressShortcut();
+		expect(keyboardState.shortcutCalls).toBe(1);
+		expect(otherKeyboardState.shortcutCalls).toBe(1);
+
+		environment.runtime.disablePlugin(
+			"plugin_ui_fixture",
+			"disabled by keyboard owner cleanup test"
+		);
+		const firstPluginInputCount = keyboardState.inputEvents.length;
+		const otherPluginInputCount = otherKeyboardState.inputEvents.length;
+		await pressX();
+		expect(keyboardState.inputEvents).toHaveLength(firstPluginInputCount);
+		expect(otherKeyboardState.inputEvents).toHaveLength(
+			otherPluginInputCount + 1
+		);
+		await pressShortcut();
+		expect(keyboardState.shortcutCalls).toBe(1);
+		expect(otherKeyboardState.shortcutCalls).toBe(2);
+
+		await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"stop-other-terminal-input"
+		);
+		const unsubscribedInputCount = otherKeyboardState.inputEvents.length;
+		await pressX();
+		expect(otherKeyboardState.inputEvents).toHaveLength(unsubscribedInputCount);
 	} finally {
 		await environment.dispose();
 	}
@@ -1633,6 +1885,22 @@ test("JSON, Print, and RPC Plugins receive terminal-free UI defaults", async () 
 				"plugin_ui_fixture",
 				"notify"
 			);
+			const keyboardState =
+				environment.runtime.getResource<PluginKeyboardState>(
+					"plugin_ui_fixture",
+					"keyboard_state"
+				);
+			if (keyboardState === undefined) {
+				throw new Error(
+					"The keyboard fixture Plugin state was not registered."
+				);
+			}
+			const initialShortcutCalls = keyboardState.shortcutCalls;
+			const initialInputEvents = keyboardState.inputEvents.length;
+			const { result: terminalInput } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				"terminal-input-noop"
+			);
 			const { result: theme } = await environment.executeCommand(
 				"plugin_ui_fixture",
 				"theme"
@@ -1650,6 +1918,14 @@ test("JSON, Print, and RPC Plugins receive terminal-free UI defaults", async () 
 			expect(await custom).toBe("undefined");
 			expect(environment.customUIState.factoryCalls).toBe(initialFactoryCalls);
 			expect(await notification).toBe("notified");
+			expect(await terminalInput).toBe("terminal input disabled");
+			await act(async () => {
+				environment.setup.mockInput.pressKey("p", { ctrl: true });
+				await flushTestRenderer(environment.setup, 2);
+			});
+			expect(keyboardState.shortcutCalls).toBe(initialShortcutCalls);
+			expect(keyboardState.inputEvents).toHaveLength(initialInputEvents);
+			keyboardState.stopInput?.();
 			const themeResult = JSON.parse((await theme) ?? "{}");
 			expect(themeResult).toEqual({
 				changed: {

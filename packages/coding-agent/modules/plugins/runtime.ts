@@ -58,6 +58,8 @@ import type {
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginSessionState,
+	PluginShortcutContext,
+	PluginShortcutRegistration,
 	PluginShutdownHook,
 	PluginStatusPanelActionContext,
 	PluginStatusPanelRegistration,
@@ -139,6 +141,7 @@ export type LoadedPlugin = Readonly<{
 	mcpServers?: readonly PluginMcpServerRegistration[];
 	statusPanels?: readonly PluginStatusPanelRegistration[];
 	providers?: readonly PluginProviderDescriptor[];
+	shortcuts?: readonly PluginShortcutRegistration[];
 	sourceIdentity?: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onBeforeCompaction?: PluginBeforeCompactionHook;
@@ -264,7 +267,10 @@ type SessionPluginState = {
 	tools: Map<string, PluginToolDescriptor>;
 };
 
-type PluginUIHostBinding = Readonly<{ host: PluginUIHost }>;
+type PluginUIHostBinding = Readonly<{
+	host: PluginUIHost;
+	shortcutUnsubscribers: Map<string, () => void>;
+}>;
 
 type PluginUIInvocation = "command" | "event";
 
@@ -458,11 +464,32 @@ export const createPluginRuntime = (
 			}
 		};
 	};
+	const closePluginUIShortcuts = (
+		sessionId: string,
+		binding?: PluginUIHostBinding,
+		pluginId?: string
+	): void => {
+		const activeBinding = binding ?? pluginUIHosts.get(sessionId);
+		if (activeBinding === undefined) {
+			return;
+		}
+		for (const [
+			ownerPluginId,
+			unsubscribe,
+		] of activeBinding.shortcutUnsubscribers) {
+			if (pluginId !== undefined && ownerPluginId !== pluginId) {
+				continue;
+			}
+			unsubscribe();
+			activeBinding.shortcutUnsubscribers.delete(ownerPluginId);
+		}
+	};
 	const closePluginUIHandles = (
 		sessionId: string,
 		binding?: PluginUIHostBinding,
 		pluginId?: string
 	): void => {
+		closePluginUIShortcuts(sessionId, binding, pluginId);
 		const handles = pluginUIHandles.get(sessionId);
 		if (handles === undefined) {
 			return;
@@ -592,6 +619,93 @@ export const createPluginRuntime = (
 		!disabledPlugins.has(plugin.id) &&
 		(sessionId === undefined ||
 			!sessionStates.get(sessionId)?.disabled.has(plugin.id));
+	const registerPluginShortcuts = (
+		plugin: LoadedPlugin,
+		sessionId: string,
+		binding: PluginUIHostBinding
+	): void => {
+		const shortcuts = plugin.shortcuts ?? [];
+		const state = sessionStates.get(sessionId);
+		if (
+			shortcuts.length === 0 ||
+			binding.shortcutUnsubscribers.has(plugin.id) ||
+			state === undefined ||
+			state.closed ||
+			!state.started.has(plugin.id) ||
+			!isEnabledForSession(plugin, sessionId) ||
+			(state.context.executionMode !== undefined &&
+				state.context.executionMode !== "interactive")
+		) {
+			return;
+		}
+		const unsubscribers: (() => void)[] = [];
+		try {
+			for (const registration of shortcuts) {
+				unsubscribers.push(
+					binding.host.registerShortcut(
+						{ pluginId: plugin.id, sessionId },
+						registration.shortcut,
+						() => {
+							const activeState = sessionStates.get(sessionId);
+							if (
+								pluginUIHosts.get(sessionId) !== binding ||
+								activeState !== state ||
+								activeState.closed ||
+								!activeState.started.has(plugin.id) ||
+								!isEnabledForSession(plugin, sessionId)
+							) {
+								return;
+							}
+							const ui = getPluginUI(plugin.id, sessionId);
+							if (ui === unsupportedPluginUI) {
+								return;
+							}
+							const context = Object.freeze({
+								pluginId: plugin.id,
+								sessionId,
+								shortcut: registration.shortcut,
+								ui,
+							}) satisfies PluginShortcutContext;
+							try {
+								void Promise.resolve(registration.handler(context)).catch(
+									(error: unknown) =>
+										logPluginFailure(
+											"Plugin keyboard shortcut failed",
+											plugin,
+											"shortcut",
+											error
+										)
+								);
+							} catch (error) {
+								void logPluginFailure(
+									"Plugin keyboard shortcut failed",
+									plugin,
+									"shortcut",
+									error
+								);
+							}
+						}
+					)
+				);
+			}
+		} catch (error) {
+			for (const unsubscribe of unsubscribers) {
+				unsubscribe();
+			}
+			void logPluginFailure(
+				"Plugin keyboard shortcut registration failed",
+				plugin,
+				"shortcut-registration",
+				error
+			);
+			return;
+		}
+		binding.shortcutUnsubscribers.set(plugin.id, () => {
+			for (const unsubscribe of unsubscribers) {
+				unsubscribe();
+			}
+		});
+	};
 	const commandsForPlugin = (
 		plugin: LoadedPlugin,
 		sessionId?: string
@@ -973,6 +1087,10 @@ export const createPluginRuntime = (
 			);
 			publishScope();
 			state.started.add(plugin.id);
+			const binding = pluginUIHosts.get(state.context.sessionId);
+			if (binding !== undefined) {
+				registerPluginShortcuts(plugin, state.context.sessionId, binding);
+			}
 		} catch (error) {
 			if (error instanceof PluginRegistrationError) {
 				publishScope();
@@ -1390,18 +1508,24 @@ export const createPluginRuntime = (
 
 		bindPromptSelectionTarget: promptSelectionBridge.bindPromptSelectionTarget,
 		bindPluginUIHost(sessionId, host) {
-			const binding = Object.freeze({ host });
+			const binding: PluginUIHostBinding = Object.freeze({
+				host,
+				shortcutUnsubscribers: new Map(),
+			});
 			const previous = pluginUIHosts.get(sessionId);
 			if (previous !== undefined) {
 				closePluginUIHandles(sessionId, previous);
 			}
 			pluginUIHosts.set(sessionId, binding);
+			for (const plugin of plugins) {
+				registerPluginShortcuts(plugin, sessionId, binding);
+			}
 			return () => {
 				if (pluginUIHosts.get(sessionId) !== binding) {
 					return;
 				}
-				pluginUIHosts.delete(sessionId);
 				closePluginUIHandles(sessionId, binding);
+				pluginUIHosts.delete(sessionId);
 			};
 		},
 		getPluginUI,
@@ -1411,7 +1535,11 @@ export const createPluginRuntime = (
 				return;
 			}
 			disabledPlugins.add(pluginId);
-			for (const sessionId of pluginUIHandles.keys()) {
+			const sessionIds = new Set([
+				...pluginUIHandles.keys(),
+				...pluginUIHosts.keys(),
+			]);
+			for (const sessionId of sessionIds) {
 				closePluginUIHandles(sessionId, undefined, pluginId);
 			}
 			addDiagnostic(plugin, message);

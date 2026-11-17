@@ -12,11 +12,17 @@ import {
 	omitUndefined,
 } from "@wincode/utils";
 import { z } from "zod";
+import {
+	formatKeyboardShortcut,
+	parseKeyboardShortcut,
+} from "@/shared/providers/keyboard-layer/shortcut";
 import type {
 	PluginAgentRegistration,
 	PluginCommandRegistration,
 	PluginInputSchema,
 	PluginProviderRegistration,
+	PluginShortcutHandler,
+	PluginShortcutRegistration,
 	PluginToolRegistration,
 } from "./public";
 import type { PluginCommand, PluginTool } from "./types";
@@ -213,6 +219,38 @@ export const validatePluginProvider = (
 };
 
 /** Validates one Plugin Command before it can replace an owner's registration. */
+export const validatePluginShortcut = (
+	shortcutCandidate: unknown,
+	optionsCandidate: unknown
+): PluginShortcutRegistration => {
+	if (
+		typeof shortcutCandidate !== "string" ||
+		!isPlainObject(optionsCandidate) ||
+		!isNonEmptyString(optionsCandidate.description) ||
+		typeof optionsCandidate.handler !== "function"
+	) {
+		throw new Error(
+			"Plugin Shortcuts require a shortcut, description, and handler."
+		);
+	}
+	const shortcut = parseKeyboardShortcut(shortcutCandidate);
+	if (shortcut === undefined) {
+		throw new Error(
+			"Plugin Shortcuts must use modifier+key notation such as 'ctrl+shift+p'."
+		);
+	}
+	if (shortcut.key === "escape" || (shortcut.ctrl && shortcut.key === "c")) {
+		throw new Error(
+			"Plugin Shortcuts cannot use reserved Escape or Ctrl+C keys."
+		);
+	}
+	return Object.freeze({
+		description: optionsCandidate.description.trim(),
+		handler: optionsCandidate.handler as PluginShortcutHandler,
+		shortcut: formatKeyboardShortcut(shortcut),
+	});
+};
+
 export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 	if (
 		!isPlainObject(candidate) ||

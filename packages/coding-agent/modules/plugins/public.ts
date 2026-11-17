@@ -173,6 +173,11 @@ export type PluginThemeChangeResult =
 	| Readonly<{ success: true }>
 	| Readonly<{ success: false; error: string }>;
 
+export type PluginTerminalInputResult = Readonly<{ consume: true }> | undefined;
+export type PluginTerminalInputHandler = (
+	data: string
+) => PluginTerminalInputResult;
+
 /** UI-neutral operations the host makes available to a Plugin callback. */
 export type PluginUI = Readonly<{
 	select: (
@@ -203,6 +208,8 @@ export type PluginUI = Readonly<{
 		factory: PluginUICustomFactory<Value>,
 		options?: PluginUICustomOptions
 	) => Promise<Value | undefined>;
+	/** Observes raw terminal sequences in Interactive Mode; return consume to stop host parsing. */
+	onTerminalInput: (handler: PluginTerminalInputHandler) => () => void;
 }>;
 
 export type PluginUIContext = Readonly<{ ui: PluginUI }>;
@@ -516,6 +523,25 @@ export type PluginRegistrationAPI = PluginToolRegistrationAPI &
 		registerCommand: (command: PluginCommandRegistration) => void;
 	}>;
 
+export type PluginShortcutContext = PluginUIContext &
+	Readonly<{
+		pluginId: string;
+		sessionId: string;
+		shortcut: string;
+	}>;
+
+export type PluginShortcutHandler = (
+	context: PluginShortcutContext
+) => void | Promise<void>;
+
+export type PluginShortcutOptions = Readonly<{
+	description: string;
+	handler: PluginShortcutHandler;
+}>;
+
+export type PluginShortcutRegistration = PluginShortcutOptions &
+	Readonly<{ shortcut: string }>;
+
 export type PluginSessionStartHook = (
 	context: PluginSessionHookContext,
 	api: PluginRegistrationAPI
@@ -575,6 +601,10 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 		registerAgent: (agent: PluginAgentRegistration) => void;
 		registerResource: (name: string, resource: unknown) => void;
 		registerStatusPanel: (panel: PluginStatusPanelRegistration) => void;
+		registerShortcut: (
+			shortcut: string,
+			options: PluginShortcutOptions
+		) => void;
 		onSessionStart: (handler: PluginSessionStartHook) => void;
 		onSessionShutdown: (handler: PluginSessionShutdownHook) => void;
 		onBeforeSessionHistoryNavigation: (
@@ -597,6 +627,8 @@ export type PluginAPI = Readonly<{
 	definePlugin: (
 		identity: Readonly<{ id: string; sessionStateVersion?: number }>
 	) => PluginDefinitionAPI;
+	/** Registers a shortcut for the Plugin declared with definePlugin(). */
+	registerShortcut: (shortcut: string, options: PluginShortcutOptions) => void;
 	/** Set the focused Interactive composer model for future Submissions. */
 	setModel: (model: ProviderModelSelection) => Promise<boolean>;
 	/** Set or clear the focused composer ThinkingLevel for future Submissions; unsupported levels are ignored. */

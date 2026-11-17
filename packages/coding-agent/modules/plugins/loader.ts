@@ -46,6 +46,7 @@ import type {
 	PluginSessionHistoryNavigatedHook,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
+	PluginShortcutRegistration,
 	PluginShutdownHook,
 	PluginStatusPanelRegistration,
 	PluginUIPromptHook,
@@ -54,6 +55,7 @@ import {
 	validatePluginAgent,
 	validatePluginCommand,
 	validatePluginProvider,
+	validatePluginShortcut,
 	validatePluginTool,
 } from "./registration";
 import {
@@ -98,6 +100,7 @@ type MutablePluginDraft = {
 	mcpServers: Map<string, PluginJsonValue>;
 	providers: Map<string, PluginProviderRegistration>;
 	resources: Map<string, PluginResourceDescriptor>;
+	shortcuts: Map<string, PluginShortcutRegistration>;
 	statusPanels: Map<string, PluginStatusPanelRegistration>;
 	id: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
@@ -471,6 +474,25 @@ const createRegistrationAPI = (
 				}
 			);
 		},
+		registerShortcut(shortcut, options) {
+			assertOpen();
+			try {
+				const validated = validatePluginShortcut(shortcut, options);
+				if (plugin.shortcuts.has(validated.shortcut)) {
+					throw new Error(
+						`Plugin Shortcut '${validated.shortcut}' is already registered by this Plugin.`
+					);
+				}
+				plugin.shortcuts.set(validated.shortcut, validated);
+			} catch (error) {
+				addDiagnostic(
+					diagnostics,
+					`Plugin Shortcut registration failed: ${messageFor(error)}`,
+					plugin.sourcePath
+				);
+				throw error;
+			}
+		},
 		registerProvider(provider) {
 			assertOpen();
 			try {
@@ -556,10 +578,17 @@ const createPluginAPI = (
 	commandNames: ReadonlySet<string>,
 	customCommandNames: ReadonlySet<string>,
 	promptSelectionBridge: PluginPromptSelectionBridge
-): PluginAPI =>
-	Object.freeze({
+): PluginAPI => {
+	let definitionAPI: PluginDefinitionAPI | undefined;
+	return Object.freeze({
 		setModel: promptSelectionBridge.setModel,
 		setThinkingLevel: promptSelectionBridge.setThinkingLevel,
+		registerShortcut(shortcut, options) {
+			if (definitionAPI === undefined) {
+				throw new Error("Define the Plugin before registering its shortcuts.");
+			}
+			definitionAPI.registerShortcut(shortcut, options);
+		},
 		definePlugin(identity) {
 			if (
 				!(isOpen() && isObjectLike(identity)) ||
@@ -578,6 +607,7 @@ const createPluginAPI = (
 				mcpServers: new Map(),
 				providers: new Map(),
 				resources: new Map(),
+				shortcuts: new Map(),
 				statusPanels: new Map(),
 				id: identity.id,
 				...omitUndefined({ sessionStateVersion: identity.sessionStateVersion }),
@@ -586,7 +616,7 @@ const createPluginAPI = (
 				workspace: context.workspace,
 			};
 			setDraft(draft);
-			return createRegistrationAPI(
+			definitionAPI = createRegistrationAPI(
 				draft,
 				isOpen,
 				diagnostics,
@@ -594,8 +624,10 @@ const createPluginAPI = (
 				commandNames,
 				customCommandNames
 			);
+			return definitionAPI;
 		},
 	});
+};
 
 const loadedPluginFromDraft = (
 	draft: MutablePluginDraft,
@@ -703,6 +735,7 @@ const loadedPluginFromDraft = (
 		),
 		id: draft.id,
 		resources: Object.freeze([...draft.resources.values()]),
+		shortcuts: Object.freeze([...draft.shortcuts.values()]),
 		statusPanels: Object.freeze([...draft.statusPanels.values()]),
 		providers: Object.freeze(registeredProviders),
 		sourceIdentity,

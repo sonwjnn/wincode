@@ -30,7 +30,10 @@ import {
 	useDialogLayer,
 } from "../../../shared/providers/dialog/dialog-provider";
 import { CHAT_TEXT_AREA_KEY_BINDINGS } from "../../../shared/providers/keyboard-layer/constants";
-import { useKeyboardLayer } from "../../../shared/providers/keyboard-layer/keyboard-layer-provider";
+import {
+	type KeyboardLayerContextValue,
+	useKeyboardLayer,
+} from "../../../shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../../../shared/providers/theme/theme-provider";
 import type { Theme } from "../../../shared/providers/theme/themes";
 import {
@@ -64,6 +67,14 @@ type PluginUIHandle = Readonly<{
 	close: () => void;
 	ui: PluginUI;
 }>;
+
+type PluginUIKeyboardLayer = Pick<
+	KeyboardLayerContextValue,
+	"registerShortcut" | "registerTerminalInput"
+>;
+
+const keyboardOwnerId = (owner: PluginUIOwner): string =>
+	`${owner.sessionId ?? "process"}:${owner.pluginId}`;
 
 type PluginUICustomHostRequest = Readonly<{
 	dismiss: () => void;
@@ -117,6 +128,11 @@ const EMPTY_PLUGIN_CUSTOM_UI = createPluginUICustomStore();
 
 export type PluginUIHost = Readonly<{
 	close: () => void;
+	registerShortcut: (
+		owner: PluginUIOwner,
+		shortcut: string,
+		handler: () => void
+	) => () => void;
 	create: (
 		owner: PluginUIOwner,
 		beginPrompt: (kind: PluginUIPromptKind, title: string) => () => void,
@@ -129,6 +145,7 @@ export type PluginUIHost = Readonly<{
 type PluginUIHostDependencies = Readonly<{
 	customUI: PluginUICustomStore;
 	dialog: () => DialogContextValue;
+	keyboardLayer: () => PluginUIKeyboardLayer;
 	theme: () => Readonly<{ setTheme: (theme: Theme) => void }>;
 	toast: () => ToastContextValue;
 }>;
@@ -460,9 +477,7 @@ export function PluginUICustomEditor({
 		host?.getCustomUI ?? EMPTY_PLUGIN_CUSTOM_UI.get
 	);
 	const activeRequest = request?.sessionId === sessionId ? request : null;
-	const activeRequestRef = useRef(activeRequest);
-	activeRequestRef.current = activeRequest;
-	const { isTopLayer, pop, push } = useKeyboardLayer();
+	const { pop, push } = useKeyboardLayer();
 	const renderer = useRenderer();
 	const { currentTheme } = useTheme();
 	const dimensions = useTerminalDimensions();
@@ -495,29 +510,23 @@ export function PluginUICustomEditor({
 		if (activeRequest === null || layerId === undefined) {
 			return;
 		}
-		push(layerId, () => {
-			activeRequest.dismiss();
-			return true;
-		});
+		push(
+			layerId,
+			() => {
+				activeRequest.dismiss();
+				return true;
+			},
+			() => {
+				activeRequest.dismiss();
+				return true;
+			}
+		);
 		return () => {
 			if (!renderer.isDestroyed) {
 				pop(layerId);
 			}
 		};
 	}, [activeRequest, layerId, pop, push, renderer]);
-
-	useKeyboard((key) => {
-		const current = activeRequestRef.current;
-		if (
-			current === null ||
-			!isTopLayer(`plugin-custom-${current.id}`) ||
-			key.name !== "escape"
-		) {
-			return;
-		}
-		key.preventDefault();
-		current.dismiss();
-	});
 
 	useEffect(() => {
 		if (host === null || activeRequest === null) {
@@ -662,11 +671,14 @@ const isValidTheme = (candidate: unknown): candidate is Theme => {
 const createPluginUIHost = ({
 	customUI,
 	dialog: getDialog,
+	keyboardLayer: getKeyboardLayer,
 	theme: getThemeContext,
 	toast: getToast,
 }: PluginUIHostDependencies): PluginUIHost => {
 	let activeCustomRequest: (() => void) | undefined;
 	let hostClosed = false;
+	const shortcutSubscriptions = new Set<() => void>();
+	const terminalInputSubscriptions = new Set<() => void>();
 	return Object.freeze({
 		close() {
 			if (hostClosed) {
@@ -674,11 +686,39 @@ const createPluginUIHost = ({
 			}
 			hostClosed = true;
 			activeCustomRequest?.();
+			for (const unsubscribe of [...shortcutSubscriptions]) {
+				unsubscribe();
+			}
+			for (const unsubscribe of [...terminalInputSubscriptions]) {
+				unsubscribe();
+			}
+		},
+		registerShortcut(owner, shortcut, handler) {
+			if (hostClosed) {
+				return () => undefined;
+			}
+			const remove = getKeyboardLayer().registerShortcut(
+				keyboardOwnerId(owner),
+				shortcut,
+				handler
+			);
+			let active = true;
+			const unsubscribe = (): void => {
+				if (!active) {
+					return;
+				}
+				active = false;
+				shortcutSubscriptions.delete(unsubscribe);
+				remove();
+			};
+			shortcutSubscriptions.add(unsubscribe);
+			return unsubscribe;
 		},
 		getCustomUI: customUI.get,
 		subscribeCustomUI: customUI.subscribe,
 		create(owner, beginPrompt, invocation) {
 			const activeRequests = new Set<() => void>();
+			const ownerInputSubscriptions = new Set<() => void>();
 			let closed = false;
 
 			const request = <Value,>(
@@ -964,6 +1004,28 @@ const createPluginUIHost = ({
 							})
 					),
 				custom: (factory, options) => requestCustom(factory, options),
+				onTerminalInput: (handler) => {
+					if (closed || hostClosed) {
+						return () => undefined;
+					}
+					const remove = getKeyboardLayer().registerTerminalInput(
+						keyboardOwnerId(owner),
+						(data) => handler(data)?.consume === true
+					);
+					let active = true;
+					const unsubscribe = (): void => {
+						if (!active) {
+							return;
+						}
+						active = false;
+						ownerInputSubscriptions.delete(unsubscribe);
+						terminalInputSubscriptions.delete(unsubscribe);
+						remove();
+					};
+					ownerInputSubscriptions.add(unsubscribe);
+					terminalInputSubscriptions.add(unsubscribe);
+					return unsubscribe;
+				},
 				notify: (message, level: PluginNotificationLevel = "info") => {
 					if (closed) {
 						return;
@@ -1014,6 +1076,9 @@ const createPluginUIHost = ({
 					for (const cancel of [...activeRequests]) {
 						cancel();
 					}
+					for (const unsubscribe of [...ownerInputSubscriptions]) {
+						unsubscribe();
+					}
 				},
 				ui,
 			});
@@ -1027,13 +1092,16 @@ export function PluginUIHostProvider({
 	children,
 }: Readonly<{ children: ReactNode }>) {
 	const dialog = useDialog();
+	const keyboardLayer = useKeyboardLayer();
 	const theme = useTheme();
 	const toast = useToast();
 	const customUI = useMemo(createPluginUICustomStore, []);
 	const dialogRef = useRef(dialog);
+	const keyboardLayerRef = useRef(keyboardLayer);
 	const themeRef = useRef(theme);
 	const toastRef = useRef(toast);
 	dialogRef.current = dialog;
+	keyboardLayerRef.current = keyboardLayer;
 	themeRef.current = theme;
 	toastRef.current = toast;
 	const host = useMemo(
@@ -1041,6 +1109,7 @@ export function PluginUIHostProvider({
 			createPluginUIHost({
 				customUI,
 				dialog: () => dialogRef.current,
+				keyboardLayer: () => keyboardLayerRef.current,
 				theme: () => themeRef.current,
 				toast: () => toastRef.current,
 			}),
