@@ -1,4 +1,5 @@
 import type { ProviderModel } from "@wincode/ai";
+import { omitUndefined } from "@wincode/utils";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
 import type {
 	PluginAutocompleteItem,
@@ -231,9 +232,7 @@ export function createCommandController(
 			value,
 		}) => ({
 			description,
-			...(getArgumentCompletions === undefined
-				? {}
-				: { getArgumentCompletions }),
+			...omitUndefined({ getArgumentCompletions }),
 			kind: "plugin",
 			name,
 			pluginId,

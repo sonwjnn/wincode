@@ -248,9 +248,9 @@ export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 	}
 	return Object.freeze({
 		description: command.description,
-		...(command.getArgumentCompletions === undefined
-			? {}
-			: { getArgumentCompletions: command.getArgumentCompletions }),
+		...omitUndefined({
+			getArgumentCompletions: command.getArgumentCompletions,
+		}),
 		...(command.handler === undefined ? {} : { handler: command.handler }),
 		name: command.name,
 		...(command.statusPanelId === undefined

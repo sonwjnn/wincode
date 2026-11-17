@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { InputRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
-import { testRender } from "@opentui/react/test-utils";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type {
 	PluginAutocompleteProviderFactory,
@@ -19,6 +18,12 @@ import type {
 } from "@wincode/coding-agent";
 import { LocalStyleProvider } from "@wincode/tui";
 import { act, useEffect, useRef, useState } from "react";
+import { AgentRegistryProvider } from "@/modules/agents";
+import {
+	type CommandControllerFactory,
+	createCommandController,
+} from "@/modules/commands/command-controller";
+import { CommandControllerFactoryProvider } from "@/modules/commands/command-controller-context";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginTools } from "@/modules/plugins/tools";
 import type { PluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
@@ -28,8 +33,12 @@ import {
 	PluginUIHostProvider,
 	usePluginUIHost,
 } from "@/modules/plugins/ui/plugin-ui-host";
+import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
 import type { SessionMessage } from "@/modules/sessions/message";
+import { ChatTextArea } from "@/modules/sessions/ui/components/chat-text-area";
+import { SettingsRegistryProvider } from "@/modules/settings";
+import { ConfigProvider } from "@/shared/config/config-provider";
 import { createConfigStore } from "@/shared/config/config-store";
 import type { ExecutionMode } from "@/shared/execution-mode";
 import { toSessionId } from "@/shared/identifiers";
@@ -47,6 +56,7 @@ import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import customEditorPlugin from "../../examples/custom-editor-plugin";
 import pluginUiFixture from "../fixtures/plugin-ui-fixture";
 import pluginUiOtherFixture from "../fixtures/plugin-ui-other-fixture";
+import { testRenderWithClipboard } from "../support/clipboard";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
@@ -101,6 +111,25 @@ type CustomUIState = {
 	throwComponent: boolean;
 };
 
+type RealComposerState = {
+	context: PluginEditorContext | undefined;
+	submittedTexts: string[];
+};
+
+const completionPrefixPattern = /\S*$/u;
+
+const realComposerCommandControllerFactory: CommandControllerFactory = {
+	create: () =>
+		createCommandController({
+			customCommands: [],
+			discoverCustomCommands: async () => [],
+			discoverSkills: async () => [],
+			executeCommand: () => undefined,
+			onError: () => undefined,
+			skills: [],
+		}),
+};
+
 const pluginUiTestEnvironment = async (
 	executionMode: ExecutionMode = "interactive",
 	testRendererOptions: Readonly<{
@@ -108,7 +137,8 @@ const pluginUiTestEnvironment = async (
 		kittyKeyboard?: boolean;
 		width?: number;
 	}> = {},
-	bindPluginUIHostInEditor = false
+	bindPluginUIHostInEditor = false,
+	useRealComposer = false
 ) => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-plugin-ui-"));
 	const workspace = path.join(root, "workspace");
@@ -148,6 +178,19 @@ const pluginUiTestEnvironment = async (
 	};
 	const customEditorState: { setMounted: (mounted: boolean) => void } = {
 		setMounted: () => undefined,
+	};
+	const realComposerState: RealComposerState = {
+		context: undefined,
+		submittedTexts: [],
+	};
+	const realComposerEditor: PluginEditorComponent = (context) => {
+		realComposerState.context = context;
+		return (
+			<box flexDirection="column">
+				<text>{`Real composer theme: ${context.theme.name}`}</text>
+				{context.defaultEditor}
+			</box>
+		);
 	};
 	function CapturePluginUIHost() {
 		pluginUIHost = usePluginUIHost();
@@ -232,6 +275,36 @@ const pluginUiTestEnvironment = async (
 			</box>
 		);
 	}
+	function RealComposer() {
+		return (
+			<ConfigProvider value={{ configStore, homeRoot: root, workspace }}>
+				<SettingsRegistryProvider>
+					<AgentRegistryProvider>
+						<PromptConfigProvider>
+							<CommandControllerFactoryProvider
+								factory={realComposerCommandControllerFactory}
+							>
+								<ChatTextArea
+									id="plugin-ui-real-composer"
+									onSubmit={({ text }) => {
+										realComposerState.submittedTexts.push(text);
+										return true;
+									}}
+									sessionId={sessionId}
+									sessionPromptHistory={[
+										{ files: [], text: "real composer history" },
+									]}
+								/>
+							</CommandControllerFactoryProvider>
+						</PromptConfigProvider>
+					</AgentRegistryProvider>
+				</SettingsRegistryProvider>
+			</ConfigProvider>
+		);
+	}
+	function Composer() {
+		return useRealComposer ? <RealComposer /> : <FixtureComposer />;
+	}
 	function ThemeProbe({ label }: Readonly<{ label: string }>) {
 		const { colors, currentTheme } = useTheme();
 		return <text>{`${label}:${currentTheme.name}:${colors.primary}`}</text>;
@@ -240,14 +313,14 @@ const pluginUiTestEnvironment = async (
 		const [mounted, setMounted] = useState(true);
 		customEditorState.setMounted = setMounted;
 		if (!mounted) {
-			return <FixtureComposer />;
+			return <Composer />;
 		}
 		return (
 			<PluginUICustomEditor
 				{...(bindPluginUIHostInEditor ? { pluginRuntime: runtime } : {})}
 				sessionId={sessionId}
 			>
-				<FixtureComposer />
+				<Composer />
 			</PluginUICustomEditor>
 		);
 	}
@@ -309,7 +382,7 @@ const pluginUiTestEnvironment = async (
 			throw error;
 		}
 	};
-	const setup = await testRender(
+	const setup = await testRenderWithClipboard(
 		<ThemeProvider themeName="opencode">
 			<ToastProvider>
 				<KeyboardLayerProvider>
@@ -437,6 +510,8 @@ const pluginUiTestEnvironment = async (
 		transcriptState,
 		openAgentSession,
 		configStore,
+		realComposerEditor,
+		realComposerState,
 		setCustomEditorMounted: customEditorState.setMounted,
 	};
 };
@@ -716,6 +791,123 @@ test("the verified author example opens a React editor and returns its response"
 		await act(() => environment.setup.mockInput.pressEnter());
 		await flushTestRenderer(environment.setup, 2);
 		expect(await result).toBe("Example response");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("moving the composer caret refreshes completion before accepting a suggestion", async () => {
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{},
+		true,
+		true
+	);
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const completionCursorOffsets: number[] = [];
+		await act(() => {
+			ui.addAutocompleteProvider((current) => ({
+				...current,
+				getSuggestions(context) {
+					completionCursorOffsets.push(context.cursorOffset);
+					const prefix =
+						context.text
+							.slice(0, context.cursorOffset)
+							.match(completionPrefixPattern)?.[0] ?? "";
+					return prefix.length === 0
+						? current.getSuggestions(context)
+						: {
+								items: [{ label: `Choose ${prefix}`, value: "CHOSEN" }],
+								prefix,
+							};
+				},
+				applyCompletion(context, item, prefix) {
+					const start = context.cursorOffset - prefix.length;
+					const text = `${context.text.slice(0, start)}${item.value}${context.text.slice(context.cursorOffset)}`;
+					return { cursorOffset: start + item.value.length, text };
+				},
+			}));
+		});
+
+		await act(() => environment.setup.mockInput.typeText("alpha beta"));
+		await flushTestRenderer(environment.setup, 2);
+		await act(async () => {
+			await environment.setup.mockMouse.click(7, 2);
+			environment.setup.mockInput.pressArrow("left");
+		});
+		await flushTestRenderer(environment.setup, 3);
+		expect(completionCursorOffsets).toContain(4);
+		expect(environment.setup.captureCharFrame()).toContain("Choose alph");
+		await act(() => environment.setup.mockInput.pressEnter());
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(ui.getEditorText()).toBe("CHOSENa beta");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("custom editor exposes real composer submit, history, configured keys, and theme", async () => {
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{},
+		true,
+		true
+	);
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const registered = ui.setEditorComponent(environment.realComposerEditor);
+		await flushTestRenderer(environment.setup, 2);
+		expect(registered).toEqual({ success: true });
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Real composer theme: opencode"
+		);
+
+		const editorContext = environment.realComposerState.context;
+		if (editorContext === undefined) {
+			throw new Error(
+				"The custom editor did not receive the real composer context."
+			);
+		}
+		expect(editorContext.keybindings).toEqual(CHAT_TEXT_AREA_KEY_BINDINGS);
+		let previousPromptConsumed = false;
+		await act(() => {
+			previousPromptConsumed = editorContext.previousPrompt();
+		});
+		expect(previousPromptConsumed).toBe(true);
+		expect(ui.getEditorText()).toBe("real composer history");
+		let nextPromptConsumed = false;
+		await act(() => {
+			nextPromptConsumed = editorContext.nextPrompt();
+		});
+		expect(nextPromptConsumed).toBe(true);
+		expect(ui.getEditorText()).toBe("");
+
+		await act(() => {
+			expect(ui.setEditorText("submitted through PluginEditorContext")).toBe(
+				true
+			);
+		});
+		await act(async () => editorContext.submit());
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.realComposerState.submittedTexts).toEqual([
+			"submitted through PluginEditorContext",
+		]);
+
+		await act(() => {
+			expect(ui.setTheme("one-dark")).toEqual({ success: true });
+		});
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Real composer theme: one-dark"
+		);
 	} finally {
 		await environment.dispose();
 	}

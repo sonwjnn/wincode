@@ -45,6 +45,7 @@ export type ChatInputControllerActions = {
 	onArrowDown: (cursorOffset?: number, textLength?: number) => boolean;
 	onArrowUp: (cursorOffset?: number, textLength?: number) => boolean;
 	onCtrlC: (composition: SessionSubmissionComposition) => boolean;
+	onCursorChange: () => void;
 	onEnter: () => void;
 	onEscape: () => void;
 	onItemExecute: (index: number) => void;

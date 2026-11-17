@@ -687,6 +687,7 @@ export function ChatTextArea({
 			id={id}
 			keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
 			onContentChange={handleTextareaContentChange}
+			onCursorChange={actions.onCursorChange}
 			placeholder="Ask anything..."
 			placeholderColor={colors.textMuted}
 			ref={attachTextArea}

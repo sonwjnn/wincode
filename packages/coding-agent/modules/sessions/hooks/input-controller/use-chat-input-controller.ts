@@ -212,6 +212,9 @@ export function useChatInputController({
 	const [textValue, setTextValue] = useState(
 		() => composerDocument.replaceText(initialDraft, initialDraft.length).text
 	);
+	const [composerCursorOffset, setComposerCursorOffset] = useState(
+		() => composerDocument.capture().cursorOffset
+	);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [pluginCompletion, setPluginCompletion] =
 		useState<PluginCompletionState | null>(null);
@@ -338,6 +341,7 @@ export function useChatInputController({
 					text: snapshot.text,
 				};
 			}
+			setComposerCursorOffset(snapshot.cursorOffset);
 			setTextValue(snapshot.text);
 		},
 		[composerDocument]
@@ -386,7 +390,6 @@ export function useChatInputController({
 				: filterFileMentionOptions(fileMentionOptions, fileMentionQuery),
 		[fileMentionOptions, fileMentionQuery]
 	);
-	const composerCursorOffset = composerDocument.capture().cursorOffset;
 	const autocompleteContext = useMemo(
 		() =>
 			sessionId === undefined
@@ -551,6 +554,7 @@ export function useChatInputController({
 				text,
 			};
 			setTextValue(text);
+			setComposerCursorOffset(cursorOffset);
 			setSelectedIndex(0);
 
 			const nextTrigger = detectTrigger(text, cursorOffset);
@@ -559,6 +563,9 @@ export function useChatInputController({
 		},
 		[]
 	);
+	const onCursorChange = useCallback(() => {
+		setComposerCursorOffset(composerDocument.capture().cursorOffset);
+	}, [composerDocument]);
 	const navigateHistory = useCallback(
 		(direction: -1 | 1): boolean => {
 			const result = getHistoryNavigation(
@@ -1185,6 +1192,7 @@ export function useChatInputController({
 			onArrowDown,
 			onArrowUp,
 			onCtrlC,
+			onCursorChange,
 			onEnter,
 			onEscape,
 			onItemExecute,
