@@ -251,10 +251,8 @@ export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 		...omitUndefined({
 			getArgumentCompletions: command.getArgumentCompletions,
 		}),
-		...(command.handler === undefined ? {} : { handler: command.handler }),
+		...omitUndefined({ handler: command.handler }),
 		name: command.name,
-		...(command.statusPanelId === undefined
-			? {}
-			: { statusPanelId: command.statusPanelId }),
+		...omitUndefined({ statusPanelId: command.statusPanelId }),
 	});
 };
