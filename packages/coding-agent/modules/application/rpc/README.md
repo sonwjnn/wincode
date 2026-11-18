@@ -76,7 +76,7 @@ type PluginUIUpdate =
   | { type: "title"; pluginId: string; value: string | null };
 ```
 
-`null` clears/restores the corresponding default. Producers default widget placement to `aboveEditor`. These data contracts do not require a React component contribution; the host maps each update to the client protocol without changing Session or Agent state.
+`null` clears/restores the corresponding default. Producers default widget placement to `aboveEditor`. These data contracts do not require a React component contribution; the host maps each update to the client protocol without changing Session or Agent state. Title is host-wide: the last non-null update owns it, and an old owner's clear cannot reset a later owner's title. Disabling/unloading a Plugin or closing its Session UI host sends reset updates for that Plugin's active status, widgets, and current title; cleanup does not clear another Plugin's contributions.
 
 The `sequence` value is monotonically increasing across server notifications and UI requests. Frames are written in sequence order. UI responses are correlated by request ID, not by sequence.
 
@@ -89,6 +89,9 @@ The `sequence` value is monotonically increasing across server notifications and
 | `input` | `plugin/ui/request`; unsupported/dismissal result is `undefined` | `undefined` | `undefined` |
 | `editor` | `plugin/ui/request`; unsupported/dismissal result is `undefined` | `undefined` | `undefined` |
 | `notify` | `plugin/ui/notify` | no-op | no-op |
+| `setStatus` | `plugin/ui/update` (`status`; `undefined` clears) | no-op | no-op |
+| `setWidget` | `plugin/ui/update` (`widget`; `undefined` clears) | no-op | no-op |
+| `setTitle` | `plugin/ui/update` (`title`; `undefined` clears) | no-op | no-op |
 | `custom` | `undefined`; factory ignored | `undefined`; factory ignored | `undefined`; factory ignored |
 | `getAllThemes` | `[]` | `[]` | `[]` |
 | `getTheme` | `undefined` | `undefined` | `undefined` |

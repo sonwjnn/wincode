@@ -316,12 +316,14 @@ test("RPC UI routes only matching, kind-valid responses to each interaction", as
 	} as PluginUIUpdate;
 	expect(isRpcPluginUIUpdate(badUpdate)).toBe(false);
 	handle.ui.notify("Saved", "info");
-	host.update?.({
-		pluginId: "rpc_ui_test",
-		key: "mode",
-		type: "status",
-		value: "ready",
+	handle.ui.setStatus("mode", "ready");
+	handle.ui.setWidget("progress", ["Syncing"], {
+		placement: "belowEditor",
 	});
+	handle.ui.setTitle("Wincode · Sync");
+	handle.ui.setStatus("mode", undefined);
+	handle.ui.setWidget("progress", undefined, { placement: "belowEditor" });
+	handle.ui.setTitle(undefined);
 	expect(notifications).toEqual([
 		{
 			method: "plugin/ui/notify",
@@ -336,12 +338,134 @@ test("RPC UI routes only matching, kind-valid responses to each interaction", as
 				value: "ready",
 			},
 		},
+		{
+			method: "plugin/ui/update",
+			params: {
+				key: "progress",
+				placement: "belowEditor",
+				pluginId: "rpc_ui_test",
+				type: "widget",
+				value: ["Syncing"],
+			},
+		},
+		{
+			method: "plugin/ui/update",
+			params: {
+				pluginId: "rpc_ui_test",
+				type: "title",
+				value: "Wincode · Sync",
+			},
+		},
+		{
+			method: "plugin/ui/update",
+			params: {
+				key: "mode",
+				pluginId: "rpc_ui_test",
+				type: "status",
+				value: null,
+			},
+		},
+		{
+			method: "plugin/ui/update",
+			params: {
+				key: "progress",
+				placement: "belowEditor",
+				pluginId: "rpc_ui_test",
+				type: "widget",
+				value: null,
+			},
+		},
+		{
+			method: "plugin/ui/update",
+			params: {
+				pluginId: "rpc_ui_test",
+				type: "title",
+				value: null,
+			},
+		},
 	]);
 	const factory = (): never => {
 		throw new Error("RPC must never invoke custom React factories.");
 	};
 	expect(await handle.ui.custom(factory)).toBeUndefined();
 	host.close();
+});
+
+test("RPC Plugin cleanup preserves another Plugin's host-wide title", () => {
+	const updates: PluginUIUpdate[] = [];
+	const host = createRpcPluginUIHost({
+		request: async () => null,
+		notify: () => undefined,
+		update: (update) => updates.push(update),
+	});
+	const owner = host.create(
+		{ pluginId: "rpc_ui_test" },
+		() => () => undefined,
+		"command"
+	);
+	const otherOwner = host.create(
+		{ pluginId: "other_plugin" },
+		() => () => undefined,
+		"command"
+	);
+
+	owner.ui.setStatus("mode", "ready");
+	owner.ui.setWidget("progress", ["Syncing"], { placement: "belowEditor" });
+	owner.ui.setTitle("Wincode · Sync");
+	otherOwner.ui.setStatus("mode", "other ready");
+	otherOwner.ui.setTitle("Other title");
+	owner.ui.setTitle(undefined);
+	owner.close();
+	host.clearPlugin?.("rpc_ui_test");
+	owner.ui.setStatus("late", "ignored after unload");
+
+	expect(updates).toEqual([
+		{
+			key: "mode",
+			pluginId: "rpc_ui_test",
+			type: "status",
+			value: "ready",
+		},
+		{
+			key: "progress",
+			placement: "belowEditor",
+			pluginId: "rpc_ui_test",
+			type: "widget",
+			value: ["Syncing"],
+		},
+		{ pluginId: "rpc_ui_test", type: "title", value: "Wincode · Sync" },
+		{
+			key: "mode",
+			pluginId: "other_plugin",
+			type: "status",
+			value: "other ready",
+		},
+		{ pluginId: "other_plugin", type: "title", value: "Other title" },
+		{
+			key: "mode",
+			pluginId: "rpc_ui_test",
+			type: "status",
+			value: null,
+		},
+		{
+			key: "progress",
+			placement: "belowEditor",
+			pluginId: "rpc_ui_test",
+			type: "widget",
+			value: null,
+		},
+	]);
+
+	host.close();
+	expect(updates.slice(-2)).toEqual([
+		{
+			key: "mode",
+			pluginId: "other_plugin",
+			type: "status",
+			value: null,
+		},
+		{ pluginId: "other_plugin", type: "title", value: null },
+	]);
 });
 
 test("RPC UI preserves and cancels caller timeouts above the maximum timer delay", () =>
@@ -617,6 +741,9 @@ test("RPC without Plugin UI negotiation invokes Plugin UI defaults without termi
 			{
 				description: "Use Plugin UI with a client that did not negotiate it.",
 				handler: async (_input, { ui }) => {
+					ui.setStatus("status", "unsupported");
+					ui.setWidget("widget", ["unsupported"]);
+					ui.setTitle("unsupported");
 					confirmResult = await ui.confirm("Unsupported confirmation");
 					customResult = await ui.custom(factory);
 					return {
@@ -760,11 +887,14 @@ test("RPC without a negotiated UI capability uses the documented no-op defaults"
 		error: "Theme changes are available only in Interactive Mode.",
 		success: false,
 	});
+	unsupportedPluginUI.setStatus("status", "ignored");
+	unsupportedPluginUI.setWidget("widget", ["ignored"]);
+	unsupportedPluginUI.setTitle("ignored");
 	unsupportedPluginUI.notify("No client UI");
 	expect(customFactoryCalls).toBe(0);
 });
 
-test("RPC Plugin dialogs stay React-free and do not masquerade as Agent pauses", async () => {
+test("RPC Plugin requests and data updates stay React-free without pausing the Agent", async () => {
 	const workspace = await fs.mkdtemp(path.join("/tmp", "wincode-rpc-ui-turn-"));
 	const model: ProviderModel = {
 		capabilities: ["reasoning", "text", "tools"],
@@ -811,6 +941,11 @@ test("RPC Plugin dialogs stay React-free and do not masquerade as Agent pauses",
 			{
 				description: "Request Plugin UI through the RPC host.",
 				handler: async (_input, { ui }) => {
+					ui.setStatus("sync", "Working");
+					ui.setWidget("progress", ["Waiting for input"], {
+						placement: "belowEditor",
+					});
+					ui.setTitle("Working");
 					const answer = await ui.input("RPC input", "type here");
 					const cancelled = await ui.input("Abortable RPC input", undefined, {
 						signal: callerAbortController.signal,
@@ -856,7 +991,6 @@ test("RPC Plugin dialogs stay React-free and do not masquerade as Agent pauses",
 	const stateReady = Promise.withResolvers<Record<string, unknown>>();
 	const turnCompleted = Promise.withResolvers<void>();
 	const output: string[] = [];
-	let activeSessionId: string | undefined;
 	const frame = (
 		id: string,
 		method: string,
@@ -922,11 +1056,6 @@ test("RPC Plugin dialogs stay React-free and do not masquerade as Agent pauses",
 			if (emitted.id === "inspect") {
 				stateReady.resolve(emitted.result as Record<string, unknown>);
 			}
-			if (emitted.method === "session/stateChanged") {
-				const params = emitted.params as Record<string, unknown>;
-				const state = params.state as Record<string, unknown>;
-				activeSessionId = state.sessionId as string;
-			}
 			if (emitted.method === "plugin/ui/request") {
 				const requestParams = emitted.params as Record<string, unknown>;
 				if (requestParams.title === "Abortable RPC input") {
@@ -934,13 +1063,6 @@ test("RPC Plugin dialogs stay React-free and do not masquerade as Agent pauses",
 				}
 				if (requestParams.title === "Client cancelled") {
 					clientCancellationRequest.resolve(emitted.id as string);
-				}
-				if (activeSessionId !== undefined) {
-					pluginRuntime.notifyPluginUIUpdate(activeSessionId, {
-						pluginId: "rpc_ui_test",
-						type: "title",
-						value: "Working",
-					});
 				}
 				uiRequestReady.resolve({
 					id: emitted.id as string,
@@ -973,7 +1095,9 @@ test("RPC Plugin dialogs stay React-free and do not masquerade as Agent pauses",
 		const notification = frames.find(
 			(value) => value.method === "plugin/ui/notify"
 		);
-		const update = frames.find((value) => value.method === "plugin/ui/update");
+		const updates = frames.filter(
+			(value) => value.method === "plugin/ui/update"
+		);
 		const abortableRequest = frames.find((value) => {
 			if (value.method !== "plugin/ui/request") {
 				return false;
@@ -1000,11 +1124,33 @@ test("RPC Plugin dialogs stay React-free and do not masquerade as Agent pauses",
 			message: "Input received",
 			pluginId: "rpc_ui_test",
 		});
-		expect(update?.params).toMatchObject({
-			pluginId: "rpc_ui_test",
-			type: "title",
-			value: "Working",
-		});
+		const updateParams = updates.map(
+			(value) => value.params as Record<string, unknown>
+		);
+		expect(updateParams).toContainEqual(
+			expect.objectContaining({
+				key: "sync",
+				pluginId: "rpc_ui_test",
+				type: "status",
+				value: "Working",
+			})
+		);
+		expect(updateParams).toContainEqual(
+			expect.objectContaining({
+				key: "progress",
+				placement: "belowEditor",
+				pluginId: "rpc_ui_test",
+				type: "widget",
+				value: ["Waiting for input"],
+			})
+		);
+		expect(updateParams).toContainEqual(
+			expect.objectContaining({
+				pluginId: "rpc_ui_test",
+				type: "title",
+				value: "Working",
+			})
+		);
 		expect(cancellation).toMatchObject({
 			jsonrpc: "2.0",
 			method: "$/cancelRequest",

@@ -5,6 +5,7 @@ import type {
 	PluginUIDialogOptions,
 	PluginUIPromptKind,
 } from "@/modules/plugins/public";
+import { createPluginUIUpdateControls } from "@/modules/plugins/ui/plugin-ui-contributions";
 import { unsupportedPluginUI } from "@/modules/plugins/ui/plugin-ui-default";
 import type {
 	PluginUIHandle,
@@ -62,6 +63,16 @@ export type RpcPluginUINotification = Readonly<{
 }>;
 
 export type RpcPluginUIUpdate = PluginUIUpdate;
+
+type RpcPluginUIWidgetPlacement = Extract<
+	PluginUIUpdate,
+	{ type: "widget" }
+>["placement"];
+
+type RpcPluginUIContributionState = {
+	statusKeys: Set<string>;
+	widgetPlacements: Map<string, RpcPluginUIWidgetPlacement>;
+};
 
 export type RpcPluginUIRequestTransport = Readonly<{
 	request: (
@@ -285,10 +296,102 @@ export const createRpcPluginUIHost = (
 ): PluginUIHostBinding => {
 	let closed = false;
 	const handles = new Set<PluginUIHandle>();
+	const contributions = new Map<string, RpcPluginUIContributionState>();
+	let titleOwner: string | undefined;
+	const sendUpdate = (update: PluginUIUpdate): void => {
+		if (closed || !isRpcPluginUIUpdate(update)) {
+			return;
+		}
+		transport.update(update);
+	};
+	const trackTitleUpdate = (
+		update: Extract<PluginUIUpdate, { type: "title" }>
+	): boolean => {
+		if (update.value === null && titleOwner !== update.pluginId) {
+			return false;
+		}
+		titleOwner = update.value === null ? undefined : update.pluginId;
+		return true;
+	};
+	const trackKeyedUpdate = (
+		update: Extract<PluginUIUpdate, { type: "status" | "widget" }>
+	): void => {
+		let state = contributions.get(update.pluginId);
+		if (state === undefined) {
+			if (update.value === null) {
+				return;
+			}
+			state = { statusKeys: new Set(), widgetPlacements: new Map() };
+			contributions.set(update.pluginId, state);
+		}
+		if (update.type === "status") {
+			if (update.value === null) {
+				state.statusKeys.delete(update.key);
+			} else {
+				state.statusKeys.add(update.key);
+			}
+		} else if (update.value === null) {
+			state.widgetPlacements.delete(update.key);
+		} else {
+			state.widgetPlacements.set(update.key, update.placement);
+		}
+		if (state.statusKeys.size === 0 && state.widgetPlacements.size === 0) {
+			contributions.delete(update.pluginId);
+		}
+	};
+	const trackUpdate = (update: PluginUIUpdate): boolean => {
+		if (update.type === "title") {
+			return trackTitleUpdate(update);
+		}
+		trackKeyedUpdate(update);
+		return true;
+	};
+	const publishUpdate = (update: PluginUIUpdate): void => {
+		if (closed || !isRpcPluginUIUpdate(update) || !trackUpdate(update)) {
+			return;
+		}
+		transport.update(update);
+	};
+	const clearPluginContributions = (pluginId: string): void => {
+		const state = contributions.get(pluginId);
+		const ownsTitle = titleOwner === pluginId;
+		if (state === undefined && !ownsTitle) {
+			return;
+		}
+		if (state !== undefined) {
+			contributions.delete(pluginId);
+			for (const key of state.statusKeys) {
+				sendUpdate({ key, pluginId, type: "status", value: null });
+			}
+			for (const [key, placement] of state.widgetPlacements) {
+				sendUpdate({
+					key,
+					placement,
+					pluginId,
+					type: "widget",
+					value: null,
+				});
+			}
+		}
+		if (ownsTitle) {
+			titleOwner = undefined;
+			sendUpdate({ pluginId, type: "title", value: null });
+		}
+	};
 	return Object.freeze({
+		clearPlugin(pluginId) {
+			clearPluginContributions(pluginId);
+		},
 		close() {
 			if (closed) {
 				return;
+			}
+			const pluginIds = new Set(contributions.keys());
+			if (titleOwner !== undefined) {
+				pluginIds.add(titleOwner);
+			}
+			for (const pluginId of pluginIds) {
+				clearPluginContributions(pluginId);
 			}
 			closed = true;
 			for (const handle of [...handles]) {
@@ -298,6 +401,14 @@ export const createRpcPluginUIHost = (
 		create(owner, beginPrompt, _invocation) {
 			const controller = new AbortController();
 			let handleClosed = false;
+			const updateControls = createPluginUIUpdateControls(
+				owner.pluginId,
+				(update) => {
+					if (!handleClosed) {
+						publishUpdate(update);
+					}
+				}
+			);
 			const request = <Value extends string | boolean | undefined>(
 				kind: Exclude<PluginUIPromptKind, "custom">,
 				title: string,
@@ -351,6 +462,7 @@ export const createRpcPluginUIHost = (
 			};
 			const ui: PluginUI = Object.freeze({
 				...unsupportedPluginUI,
+				...updateControls,
 				select: (prompt, choices, options) => {
 					if (choices.length === 0) {
 						return Promise.resolve(undefined);
@@ -417,10 +529,7 @@ export const createRpcPluginUIHost = (
 			return handle;
 		},
 		update(update) {
-			if (closed || !isRpcPluginUIUpdate(update)) {
-				return;
-			}
-			transport.update(update);
+			publishUpdate(update);
 		},
 	});
 };

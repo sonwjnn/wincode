@@ -438,7 +438,7 @@ test("a failed Markdown transformer preserves prior output, continues, and never
 			}
 		);
 		await logger.flush();
-		const diagnostics = await fs.readFile(resolveLogFilePath(), "utf8");
+		const diagnostics = await Bun.file(resolveLogFilePath()).text();
 		expect(diagnostics).toContain(
 			'"message":"Plugin Markdown transformer failed; preserving the last successful output"'
 		);
