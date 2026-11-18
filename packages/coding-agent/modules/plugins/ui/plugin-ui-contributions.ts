@@ -70,8 +70,8 @@ const contributionConflict = (
 	});
 
 export type PluginUIContributionStore = Readonly<{
-	clearPlugin: (pluginId: string) => void;
-	clearView: (sessionId: string, pluginId: string) => void;
+	clearPlugin: (pluginId: string) => readonly PluginUIUpdate[];
+	clearView: (sessionId: string, pluginId: string) => readonly PluginUIUpdate[];
 	close: () => void;
 	getChromeSnapshot: () => PluginUIChromeSnapshot;
 	getSnapshot: (sessionId: string) => PluginUIViewContributions;
@@ -209,6 +209,28 @@ const createSnapshot = (
 			workingVisible: view.workingVisible?.value,
 		}),
 	});
+};
+
+const resetUpdatesForPluginView = (
+	pluginId: string,
+	view: MutablePluginUIView
+): PluginUIUpdate[] => {
+	const updates: PluginUIUpdate[] = [];
+	for (const key of view.statuses.get(pluginId)?.keys() ?? []) {
+		updates.push(Object.freeze({ type: "status", pluginId, key, value: null }));
+	}
+	for (const [key, { placement }] of view.widgets.get(pluginId) ?? []) {
+		updates.push(
+			Object.freeze({
+				type: "widget",
+				pluginId,
+				key,
+				value: null,
+				placement,
+			})
+		);
+	}
+	return updates;
 };
 
 export const createPluginUIContributionStore =
@@ -427,7 +449,9 @@ export const createPluginUIContributionStore =
 
 		return Object.freeze({
 			clearPlugin(pluginId) {
+				const updates: PluginUIUpdate[] = [];
 				for (const [sessionId, view] of views) {
+					updates.push(...resetUpdatesForPluginView(pluginId, view));
 					const statusesChanged = view.statuses.delete(pluginId);
 					const widgetsChanged = view.widgets.delete(pluginId);
 					const controlsChanged = clearOwnedControls(view, pluginId);
@@ -450,22 +474,26 @@ export const createPluginUIContributionStore =
 				}
 				if (titleSnapshot?.pluginId === pluginId) {
 					titleSnapshot = null;
+					updates.push(Object.freeze({ type: "title", pluginId, value: null }));
 					publishTitle();
 				}
+				return Object.freeze(updates);
 			},
 			clearView(sessionId, pluginId) {
 				const view = views.get(sessionId);
 				if (view === undefined) {
-					return;
+					return Object.freeze([]);
 				}
+				const updates = resetUpdatesForPluginView(pluginId, view);
 				const statusesChanged = view.statuses.delete(pluginId);
 				const widgetsChanged = view.widgets.delete(pluginId);
 				const controlsChanged = clearOwnedControls(view, pluginId);
 				if (!(statusesChanged || widgetsChanged || controlsChanged)) {
-					return;
+					return Object.freeze(updates);
 				}
 				removeEmptyView(sessionId, view);
 				publish(sessionId);
+				return Object.freeze(updates);
 			},
 			close() {
 				const sessionIds = new Set([...views.keys(), ...snapshots.keys()]);

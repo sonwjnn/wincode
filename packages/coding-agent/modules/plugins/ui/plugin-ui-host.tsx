@@ -1203,8 +1203,9 @@ const createPluginUIHost = ({
 			return unsubscribe;
 		},
 		clearPlugin(pluginId) {
-			const title = contributions.getTitle();
-			contributions.clearPlugin(pluginId);
+			for (const update of contributions.clearPlugin(pluginId)) {
+				onUpdate?.(update);
+			}
 			for (const [sessionId, contribution] of editorContributions) {
 				if (contribution.pluginId === pluginId) {
 					editorContributions.delete(sessionId);
@@ -1215,11 +1216,6 @@ const createPluginUIHost = ({
 				if (registration.owner.pluginId === pluginId) {
 					removeAutocompleteProvider(registration);
 				}
-			}
-			if (title?.pluginId === pluginId) {
-				createPluginUIUpdateControls(pluginId, (update) =>
-					onUpdate?.(update)
-				).setTitle(undefined);
 			}
 		},
 		getChrome: contributions.getChromeSnapshot,
@@ -1845,7 +1841,12 @@ const createPluginUIHost = ({
 						unsubscribe();
 					}
 					if (owner.sessionId !== undefined) {
-						contributions.clearView(owner.sessionId, owner.pluginId);
+						for (const update of contributions.clearView(
+							owner.sessionId,
+							owner.pluginId
+						)) {
+							onUpdate?.(update);
+						}
 					}
 					releaseEditor(owner);
 					for (const unregister of [...autocompleteCleanup]) {

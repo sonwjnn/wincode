@@ -1477,6 +1477,133 @@ test("status and widget keys sort by Plugin Identifier and key, coexist across o
 	}
 });
 
+test("unloading a Plugin publishes null RPC updates for its status and widget keys", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result: fixtureSet } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"ui-contributions"
+		);
+		const { result: otherSet } = await environment.executeCommand(
+			"plugin_ui_other_fixture",
+			"other-ui-contributions"
+		);
+		expect(await fixtureSet).toBe("contributions set");
+		expect(await otherSet).toBe("other contributions set");
+		const updateOffset = environment.uiUpdates.length;
+
+		await act(() =>
+			environment.runtime.disablePlugin(
+				"plugin_ui_fixture",
+				"Plugin unloaded while its RPC status and widgets were active."
+			)
+		);
+		await flushTestRenderer(environment.setup, 2);
+
+		expect(environment.uiUpdates.slice(updateOffset)).toEqual([
+			{
+				type: "status",
+				pluginId: "plugin_ui_fixture",
+				key: "shared",
+				value: null,
+			},
+			{
+				type: "status",
+				pluginId: "plugin_ui_fixture",
+				key: "alpha",
+				value: null,
+			},
+			{
+				type: "widget",
+				pluginId: "plugin_ui_fixture",
+				key: "shared",
+				value: null,
+				placement: "aboveEditor",
+			},
+			{
+				type: "widget",
+				pluginId: "plugin_ui_fixture",
+				key: "alpha",
+				value: null,
+				placement: "aboveEditor",
+			},
+			{
+				type: "widget",
+				pluginId: "plugin_ui_fixture",
+				key: "below",
+				value: null,
+				placement: "belowEditor",
+			},
+		]);
+		const snapshot = environment.pluginUIHost?.getContributions(
+			environment.sessionId
+		);
+		if (snapshot === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		expect(
+			snapshot.statuses.map(({ pluginId, key }) => `${pluginId}/${key}`)
+		).toEqual([
+			"plugin_ui_other_fixture/alpha",
+			"plugin_ui_other_fixture/shared",
+		]);
+		expect(
+			snapshot.widgets.map(({ pluginId, key }) => `${pluginId}/${key}`)
+		).toEqual([
+			"plugin_ui_other_fixture/alpha",
+			"plugin_ui_other_fixture/shared",
+		]);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("closing a Session-scoped Plugin UI handle publishes null RPC updates", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const pluginUIHost = environment.pluginUIHost;
+		if (pluginUIHost === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		const handle = pluginUIHost.create(
+			{ pluginId: "plugin_ui_fixture", sessionId: environment.sessionId },
+			() => () => undefined,
+			"command"
+		);
+		handle.ui.setStatus("closing", "active");
+		handle.ui.setWidget("closing", ["active"], {
+			placement: "belowEditor",
+		});
+		const updateOffset = environment.uiUpdates.length;
+
+		handle.close();
+
+		expect(environment.uiUpdates.slice(updateOffset)).toEqual([
+			{
+				type: "status",
+				pluginId: "plugin_ui_fixture",
+				key: "closing",
+				value: null,
+			},
+			{
+				type: "widget",
+				pluginId: "plugin_ui_fixture",
+				key: "closing",
+				value: null,
+				placement: "belowEditor",
+			},
+		]);
+		expect(
+			pluginUIHost.getContributions(environment.sessionId).statuses
+		).toEqual([]);
+		expect(
+			pluginUIHost.getContributions(environment.sessionId).widgets
+		).toEqual([]);
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("the verified contribution example renders and clears its Plugin UI surfaces", async () => {
 	const environment = await pluginUiTestEnvironment(
 		"interactive",
