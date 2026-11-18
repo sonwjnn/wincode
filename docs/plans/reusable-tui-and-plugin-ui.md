@@ -139,12 +139,9 @@ Components inherit the shared reactive theme and update when it changes. Local s
 
 ### Renderer overrides
 
-Plugins may override presentation of host or other Plugin tools/messages/entries. A resolver chain supports `next()`:
+The public PluginAPI registrations are `registerToolRenderer`, `registerMessageRenderer`, and `registerEntryRenderer`. Each accepts a resolver and optional `{ priority }`. Resolvers receive immutable `originPluginId` plus Tool `type`, message `role`, or history-entry `type`, and filter targets themselves. Higher priority runs first; equal priorities follow stable Plugin load and registration order. Returning `undefined` declines and continues, `next()` explicitly delegates, and `null` intentionally renders nothing.
 
-1. Higher priority runs first.
-2. Equal priority follows stable registration order.
-3. Delegation or declining to handle continues to the next resolver.
-4. A rendering failure falls back through remaining resolvers to the host default, with diagnostics kept out of terminal/protocol output.
+Plugins may override presentation of host or other Plugin tools/messages/entries. A rendering failure, including a React component failure, falls back through remaining resolvers to the host default, with centralized diagnostics kept out of terminal/protocol output.
 
 React rendering failures require a host-managed recovery boundary; a factory-only try/catch is not sufficient. Isolate presentation failure from Tool execution and durable Session data.
 

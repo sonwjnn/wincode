@@ -2522,7 +2522,9 @@ export default function (wincode: PluginAPI) {
 
 ### Custom Rendering
 
-Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component Awincodeand [tool-execution.ts](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
+This research section describes the historical imperative Plugin renderer reference. Current React/OpenTUI Plugin authoring uses `api.registerToolRenderer(resolver, options?)`, `api.registerMessageRenderer(resolver, options?)`, and `api.registerEntryRenderer(resolver, options?)`; each resolver filters by its origin Plugin ID and type/role context. Higher `options.priority` runs first, with registration order breaking ties. Returning `undefined` declines, `next()` explicitly delegates, and `null` intentionally renders nothing. Resolver and React-render failures continue through the remaining resolvers to the host default and are logged centrally. See the [current Plugin UI renderer contract](../../packages/coding-agent/modules/plugins/README.md#plugin-ui-renderers) and [verified composition example](../../packages/coding-agent/examples/plugin-renderer-composition.tsx).
+
+The historical renderer reference describes `renderCall` and `renderResult` for imperative TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how the reference tool rows are composed.
 
 By default, tool output is wrapped in a `Box` that handles background and horizontal padding from the `outputPad` setting. Tool renderers are also used in HTML exports. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
 

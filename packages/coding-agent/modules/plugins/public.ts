@@ -138,6 +138,25 @@ export type PluginToolResultRenderer = ComponentType<
 	PluginToolRenderContext & Readonly<{ result: PluginToolResult }>
 >;
 
+export type PluginRendererNext = () => ReactNode;
+
+/** Higher values run first; equal priorities retain registration order. */
+export type PluginRendererOptions = Readonly<{ priority?: number }>;
+
+/** Resolver context for any host or Plugin Tool row. */
+export type PluginToolRendererContext = PluginToolRenderContext &
+	Readonly<{
+		originPluginId: string | undefined;
+		result?: PluginToolResult;
+		type: string;
+	}>;
+
+/** Returns `undefined` to decline, or `next()` to delegate to later resolvers. */
+export type PluginToolRenderer = (
+	context: PluginToolRendererContext,
+	next: PluginRendererNext
+) => ReactNode | undefined;
+
 /** Timeout and caller cancellation options for a blocking Plugin UI request. */
 export type PluginUIDialogOptions = Readonly<{
 	signal?: AbortSignal;
@@ -336,7 +355,17 @@ export type PluginMessageRendererProps = Readonly<{
 	theme: Theme;
 }>;
 
-export type PluginMessageRenderer = ComponentType<PluginMessageRendererProps>;
+export type PluginMessageRendererContext = PluginMessageRendererProps &
+	Readonly<{
+		originPluginId: string | undefined;
+		role: PluginMessageRole;
+	}>;
+
+/** Returns `undefined` to decline, or `next()` to delegate to later resolvers. */
+export type PluginMessageRenderer = (
+	context: PluginMessageRendererContext,
+	next: PluginRendererNext
+) => ReactNode | undefined;
 
 export type PluginEntryRendererProps = Readonly<{
 	dimensions: PluginUIDimensions;
@@ -345,7 +374,17 @@ export type PluginEntryRendererProps = Readonly<{
 	theme: Theme;
 }>;
 
-export type PluginEntryRenderer = ComponentType<PluginEntryRendererProps>;
+export type PluginEntryRendererContext = PluginEntryRendererProps &
+	Readonly<{
+		originPluginId: string;
+		type: string;
+	}>;
+
+/** Returns `undefined` to decline, or `next()` to delegate to later resolvers. */
+export type PluginEntryRenderer = (
+	context: PluginEntryRendererContext,
+	next: PluginRendererNext
+) => ReactNode | undefined;
 
 export type PluginAutocompleteItem = Readonly<{
 	description?: string;
@@ -923,13 +962,17 @@ export type PluginAPI = Readonly<{
 	definePlugin: (
 		identity: Readonly<{ id: string; sessionStateVersion?: number }>
 	) => PluginDefinitionAPI;
+	registerToolRenderer: (
+		renderer: PluginToolRenderer,
+		options?: PluginRendererOptions
+	) => PluginUIContributionResult;
 	registerEntryRenderer: (
-		type: string,
-		renderer: PluginEntryRenderer
+		renderer: PluginEntryRenderer,
+		options?: PluginRendererOptions
 	) => PluginUIContributionResult;
 	registerMessageRenderer: (
-		role: PluginMessageRole,
-		renderer: PluginMessageRenderer
+		renderer: PluginMessageRenderer,
+		options?: PluginRendererOptions
 	) => PluginUIContributionResult;
 	/** Registers a shortcut for the Plugin declared with definePlugin(). */
 	registerShortcut: (shortcut: string, options: PluginShortcutOptions) => void;

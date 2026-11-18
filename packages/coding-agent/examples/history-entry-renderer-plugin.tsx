@@ -1,11 +1,19 @@
 import type { PluginEntryRenderer, PluginFactory } from "@wincode/coding-agent";
 import { z } from "zod";
 
+const HISTORY_PLUGIN_ID = "history_entry_renderer";
 const notePayloadSchema = z
 	.object({ message: z.string().max(200), schemaVersion: z.literal(1) })
 	.strict();
 
-const NoteHistoryEntry: PluginEntryRenderer = ({ entry, options, theme }) => {
+const NoteHistoryEntry: PluginEntryRenderer = (context) => {
+	if (
+		context.originPluginId !== HISTORY_PLUGIN_ID ||
+		context.type !== "note-added"
+	) {
+		return;
+	}
+	const { entry, options, theme } = context;
 	const payload = notePayloadSchema.safeParse(entry.payload);
 	return (
 		<box flexDirection="column" gap={1}>
@@ -22,8 +30,8 @@ const NoteHistoryEntry: PluginEntryRenderer = ({ entry, options, theme }) => {
 };
 
 const historyEntryRendererPlugin: PluginFactory = (api) => {
-	const notes = api.definePlugin({ id: "history_entry_renderer" });
-	api.registerEntryRenderer("note-added", NoteHistoryEntry);
+	const notes = api.definePlugin({ id: HISTORY_PLUGIN_ID });
+	api.registerEntryRenderer(NoteHistoryEntry);
 	notes.registerTool({
 		description: "Add a durable note to the current Session branch.",
 		executionMode: "sequential",

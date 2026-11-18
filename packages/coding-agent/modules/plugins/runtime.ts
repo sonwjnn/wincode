@@ -49,7 +49,6 @@ import type {
 	PluginJsonValue,
 	PluginMcpServerRegistration,
 	PluginMessageRenderer,
-	PluginMessageRole,
 	PluginProcessContext,
 	PluginProcessStartHook,
 	PluginProviderRegistration,
@@ -69,6 +68,7 @@ import type {
 	PluginStatusPanelRegistration,
 	PluginToolRegistration,
 	PluginToolRegistrationAPI,
+	PluginToolRenderer,
 	PluginUI,
 	PluginUIContext,
 	PluginUICustomFactory,
@@ -147,15 +147,25 @@ export type PluginCommandDescriptor = Readonly<{
 export type PluginStatusPanelDescriptor = PluginStatusPanelRegistration &
 	Readonly<{ pluginId: string; sourcePath: string }>;
 
-export type PluginMessageRendererContribution = Readonly<{
-	component: PluginMessageRenderer;
-	pluginId: string;
+export type PluginRendererRegistration<Renderer> = Readonly<{
+	priority: number;
+	renderer: Renderer;
 }>;
 
-export type PluginEntryRendererContribution = Readonly<{
-	component: PluginEntryRenderer;
+export type PluginRendererContribution<Renderer> = Readonly<{
+	order: number;
 	pluginId: string;
+	priority: number;
+	renderer: Renderer;
+	sourcePath: string;
 }>;
+
+export type PluginToolRendererContribution =
+	PluginRendererContribution<PluginToolRenderer>;
+export type PluginMessageRendererContribution =
+	PluginRendererContribution<PluginMessageRenderer>;
+export type PluginEntryRendererContribution =
+	PluginRendererContribution<PluginEntryRenderer>;
 
 export type PluginProviderDescriptor = PluginProviderRegistration &
 	Readonly<{
@@ -173,8 +183,9 @@ export type LoadedPlugin = Readonly<{
 	mcpServers?: readonly PluginMcpServerRegistration[];
 	statusPanels?: readonly PluginStatusPanelRegistration[];
 	providers?: readonly PluginProviderDescriptor[];
-	messageRenderers?: ReadonlyMap<PluginMessageRole, PluginMessageRenderer>;
-	entryRenderers?: ReadonlyMap<string, PluginEntryRenderer>;
+	messageRenderers?: readonly PluginRendererRegistration<PluginMessageRenderer>[];
+	entryRenderers?: readonly PluginRendererRegistration<PluginEntryRenderer>[];
+	toolRenderers?: readonly PluginRendererRegistration<PluginToolRenderer>[];
 	shortcuts?: readonly PluginShortcutRegistration[];
 	sourceIdentity?: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
@@ -248,15 +259,15 @@ export type PluginRuntime = Readonly<{
 		sessionId: string
 	) => PluginSessionState | undefined;
 	getStatusPanels: () => readonly PluginStatusPanelDescriptor[];
-	getMessageRenderer: (
-		role: PluginMessageRole,
+	getToolRenderers: (
 		sessionId?: string
-	) => PluginMessageRendererContribution | undefined;
-	getEntryRenderer: (
-		pluginId: string,
-		type: string,
+	) => readonly PluginToolRendererContribution[];
+	getMessageRenderers: (
 		sessionId?: string
-	) => PluginEntryRendererContribution | undefined;
+	) => readonly PluginMessageRendererContribution[];
+	getEntryRenderers: (
+		sessionId?: string
+	) => readonly PluginEntryRendererContribution[];
 	getRendererRevision: () => number;
 	subscribeRendererChanges: (listener: () => void) => () => void;
 	refreshStatusPanel: (pluginId: string, panelId: string) => Promise<void>;
@@ -440,37 +451,43 @@ export const createPluginRuntime = (
 	const disabledPlugins = new Set<string>();
 	const sessionStates = new Map<string, SessionPluginState>();
 	const rendererListeners = new Set<() => void>();
-	const messageRenderers = new Map<
-		PluginMessageRole,
-		PluginMessageRendererContribution
-	>();
-	const entryRenderers = new Map<
-		string,
-		Map<string, PluginEntryRendererContribution>
-	>();
 	let rendererRevision = 0;
 	let renderersClosed = false;
-	for (const plugin of plugins) {
-		for (const [role, component] of plugin.messageRenderers ?? []) {
-			if (!messageRenderers.has(role)) {
-				messageRenderers.set(
-					role,
-					Object.freeze({ component, pluginId: plugin.id })
+	const collectRendererContributions = <Renderer>(
+		getRegistrations: (
+			plugin: LoadedPlugin
+		) => readonly PluginRendererRegistration<Renderer>[] | undefined
+	): readonly PluginRendererContribution<Renderer>[] => {
+		const contributions: PluginRendererContribution<Renderer>[] = [];
+		for (const plugin of plugins) {
+			for (const registration of getRegistrations(plugin) ?? []) {
+				contributions.push(
+					Object.freeze({
+						order: contributions.length,
+						pluginId: plugin.id,
+						priority: registration.priority,
+						renderer: registration.renderer,
+						sourcePath: plugin.sourcePath,
+					})
 				);
 			}
 		}
-		let pluginEntryRenderers = entryRenderers.get(plugin.id);
-		if (pluginEntryRenderers === undefined) {
-			pluginEntryRenderers = new Map();
-			entryRenderers.set(plugin.id, pluginEntryRenderers);
-		}
-		for (const [type, component] of plugin.entryRenderers ?? []) {
-			pluginEntryRenderers.set(
-				type,
-				Object.freeze({ component, pluginId: plugin.id })
-			);
-		}
-	}
+		return Object.freeze(
+			contributions.sort(
+				(left, right) =>
+					right.priority - left.priority || left.order - right.order
+			)
+		);
+	};
+	const toolRenderers = collectRendererContributions(
+		(plugin) => plugin.toolRenderers
+	);
+	const messageRenderers = collectRendererContributions(
+		(plugin) => plugin.messageRenderers
+	);
+	const entryRenderers = collectRendererContributions(
+		(plugin) => plugin.entryRenderers
+	);
 	const notifyRendererChanges = (): void => {
 		rendererRevision += 1;
 		for (const listener of [...rendererListeners]) {
@@ -780,39 +797,30 @@ export const createPluginRuntime = (
 		!disabledPlugins.has(plugin.id) &&
 		(sessionId === undefined ||
 			!sessionStates.get(sessionId)?.disabled.has(plugin.id));
-	const getMessageRenderer = (
-		role: PluginMessageRole,
+	const activeRenderersForSession = <Renderer>(
+		renderers: readonly PluginRendererContribution<Renderer>[],
 		sessionId?: string
-	): PluginMessageRendererContribution | undefined => {
+	): readonly PluginRendererContribution<Renderer>[] => {
 		if (renderersClosed) {
-			return;
+			return [];
 		}
-		const renderer = messageRenderers.get(role);
-		const plugin =
-			renderer === undefined
-				? undefined
-				: plugins.find(({ id }) => id === renderer.pluginId);
-		return plugin !== undefined && isEnabledForSession(plugin, sessionId)
-			? renderer
-			: undefined;
+		return renderers.filter((renderer) => {
+			const plugin = plugins.find(({ id }) => id === renderer.pluginId);
+			return plugin !== undefined && isEnabledForSession(plugin, sessionId);
+		});
 	};
-	const getEntryRenderer = (
-		pluginId: string,
-		type: string,
+	const getToolRenderers = (
 		sessionId?: string
-	): PluginEntryRendererContribution | undefined => {
-		if (renderersClosed) {
-			return;
-		}
-		const renderer = entryRenderers.get(pluginId)?.get(type);
-		const plugin =
-			renderer === undefined
-				? undefined
-				: plugins.find(({ id }) => id === renderer.pluginId);
-		return plugin !== undefined && isEnabledForSession(plugin, sessionId)
-			? renderer
-			: undefined;
-	};
+	): readonly PluginToolRendererContribution[] =>
+		activeRenderersForSession(toolRenderers, sessionId);
+	const getMessageRenderers = (
+		sessionId?: string
+	): readonly PluginMessageRendererContribution[] =>
+		activeRenderersForSession(messageRenderers, sessionId);
+	const getEntryRenderers = (
+		sessionId?: string
+	): readonly PluginEntryRendererContribution[] =>
+		activeRenderersForSession(entryRenderers, sessionId);
 	const registerPluginShortcuts = (
 		plugin: LoadedPlugin,
 		sessionId: string,
@@ -1913,8 +1921,9 @@ export const createPluginRuntime = (
 					.map(({ id, sourcePath }) => Object.freeze({ id, sourcePath }))
 			);
 		},
-		getMessageRenderer,
-		getEntryRenderer,
+		getToolRenderers,
+		getMessageRenderers,
+		getEntryRenderers,
 		getRendererRevision: () => rendererRevision,
 		subscribeRendererChanges(listener) {
 			rendererListeners.add(listener);

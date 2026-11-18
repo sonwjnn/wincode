@@ -26,12 +26,18 @@ import { buildAgent } from "@/modules/agents";
 import type {
 	PluginToolCall,
 	PluginToolRenderContext,
+	PluginToolRendererContext,
 	PluginToolResult,
 } from "@/modules/plugins/public";
 import type {
 	PluginRuntime,
 	PluginToolPresentationDescriptor,
+	PluginToolRendererContribution,
 } from "@/modules/plugins/runtime";
+import {
+	PluginRendererResolution,
+	usePluginRendererRevision,
+} from "@/modules/plugins/ui/plugin-renderer-boundary";
 import {
 	useOptionalPluginUIHost,
 	usePluginUIContributions,
@@ -506,9 +512,7 @@ class PluginToolRendererErrorBoundary extends Component<
 	}
 }
 
-const pluginToolCallFor = (
-	part: Extract<ToolPart, { type: "dynamic-tool" }>
-): PluginToolCall =>
+const pluginToolCallFor = (part: ToolPart): PluginToolCall =>
 	Object.freeze({
 		input: structuredClone(part.input),
 		...omitUndefined({
@@ -519,12 +523,13 @@ const pluginToolCallFor = (
 		}),
 		state: part.state,
 		toolCallId: part.toolCallId,
-		toolName: part.toolName,
+		toolName:
+			part.type === "dynamic-tool"
+				? part.toolName
+				: part.type.slice("tool-".length),
 	});
 
-const pluginToolResultFor = (
-	part: Extract<ToolPart, { type: "dynamic-tool" }>
-): PluginToolResult | undefined => {
+const pluginToolResultFor = (part: ToolPart): PluginToolResult | undefined => {
 	if (part.state === "output-available") {
 		return Object.freeze(
 			structuredClone({ type: "success" as const, output: part.output })
@@ -664,21 +669,27 @@ function ToolMessagePart({
 	expanded,
 	onExpandedChange,
 	part,
+	pluginRenderers,
 	pluginTool,
+	rendererRevision,
 }: {
 	agent: AgentId;
 	expanded?: boolean;
 	onExpandedChange?: (expanded: boolean) => void;
 	part: ToolPart;
+	pluginRenderers: readonly PluginToolRendererContribution[];
 	pluginTool?: PluginToolPresentationDescriptor;
+	rendererRevision: number;
 }) {
-	if (
+	const { currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const call = useMemo(() => pluginToolCallFor(part), [part]);
+	const result = useMemo(() => pluginToolResultFor(part), [part]);
+	const fallback =
 		part.type === "dynamic-tool" &&
 		pluginTool !== undefined &&
 		(pluginTool.renderCall !== undefined ||
-			pluginTool.renderResult !== undefined)
-	) {
-		return (
+			pluginTool.renderResult !== undefined) ? (
 			<PluginToolMessagePart
 				agent={agent}
 				expanded={expanded}
@@ -686,14 +697,36 @@ function ToolMessagePart({
 				part={part}
 				tool={pluginTool}
 			/>
+		) : (
+			<HostToolMessagePart
+				agent={agent}
+				expanded={expanded}
+				onExpandedChange={onExpandedChange}
+				part={part}
+			/>
 		);
+	if (pluginRenderers.length === 0) {
+		return fallback;
 	}
+	const context: PluginToolRendererContext = Object.freeze({
+		call,
+		expanded: expanded ?? false,
+		height: dimensions.height,
+		onToggleExpanded: () => onExpandedChange?.(!(expanded ?? false)),
+		originPluginId: pluginTool?.pluginId,
+		...omitUndefined({ result }),
+		theme: currentTheme,
+		type: part.type,
+		width: dimensions.width,
+	});
 	return (
-		<HostToolMessagePart
-			agent={agent}
-			expanded={expanded}
-			onExpandedChange={onExpandedChange}
-			part={part}
+		<PluginRendererResolution
+			context={context}
+			fallback={fallback}
+			key={`${getToolKey(part, 0)}:${rendererRevision}`}
+			resolvers={pluginRenderers}
+			surface="tool"
+			target={`${context.originPluginId ?? "host"}:${context.type}:${call.toolName}`}
 		/>
 	);
 }
@@ -963,7 +996,9 @@ type BotMessagePartRenderOptions = Readonly<{
 	agent: AgentId;
 	expanded?: boolean;
 	onExpandedChange?: (expanded: boolean) => void;
+	pluginRenderers: readonly PluginToolRendererContribution[];
 	pluginToolsByName: ReadonlyMap<string, PluginToolPresentationDescriptor>;
+	rendererRevision: number;
 	streaming: boolean;
 }>;
 
@@ -983,11 +1018,13 @@ const renderBotMessagePart = (
 				key={getToolKey(part, index)}
 				onExpandedChange={options.onExpandedChange}
 				part={part}
+				pluginRenderers={options.pluginRenderers}
 				pluginTool={
 					part.type === "dynamic-tool"
 						? options.pluginToolsByName.get(part.toolName)
 						: undefined
 				}
+				rendererRevision={options.rendererRevision}
 			/>
 		);
 	}
@@ -1019,6 +1056,11 @@ export function BotMessageContent({
 }) {
 	const { colors } = useTheme();
 	const hideThinking = useHideThinking();
+	const rendererRevision = usePluginRendererRevision(pluginRuntime);
+	const pluginRenderers =
+		pluginRuntime !== undefined && sessionId !== undefined
+			? pluginRuntime.getToolRenderers(sessionId)
+			: [];
 	const pluginToolsByName = new Map<string, PluginToolPresentationDescriptor>();
 	if (pluginRuntime !== undefined && sessionId !== undefined) {
 		for (const tool of pluginRuntime.getToolDescriptors(sessionId, {
@@ -1051,7 +1093,9 @@ export function BotMessageContent({
 		onExpandedChange: hasHostedToolExpansion
 			? onExpandedToolsChange
 			: undefined,
+		pluginRenderers,
 		pluginToolsByName,
+		rendererRevision,
 		streaming,
 	};
 	const groups = groupConsecutiveParts(parts).filter(

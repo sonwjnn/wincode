@@ -21,7 +21,6 @@ import { codingToolNames } from "@/modules/tools";
 import type { ConfigRuntime, ConfigSource } from "@/shared/config/config-store";
 import { getProjectRoots } from "@/shared/paths/project-roots";
 import { resolveUserDataDir } from "@/shared/paths/user-data-dir";
-import { validatePluginSessionHistoryType } from "../sessions/session-plugin-history";
 import {
 	validatePluginSessionStatePluginId,
 	validatePluginSessionStateSchemaVersion,
@@ -44,16 +43,16 @@ import type {
 	PluginJsonValue,
 	PluginLoadContext,
 	PluginMessageRenderer,
-	PluginMessageRole,
 	PluginProcessStartHook,
 	PluginProviderRegistration,
+	PluginRendererOptions,
 	PluginSessionHistoryNavigatedHook,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginShortcutRegistration,
 	PluginShutdownHook,
 	PluginStatusPanelRegistration,
-	PluginUIContributionResult,
+	PluginToolRenderer,
 	PluginUIPromptHook,
 } from "./public";
 import {
@@ -99,11 +98,17 @@ export type LoadPluginsInput = Readonly<{
 	userDataDir?: string;
 }>;
 
+type MutablePluginRendererRegistration<Renderer> = Readonly<{
+	priority: number;
+	renderer: Renderer;
+}>;
+
 type MutablePluginDraft = {
 	agents: Map<string, PluginAgentRegistration>;
 	commands: Map<string, PluginCommand>;
-	entryRenderers: Map<string, PluginEntryRenderer>;
-	messageRenderers: Map<PluginMessageRole, PluginMessageRenderer>;
+	entryRenderers: MutablePluginRendererRegistration<PluginEntryRenderer>[];
+	messageRenderers: MutablePluginRendererRegistration<PluginMessageRenderer>[];
+	toolRenderers: MutablePluginRendererRegistration<PluginToolRenderer>[];
 	mcpServers: Map<string, PluginJsonValue>;
 	providers: Map<string, PluginProviderRegistration>;
 	resources: Map<string, PluginResourceDescriptor>;
@@ -147,11 +152,6 @@ const isTypeScriptPluginPath = (candidatePath: string): boolean =>
 	typescriptPluginExtensions.has(path.extname(candidatePath)) &&
 	!declarationFilePattern.test(candidatePath);
 const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
-const pluginMessageRendererRoles = new Set<PluginMessageRole>([
-	"assistant",
-	"system",
-	"user",
-]);
 const pluginMcpServerNamePattern = /^[A-Za-z0-9_-]{1,64}$/u;
 const pluginResourceNamePattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const RESERVED_TOOL_NAMES = new Set([...codingToolNames, "skill"]);
@@ -589,7 +589,6 @@ const createPluginAPI = (
 	toolNames: ReadonlySet<string>,
 	commandNames: ReadonlySet<string>,
 	customCommandNames: ReadonlySet<string>,
-	messageRendererOwners: ReadonlyMap<PluginMessageRole, string>,
 	promptSelectionBridge: PluginPromptSelectionBridge
 ): PluginAPI => {
 	let draft: MutablePluginDraft | undefined;
@@ -605,13 +604,21 @@ const createPluginAPI = (
 		}
 		return draft;
 	};
-	const registrationConflict = (
-		surface: "entry" | "message"
-	): PluginUIContributionResult => ({
-		code: "plugin_ui_contribution_conflict",
-		success: false,
-		surface,
-	});
+	const rendererPriority = (options?: PluginRendererOptions): number => {
+		if (options === undefined) {
+			return 0;
+		}
+		if (
+			!isPlainObject(options) ||
+			Object.keys(options).some((key) => key !== "priority") ||
+			(options.priority !== undefined &&
+				(typeof options.priority !== "number" ||
+					!Number.isFinite(options.priority)))
+		) {
+			throw new Error("Plugin Renderer priority must be a finite number.");
+		}
+		return options.priority ?? 0;
+	};
 	return Object.freeze({
 		setModel: promptSelectionBridge.setModel,
 		setThinkingLevel: promptSelectionBridge.setThinkingLevel,
@@ -622,37 +629,42 @@ const createPluginAPI = (
 			}
 			definitionAPI.registerShortcut(shortcut, options);
 		},
-		registerMessageRenderer(role, renderer) {
+		registerToolRenderer(renderer, options) {
 			assertOpen();
-			if (
-				!pluginMessageRendererRoles.has(role) ||
-				typeof renderer !== "function"
-			) {
+			if (typeof renderer !== "function") {
+				throw new Error("Plugin Tool Renderers require a resolver function.");
+			}
+			const plugin = requireDraft();
+			plugin.toolRenderers.push({
+				priority: rendererPriority(options),
+				renderer,
+			});
+			return { success: true };
+		},
+		registerMessageRenderer(renderer, options) {
+			assertOpen();
+			if (typeof renderer !== "function") {
 				throw new Error(
-					"Plugin Message Renderers require a supported transcript role and React component."
+					"Plugin Message Renderers require a resolver function."
 				);
 			}
 			const plugin = requireDraft();
-			if (
-				plugin.messageRenderers.has(role) ||
-				messageRendererOwners.has(role)
-			) {
-				return registrationConflict("message");
-			}
-			plugin.messageRenderers.set(role, renderer);
+			plugin.messageRenderers.push({
+				priority: rendererPriority(options),
+				renderer,
+			});
 			return { success: true };
 		},
-		registerEntryRenderer(type, renderer) {
+		registerEntryRenderer(renderer, options) {
 			assertOpen();
-			validatePluginSessionHistoryType(type);
 			if (typeof renderer !== "function") {
-				throw new Error("Plugin Entry Renderers require a React component.");
+				throw new Error("Plugin Entry Renderers require a resolver function.");
 			}
 			const plugin = requireDraft();
-			if (plugin.entryRenderers.has(type)) {
-				return registrationConflict("entry");
-			}
-			plugin.entryRenderers.set(type, renderer);
+			plugin.entryRenderers.push({
+				priority: rendererPriority(options),
+				renderer,
+			});
 			return { success: true };
 		},
 		definePlugin(identity) {
@@ -670,8 +682,9 @@ const createPluginAPI = (
 			const nextDraft: MutablePluginDraft = {
 				agents: new Map(),
 				commands: new Map(),
-				entryRenderers: new Map(),
-				messageRenderers: new Map(),
+				entryRenderers: [],
+				messageRenderers: [],
+				toolRenderers: [],
 				mcpServers: new Map(),
 				providers: new Map(),
 				resources: new Map(),
@@ -802,8 +815,9 @@ const loadedPluginFromDraft = (
 	return Object.freeze({
 		agents: Object.freeze([...draft.agents.values()]),
 		commands: Object.freeze(registeredCommands),
-		entryRenderers: new Map(draft.entryRenderers),
-		messageRenderers: new Map(draft.messageRenderers),
+		entryRenderers: Object.freeze([...draft.entryRenderers]),
+		messageRenderers: Object.freeze([...draft.messageRenderers]),
+		toolRenderers: Object.freeze([...draft.toolRenderers]),
 		mcpServers: Object.freeze(
 			[...draft.mcpServers].map(([name, config]) =>
 				Object.freeze({ config, name, ownerPluginId: draft.id })
@@ -1229,7 +1243,6 @@ type PluginLoadState = Readonly<{
 	loadedPlugins: LoadedPlugin[];
 	pluginSources: Map<string, string>;
 	toolNames: Set<string>;
-	messageRendererOwners: Map<PluginMessageRole, string>;
 }>;
 
 type PluginFactoryResult = Readonly<{
@@ -1385,7 +1398,6 @@ const runPluginFactory = async (
 				state.toolNames,
 				state.commandNames,
 				state.customCommandNames,
-				state.messageRendererOwners,
 				promptSelectionBridge
 			),
 			context
@@ -1456,9 +1468,6 @@ const publishPluginDraft = async (
 			state.commandNames,
 			candidate.sourceScope
 		);
-		for (const role of loaded.messageRenderers?.keys() ?? []) {
-			state.messageRendererOwners.set(role, loaded.id);
-		}
 		state.pluginSources.set(loaded.id, candidate.path);
 		state.loadedPlugins.push(loaded);
 	} catch (error) {
@@ -1483,7 +1492,6 @@ export const loadPlugins = async (
 		diagnostics,
 		disabledPluginIds: plan.disabledPluginIds,
 		loadedPlugins: [],
-		messageRendererOwners: new Map(),
 		pluginSources: new Map(),
 		toolNames: new Set<string>(RESERVED_TOOL_NAMES),
 	};

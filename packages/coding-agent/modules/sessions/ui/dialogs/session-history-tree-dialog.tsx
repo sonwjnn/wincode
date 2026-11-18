@@ -3,16 +3,9 @@ import { useTerminalDimensions } from "@opentui/react";
 import type { SessionRecordId } from "@wincode/agent-core";
 import { getErrorMessage, logger } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-	createElement,
-	useCallback,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
-import {
-	PluginRendererErrorBoundary,
+	PluginRendererResolution,
 	useInteractivePluginRuntime,
 	usePluginRendererRevision,
 } from "@/modules/plugins/ui/plugin-renderer-boundary";
@@ -197,13 +190,8 @@ function PluginHistoryEntryPreview({
 	const rendererRevision = usePluginRendererRevision(runtime);
 	const { currentTheme } = useTheme();
 	const dimensions = useTerminalDimensions();
-	const renderer = runtime?.getEntryRenderer(
-		entry.pluginId,
-		entry.type,
-		sessionId
-	);
+	const renderers = runtime?.getEntryRenderers(sessionId) ?? [];
 	const [pluginEntry, setPluginEntry] = useState<PluginSessionHistoryEntry>();
-	const Renderer = renderer?.component;
 
 	useEffect(() => {
 		let active = true;
@@ -211,7 +199,7 @@ function PluginHistoryEntryPreview({
 		if (
 			!entry.selectedPath ||
 			runtime === undefined ||
-			Renderer === undefined
+			renderers.length === 0
 		) {
 			return () => {
 				active = false;
@@ -251,32 +239,34 @@ function PluginHistoryEntryPreview({
 		entry.id,
 		entry.pluginId,
 		entry.selectedPath,
-		Renderer,
+		renderers.length,
 		runtime,
 		sessionId,
 	]);
 
-	if (
-		renderer === undefined ||
-		Renderer === undefined ||
-		pluginEntry === undefined
-	) {
+	if (renderers.length === 0 || pluginEntry === undefined) {
 		return <text>{fallback}</text>;
 	}
+	const context = Object.freeze({
+		dimensions: Object.freeze({
+			height: dimensions.height,
+			width: dimensions.width,
+		}),
+		entry: structuredClone(pluginEntry),
+		options: Object.freeze({ selectedPath: entry.selectedPath }),
+		originPluginId: entry.pluginId,
+		theme: currentTheme,
+		type: entry.type,
+	});
 	return (
-		<PluginRendererErrorBoundary
+		<PluginRendererResolution
+			context={context}
 			fallback={<text>{fallback}</text>}
-			key={`${renderer?.pluginId}:${entry.id}:${rendererRevision}`}
-			pluginId={renderer.pluginId}
+			key={`${entry.pluginId}:${entry.id}:${rendererRevision}`}
+			resolvers={renderers}
 			surface="entry"
-		>
-			{createElement(Renderer, {
-				dimensions,
-				entry: pluginEntry,
-				options: { selectedPath: entry.selectedPath },
-				theme: currentTheme,
-			})}
-		</PluginRendererErrorBoundary>
+			target={`${entry.pluginId}:${entry.type}:${entry.id}`}
+		/>
 	);
 }
 

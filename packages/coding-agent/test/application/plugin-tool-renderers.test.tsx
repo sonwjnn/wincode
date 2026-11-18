@@ -29,6 +29,7 @@ import { createConfigStore } from "@/shared/config/config-store";
 import { toSessionId } from "@/shared/identifiers";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
+import pluginRendererCompositionExample from "../../examples/plugin-renderer-composition";
 import pluginToolRendererExample from "../../examples/plugin-tool-renderer";
 import pluginToolRendererFixture, {
 	pluginToolRendererFixtureState,
@@ -63,7 +64,11 @@ const leadingSpacesFor = (frame: string, marker: string): number => {
 
 const createRendererEnvironment = async (
 	pluginFactory: PluginFactory = pluginToolRendererFixture,
-	pluginId = "tool_renderer_fixture"
+	pluginId = "tool_renderer_fixture",
+	additionalPlugins: readonly Readonly<{
+		factory: PluginFactory;
+		id: string;
+	}>[] = []
 ) => {
 	const root = await fs.mkdtemp(
 		path.join(os.tmpdir(), "wincode-plugin-tool-renderer-")
@@ -72,7 +77,10 @@ const createRendererEnvironment = async (
 	await fs.mkdir(workspace, { recursive: true });
 	const sessionId = toSessionId("plugin-tool-renderer-session");
 	const runtime = await loadPlugins({
-		bundledPlugins: [{ factory: pluginFactory, id: pluginId }],
+		bundledPlugins: [
+			{ factory: pluginFactory, id: pluginId },
+			...additionalPlugins,
+		],
 		cliPaths: [],
 		config: {
 			configStore: createConfigStore({ homeRoot: root }),
@@ -248,6 +256,114 @@ test("Plugin Tool renderers receive live call and result updates through the hos
 		await environment.dispose();
 		expect(pluginToolRendererFixtureState.callUnmounts).toBe(1);
 		expect(pluginToolRendererFixtureState.resultUnmounts).toBe(1);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("public Tool resolvers override host and other-Plugin rows without changing execution", async () => {
+	resetPluginToolRendererFixtureState();
+	const observedTargets: Readonly<{
+		originPluginId: string | undefined;
+		type: string;
+	}>[] = [];
+	const overridePlugin: PluginFactory = (api) => {
+		api.definePlugin({ id: "cross_tool_renderer" });
+		api.registerToolRenderer(
+			(context, next) => {
+				observedTargets.push({
+					originPluginId: context.originPluginId,
+					type: context.type,
+				});
+				if (
+					context.originPluginId === "tool_renderer_fixture" &&
+					context.call.toolName.endsWith("_lookup")
+				) {
+					return (
+						<box>
+							<text>{`other-Plugin Tool ${context.call.state}`}</text>
+							{next()}
+						</box>
+					);
+				}
+				if (
+					context.originPluginId === undefined &&
+					context.type === "tool-shell"
+				) {
+					return <text>host Tool override</text>;
+				}
+				return;
+			},
+			{ priority: 5 }
+		);
+	};
+	const environment = await createRendererEnvironment(
+		pluginToolRendererFixture,
+		"tool_renderer_fixture",
+		[
+			{
+				factory: pluginRendererCompositionExample,
+				id: "renderer_composition_example",
+			},
+			{ factory: overridePlugin, id: "cross_tool_renderer" },
+		]
+	);
+	try {
+		const tool = createPluginTools({
+			agentId: agentIdSchema.parse("build"),
+			pluginRuntime: environment.runtime,
+			pluginTools: environment.runtime.getToolDescriptors(
+				environment.sessionId
+			),
+			sessionId: environment.sessionId,
+			workspace: environment.workspace,
+		}).find(({ definition }) => definition.name === environment.toolName);
+		if (tool === undefined) {
+			throw new Error("The fixture Plugin Tool was not executable.");
+		}
+		const input = { query: "WCO-290" };
+		const outcome = await tool.execute({
+			input,
+			toolCallId: toolCallId("plugin-tool-renderer-override"),
+		});
+		if (outcome.type !== "success") {
+			throw new Error(`The fixture Tool failed: ${outcome.errorText}`);
+		}
+		const resultPart: DynamicToolPart = {
+			input,
+			output: outcome.output,
+			state: "output-available",
+			toolCallId: toolCallId("plugin-tool-renderer-override"),
+			toolName: environment.toolName,
+			type: "dynamic-tool",
+		};
+		const storedInput = structuredClone(resultPart.input);
+		const storedOutput = structuredClone(resultPart.output);
+		const hostPart: SessionMessage["parts"][number] = {
+			input: { command: "true" },
+			state: "input-available",
+			toolCallId: toolCallId("host-tool-renderer-override"),
+			type: "tool-shell",
+		};
+		await act(() => environment.updateParts([resultPart, hostPart]));
+		await flushTestRenderer(environment.setup, 2);
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Composed Tool output-available");
+		expect(frame).toContain("other-Plugin Tool output-available");
+		expect(frame).toContain("fixture result result for WCO-290 collapsed");
+		expect(frame).toContain("host Tool override");
+		expect(observedTargets).toContainEqual({
+			originPluginId: "tool_renderer_fixture",
+			type: "dynamic-tool",
+		});
+		expect(observedTargets).toContainEqual({
+			originPluginId: undefined,
+			type: "tool-shell",
+		});
+		expect(resultPart.input).toEqual(storedInput);
+		expect(resultPart.output).toEqual(storedOutput);
+		expect(pluginToolRendererFixtureState.executionCount).toBe(1);
+		expect(outcome.output).toMatchObject({ answer: "result for WCO-290" });
 	} finally {
 		await environment.dispose();
 	}

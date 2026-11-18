@@ -2,11 +2,11 @@ import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/react";
 import type { SessionMessageId, SessionRecordId } from "@wincode/agent-core";
 import { isUndefined } from "@wincode/utils";
-import { createElement, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { buildAgent } from "@/modules/agents";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import {
-	PluginRendererErrorBoundary,
+	PluginRendererResolution,
 	useInteractivePluginRuntime,
 	usePluginRendererRevision,
 } from "@/modules/plugins/ui/plugin-renderer-boundary";
@@ -107,10 +107,7 @@ function SessionTranscriptMessage({
 	const rendererRevision = usePluginRendererRevision(runtime);
 	const { currentTheme } = useTheme();
 	const dimensions = useTerminalDimensions();
-	const contribution =
-		message.role === "tool"
-			? undefined
-			: runtime?.getMessageRenderer(message.role, sessionId);
+	const renderers = runtime?.getMessageRenderers(sessionId) ?? [];
 	const fallback = (
 		<DefaultSessionTranscriptMessage
 			message={message}
@@ -119,24 +116,29 @@ function SessionTranscriptMessage({
 			streaming={streaming}
 		/>
 	);
-	if (contribution === undefined) {
+	if (message.role === "tool" || renderers.length === 0) {
 		return fallback;
 	}
-	const Renderer = contribution.component;
+	const context = Object.freeze({
+		dimensions: Object.freeze({
+			height: dimensions.height,
+			width: dimensions.width,
+		}),
+		message: structuredClone(message),
+		options: Object.freeze({ streaming }),
+		originPluginId: undefined,
+		role: message.role,
+		theme: currentTheme,
+	});
 	return (
-		<PluginRendererErrorBoundary
+		<PluginRendererResolution
+			context={context}
 			fallback={fallback}
-			key={`${contribution.pluginId}:${message.id}:${rendererRevision}`}
-			pluginId={contribution.pluginId}
+			key={`${message.id}:${rendererRevision}`}
+			resolvers={renderers}
 			surface="message"
-		>
-			{createElement(Renderer, {
-				dimensions,
-				message,
-				options: { streaming },
-				theme: currentTheme,
-			})}
-		</PluginRendererErrorBoundary>
+			target={`${message.role}:${message.id}`}
+		/>
 	);
 }
 

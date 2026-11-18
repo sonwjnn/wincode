@@ -406,32 +406,51 @@ checklist.registerTool({
 
 ### Plugin UI renderers
 
-Use `api.registerMessageRenderer(role, component)` to customize the presentation of existing `user`, `assistant`, or `system` messages in the Session Transcript. It does not create message roles, change the stored message, or affect what enters model context. The first Plugin to register a role in load order owns it; later registrations return `{ success: false, code: "plugin_ui_contribution_conflict", surface: "message" }` and do not replace the owner.
+`api.registerToolRenderer(resolver, options?)`, `api.registerMessageRenderer(resolver, options?)`, and `api.registerEntryRenderer(resolver, options?)` register presentation resolvers for Interactive Mode. Each resolver sees host and Plugin-owned targets and filters them using its context; registration does not select a role, tool, Plugin, or history type. `options.priority` defaults to `0`; higher values run first, and equal priorities retain Plugin load and registration order.
+
+A resolver returns a React node. Returning `undefined` declines and continues to the next resolver. Calling `next()` explicitly delegates and returns the next resolver's React node, so it can be composed inside a wrapper. Returning `null` intentionally renders nothing and stops the chain. A resolver may return an element whose component uses React hooks; do not call hooks inside the resolver itself.
 
 ```tsx
-import type { PluginFactory, PluginMessageRenderer } from "@wincode/coding-agent";
+import type { PluginFactory } from "@wincode/coding-agent";
 
-const AssistantMessage: PluginMessageRenderer = ({ message, theme }) => {
-  const text = message.parts
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join(" ");
-  return <text fg={theme.colors.text}>{text}</text>;
-};
+const presentationPlugin: PluginFactory = (api) => {
+  api.definePlugin({ id: "presentation_layers" });
 
-const transcriptPlugin: PluginFactory = (api) => {
-  api.definePlugin({ id: "transcript_view" });
-  const registration = api.registerMessageRenderer("assistant", AssistantMessage);
-  if (!registration.success) {
-    // Another Plugin owns this role; this Plugin cannot replace it.
-  }
+  api.registerMessageRenderer((context, next) => {
+    if (context.originPluginId !== undefined || context.role !== "assistant") {
+      return;
+    }
+    return (
+      <box>
+        <text>Review layer</text>
+        {next()}
+      </box>
+    );
+  }, { priority: 20 });
+
+  api.registerToolRenderer((context, next) => {
+    if (context.originPluginId !== "review_tools" || context.type !== "dynamic-tool") {
+      return;
+    }
+    return <box><text>Review Tool</text>{next()}</box>;
+  }, { priority: 20 });
+
+  api.registerEntryRenderer((context, next) => {
+    if (context.originPluginId !== "review_tools" || context.type !== "review-note") {
+      return;
+    }
+    return <box><text>Review history</text>{next()}</box>;
+  }, { priority: 20 });
 };
 ```
 
-Use `api.registerEntryRenderer(type, component)` for this Plugin's own `sessionHistory` event types. The Session history tree keeps its normal navigation and opaque preview; press `p` on a Selected Path event to show the registered component. The host reads the owning Plugin's paginated history for that entry, preserving the read snapshot. A missing or disabled Plugin, an inactive branch entry, or an unavailable payload keeps the opaque host preview; Wincode never loads Plugin code just to show an entry. Components receive `theme`, terminal `dimensions`, and the message or durable entry. Entry components receive `options.selectedPath`; payloads stay out of Provider context unless the Plugin explicitly sends some other model input.
+Tool context includes `originPluginId` (`undefined` for host Tools), the Tool `type`, `call`, optional `result`, theme, dimensions, and expansion controls. Message context includes `originPluginId` (`undefined` for current host transcript messages), `role`, message, streaming options, theme, and dimensions. Entry context includes the immutable origin `originPluginId`, event `type`, entry, Selected Path status, theme, and dimensions. Context objects are read-only snapshots. Renderers only control presentation: they cannot execute Tools, write another Plugin's history, change permissions, or alter Session Context.
 
-Renderers mount only in Interactive UI and are contained by the host's error boundary. A rendering error falls back to the built-in transcript presentation or opaque entry preview. Disabling or unloading the owner unmounts its component and restores the host fallback. Registration conflicts are non-throwing; entry types are scoped to their owner Plugin, so different Plugins can use the same event type.
+Resolvers run only while their owning Plugin is enabled for the current Session/view. A failed Session start removes that Plugin's resolvers only from that Session; disabling or unloading a Plugin removes only its registrations. Resolver exceptions and React-render failures are reported through the centralized logger, then continue through remaining resolvers to the host presentation. They do not change Tool execution, durable messages/history, history ownership, or model-context inclusion.
 
-For a complete Plugin that appends versioned history events and renders them from the Selected Path, see [the history-entry renderer example](../../examples/history-entry-renderer-plugin.tsx). Enable it explicitly with `wincode --plugin packages/coding-agent/examples/history-entry-renderer-plugin.tsx` from the repository root.
+Entry resolvers may present another Plugin's entry, but the host still reads the origin Plugin's paginated history and Selected Path snapshot. Missing or disabled history owners, inactive-branch entries, and unavailable payloads keep the opaque host preview; Wincode never loads Plugin code because a history entry names a Plugin. Display-only entries remain excluded from Provider context.
+
+For a tested example that composes Tool, message, and history-entry presentations with `next()`, see [the renderer composition Plugin](../../examples/plugin-renderer-composition.tsx). The history-writing example is [the versioned history renderer](../../examples/history-entry-renderer-plugin.tsx). Enable either with `wincode --plugin packages/coding-agent/examples/plugin-renderer-composition.tsx` or `wincode --plugin packages/coding-agent/examples/history-entry-renderer-plugin.tsx` from the repository root.
 
 `append(type, payload, operationId)` attaches one entry to the current Active Leaf and advances it as one durable history write. Event types must be non-empty and no more than 128 UTF-8 bytes. Payloads must be strict JSON and no more than 64 KiB serialized; the event type and payload schema version belong to the Plugin. Use a version field in payloads and leave unknown versions unapplied while preserving their original entries. Operation IDs follow the same 512-character ASCII format as Plugin Session State: retry with the same ID and identical event; reusing an ID with different content conflicts. A capability from before Navigation is stale; use the refreshed capability from `onSessionHistoryNavigated` or the next `onSessionStart`.
 
