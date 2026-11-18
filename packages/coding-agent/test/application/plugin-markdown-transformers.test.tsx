@@ -206,6 +206,54 @@ test("Markdown transformer context reports measured width and reruns on terminal
 	);
 });
 
+test("Markdown display output uses transformed text while the source message remains unchanged", async () => {
+	const markdownSource = "PROMPT_AUDIT_MARKDOWN_SOURCE_47d2";
+	const markdownRendered = "PROMPT_AUDIT_MARKDOWN_RENDERED_6a18";
+	const plugin: PluginFactory = (api) => {
+		api.definePlugin({ id: "prompt_audit_markdown_display" });
+		api.registerMarkdownTransformer((markdown) =>
+			markdown === markdownSource ? markdownRendered : markdown
+		);
+	};
+	setTreeSitterClientOverride(
+		new MockTreeSitterClient({ autoResolveTimeout: 0 })
+	);
+	await withPluginRuntime(
+		[{ factory: plugin, id: "prompt_audit_markdown_display" }],
+		async (runtime) => {
+			setInteractiveRuntimeContext({
+				args: [],
+				cwd: "/workspace",
+				pluginRuntime: runtime,
+			});
+			const sourceMessage: SessionMessage = {
+				id: sessionMessageId("prompt-audit-markdown-source"),
+				parts: [{ text: markdownSource, type: "text" }],
+				role: "user",
+			};
+			const setup = await testRender(
+				<ThemeProvider themeName="opencode">
+					<KeyboardLayerProvider>
+						<StatefulChat message={sourceMessage} streaming={false} />
+					</KeyboardLayerProvider>
+				</ThemeProvider>,
+				{ height: 12, width: 64 }
+			);
+			try {
+				await flushTestRenderer(setup, 3);
+				const frame = setup.captureCharFrame();
+				expect(frame).toContain(markdownRendered);
+				expect(frame).not.toContain(markdownSource);
+				expect(sourceMessage.parts).toEqual([
+					{ text: markdownSource, type: "text" },
+				]);
+			} finally {
+				await setup.dispose();
+			}
+		}
+	);
+});
+
 test("stream updates transform fresh source and restored assistant messages expose their persisted identity", async () => {
 	const calls: Readonly<{
 		markdown: string;

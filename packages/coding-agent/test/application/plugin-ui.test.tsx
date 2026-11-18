@@ -10,6 +10,7 @@ import {
 } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
+import type { ProviderChatEvent } from "@wincode/ai";
 import type {
 	PluginAutocompleteProviderFactory,
 	PluginEditorComponent,
@@ -27,6 +28,7 @@ import type {
 } from "@wincode/coding-agent";
 import { LocalStyleProvider } from "@wincode/tui";
 import { act, useEffect, useRef, useState } from "react";
+import { z } from "zod";
 import { AgentRegistryProvider } from "@/modules/agents";
 import {
 	type CommandControllerFactory,
@@ -47,8 +49,12 @@ import {
 	usePluginUIHost,
 } from "@/modules/plugins/ui/plugin-ui-host";
 import { PromptConfigProvider } from "@/modules/prompt-settings/context/prompt-config-provider";
+import { DEFAULT_PROVIDER_MODEL_SELECTION } from "@/modules/providers/provider-model-selection";
+import type { TurnToolResolver } from "@/modules/sessions/hooks/runtime-turn";
 import { openSessionServices } from "@/modules/sessions/host/session-services";
+import type { SessionHost } from "@/modules/sessions/host/types";
 import type { SessionMessage } from "@/modules/sessions/message";
+import type { SessionSendInput } from "@/modules/sessions/submission-types";
 import { ChatTextArea } from "@/modules/sessions/ui/components/chat-text-area";
 import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
 import {
@@ -78,6 +84,7 @@ import { testRenderWithClipboard } from "../support/clipboard";
 import {
 	createFakeProviderCollection,
 	createFakeProviderRecorder,
+	type FakeGenerationRequest,
 	type FakeProviderRecorder,
 } from "../support/e2e-fake-runtime";
 import { toolCallId } from "../support/identifiers";
@@ -249,6 +256,45 @@ function HostMetaWAction({
 	});
 	return null;
 }
+
+const promptAuditMarkers = Object.freeze({
+	composer: "PROMPT_AUDIT_COMPOSER_INPUT_29c7",
+	markdownRendered: "PROMPT_AUDIT_MARKDOWN_RENDERED_6a18",
+	markdownSource: "PROMPT_AUDIT_MARKDOWN_SOURCE_47d2",
+	status: "PROMPT_AUDIT_UI_STATUS_35bf",
+	title: "PROMPT_AUDIT_UI_TITLE_a182",
+	toolResult: "PROMPT_AUDIT_TOOL_RESULT_8c05",
+	widget: "PROMPT_AUDIT_UI_WIDGET_f319",
+});
+const promptAuditPluginId = "prompt_boundary_audit";
+const promptAuditToolName = "prompt_audit_return";
+const promptAuditTurnToolResolver: TurnToolResolver = async () => [
+	{
+		definition: {
+			description: "Return the Prompt Audit Tool marker.",
+			inputSchema: z.object({}),
+			name: promptAuditToolName,
+		},
+		execute: async () => ({
+			output: promptAuditMarkers.toolResult,
+			type: "success",
+		}),
+	},
+];
+
+const promptBoundaryAuditPlugin: PluginFactory = (api) => {
+	const plugin = api.definePlugin({ id: promptAuditPluginId });
+	plugin.onSessionStart(({ ui }) => {
+		ui.setStatus("prompt-audit", promptAuditMarkers.status);
+		ui.setWidget("prompt-audit", [promptAuditMarkers.widget]);
+		ui.setTitle(promptAuditMarkers.title);
+	});
+	api.registerMarkdownTransformer((markdown) =>
+		markdown === promptAuditMarkers.markdownSource
+			? promptAuditMarkers.markdownRendered
+			: markdown
+	);
+};
 
 type RealComposerState = {
 	context: PluginEditorContext | undefined;
@@ -572,6 +618,76 @@ const pluginUiTestEnvironment = async (
 			throw error;
 		}
 	};
+	const openSharedAgentSession = async (
+		recorder: FakeProviderRecorder,
+		turnToolResolver: TurnToolResolver
+	) => {
+		const services = await openSessionServices({
+			policy: {
+				cwd: workspace,
+				databasePath: path.join(root, "shared-agent-session.sqlite"),
+				workspace,
+			},
+			sources: {
+				configRuntime: () => ({
+					configStore,
+					cwd: workspace,
+					homeRoot: root,
+					trustedProjectRoots: [workspace],
+					workspace,
+				}),
+				createProviderCollection: () => createFakeProviderCollection(recorder),
+				pluginRuntime: () => runtime,
+				turnToolResolver: () => turnToolResolver,
+			},
+		});
+		let host: SessionHost | undefined;
+		try {
+			const created = await services.storage.createEmptySession({
+				id: toSessionId(sessionId),
+				model: DEFAULT_PROVIDER_MODEL_SELECTION,
+			});
+			if (created.writeOutcome.kind !== "committed") {
+				throw new Error("The shared-runtime Session was not durably created.");
+			}
+			const manager = services.capabilities.getSessionHostManager();
+			const openHost = (): Promise<SessionHost> =>
+				manager.openHost({
+					autoContinue: false,
+					capabilities: services.capabilities,
+					storage: services.storage,
+					sessionId: created.id,
+					view: true,
+				});
+			host = await openHost();
+			return {
+				getHost: (): SessionHost => {
+					if (host === undefined) {
+						throw new Error("The shared-runtime Session Host is closed.");
+					}
+					return host;
+				},
+				reopen: async (): Promise<SessionHost> => {
+					await host?.shutdown();
+					host = await openHost();
+					return host;
+				},
+				services,
+				dispose: async (): Promise<void> => {
+					try {
+						await host?.shutdown();
+					} finally {
+						host = undefined;
+						await services.shutdown();
+					}
+				},
+			};
+		} catch (error) {
+			await host?.shutdown().catch(() => undefined);
+			await services.shutdown();
+			throw error;
+		}
+	};
 	const setup = await testRenderWithClipboard(
 		<ThemeProvider themeName="opencode">
 			<ToastProvider>
@@ -610,7 +726,9 @@ const pluginUiTestEnvironment = async (
 	const unbindPluginUIHost = bindPluginUIHostInEditor
 		? () => undefined
 		: runtime.bindPluginUIHost(sessionId, pluginUIHost);
-	await runtime.startSession({ executionMode, sessionId, workspace });
+	await act(async () => {
+		await runtime.startSession({ executionMode, sessionId, workspace });
+	});
 	const executeCommand = async (
 		pluginId: string,
 		name: string,
@@ -712,12 +830,199 @@ const pluginUiTestEnvironment = async (
 		workspace,
 		transcriptState,
 		openAgentSession,
+		openSharedAgentSession,
 		configStore,
 		realComposerEditor,
 		realComposerState,
 		setCustomEditorMounted: customEditorState.setMounted,
 	};
 };
+
+test("Plugin UI and Markdown display markers stay out of model input and durable Session Context", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {}, false, [
+		{ factory: promptBoundaryAuditPlugin, id: promptAuditPluginId },
+	]);
+	let closeSharedSession: (() => Promise<void>) | undefined;
+	try {
+		const pluginUIHost = environment.pluginUIHost;
+		if (pluginUIHost === undefined) {
+			throw new Error("The Plugin UI host fixture was not bound.");
+		}
+		const contributions = pluginUIHost.getContributions(environment.sessionId);
+		expect(contributions.statuses).toContainEqual(
+			expect.objectContaining({ value: promptAuditMarkers.status })
+		);
+		expect(contributions.widgets).toContainEqual(
+			expect.objectContaining({ lines: [promptAuditMarkers.widget] })
+		);
+		expect(environment.uiUpdates).toContainEqual({
+			pluginId: promptAuditPluginId,
+			type: "title",
+			value: promptAuditMarkers.title,
+		});
+		const markdownRendered = environment.runtime.transformMarkdown(
+			promptAuditMarkers.markdownSource,
+			{
+				availableWidth: 64,
+				isStreaming: false,
+				messageId: undefined,
+				messageType: "user",
+				timestamp: undefined,
+			},
+			environment.sessionId
+		);
+		expect(markdownRendered).toBe(promptAuditMarkers.markdownRendered);
+
+		const recorder = createFakeProviderRecorder();
+		recorder.stepScript = async function* (
+			request,
+			activeRecorder
+		): AsyncGenerator<ProviderChatEvent> {
+			const captured: FakeGenerationRequest = {
+				kind: "chat",
+				messages: request.messages.map((message) => ({
+					role: message.role,
+					text: message.content
+						.flatMap((part) => {
+							switch (part.type) {
+								case "text":
+									return [part.text];
+								case "tool-call":
+									return [JSON.stringify(part.input) ?? String(part.input)];
+								case "tool-failure":
+									return [part.errorText];
+								case "tool-result":
+									return [JSON.stringify(part.output) ?? String(part.output)];
+								default:
+									return [];
+							}
+						})
+						.join("\n"),
+				})),
+			};
+			activeRecorder.requests.push(captured);
+			const chatRequestCount = activeRecorder.requests.filter(
+				({ kind }) => kind === "chat"
+			).length;
+			if (chatRequestCount === 1) {
+				if (!request.tools?.some(({ name }) => name === promptAuditToolName)) {
+					throw new Error("The audit Tool was not offered to the Provider.");
+				}
+				yield {
+					input: {},
+					toolCallId: toolCallId("prompt-audit-tool-call"),
+					toolName: promptAuditToolName,
+					type: "tool-call",
+				};
+			} else {
+				yield { delta: "Prompt Audit completed.", type: "text-delta" };
+			}
+			yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+			yield { type: "finish", completion: { kind: "completed" } };
+		};
+
+		const sharedSession = await environment.openSharedAgentSession(
+			recorder,
+			promptAuditTurnToolResolver
+		);
+		closeSharedSession = sharedSession.dispose;
+		let host = sharedSession.getHost();
+		const terminal = Promise.withResolvers<SessionSdkEvent>();
+		const unsubscribe = host.onEvent((event) => {
+			if (
+				event.type === "agent-turn-completed" ||
+				event.type === "agent-turn-failed"
+			) {
+				terminal.resolve(event);
+			}
+		});
+		try {
+			const composition = {
+				files: [],
+				text: promptAuditMarkers.composer,
+			};
+			const input: SessionSendInput = {
+				agent: agentIdSchema.parse("build"),
+				composition,
+				maximumModelSteps: 4,
+				model: DEFAULT_PROVIDER_MODEL_SELECTION,
+				sessionModel: DEFAULT_PROVIDER_MODEL_SELECTION,
+				userText: promptAuditMarkers.composer,
+			};
+			const admission = await host.agentSession.prompt(input);
+			expect(admission).toMatchObject({
+				disposition: "started",
+				rejected: false,
+			});
+			const completion = await terminal.promise;
+			expect(completion.type).toBe("agent-turn-completed");
+		} finally {
+			unsubscribe();
+		}
+
+		const providerInput = JSON.stringify(recorder.requests);
+		expect(providerInput).toContain(promptAuditMarkers.composer);
+		expect(providerInput).toContain(promptAuditMarkers.toolResult);
+		for (const marker of [
+			promptAuditMarkers.status,
+			promptAuditMarkers.widget,
+			promptAuditMarkers.title,
+			promptAuditMarkers.markdownRendered,
+		]) {
+			expect(providerInput).not.toContain(marker);
+		}
+
+		const liveContext = JSON.stringify(host.getSnapshot().context);
+		expect(liveContext).toContain(promptAuditMarkers.composer);
+		expect(liveContext).toContain(promptAuditMarkers.toolResult);
+		for (const marker of [
+			promptAuditMarkers.status,
+			promptAuditMarkers.widget,
+			promptAuditMarkers.title,
+			promptAuditMarkers.markdownRendered,
+		]) {
+			expect(liveContext).not.toContain(marker);
+		}
+		const storedRecords = JSON.stringify(
+			await sharedSession.services.storage.listSessionRecords(
+				toSessionId(environment.sessionId)
+			)
+		);
+		expect(storedRecords).toContain(promptAuditMarkers.composer);
+		expect(storedRecords).toContain(promptAuditMarkers.toolResult);
+		for (const marker of [
+			promptAuditMarkers.status,
+			promptAuditMarkers.widget,
+			promptAuditMarkers.title,
+			promptAuditMarkers.markdownRendered,
+		]) {
+			expect(storedRecords).not.toContain(marker);
+		}
+
+		await act(async () => {
+			host = await sharedSession.reopen();
+		});
+		const reopenedContext = JSON.stringify(host.getSnapshot().context);
+		expect(reopenedContext).toContain(promptAuditMarkers.composer);
+		expect(reopenedContext).toContain(promptAuditMarkers.toolResult);
+		for (const marker of [
+			promptAuditMarkers.status,
+			promptAuditMarkers.widget,
+			promptAuditMarkers.title,
+			promptAuditMarkers.markdownRendered,
+		]) {
+			expect(reopenedContext).not.toContain(marker);
+		}
+	} finally {
+		try {
+			await act(async () => {
+				await closeSharedSession?.();
+			});
+		} finally {
+			await environment.dispose();
+		}
+	}
+}, 15_000);
 
 test("presentation controls are view-scoped, last-setter-owned, and title updates use the approved data mapping", async () => {
 	const environment = await pluginUiTestEnvironment();
