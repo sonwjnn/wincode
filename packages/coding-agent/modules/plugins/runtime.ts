@@ -47,6 +47,9 @@ import type {
 	PluginEntryRenderer,
 	PluginInputSchema,
 	PluginJsonValue,
+	PluginMarkdownMessageType,
+	PluginMarkdownTransformer,
+	PluginMarkdownTransformerContext,
 	PluginMcpServerRegistration,
 	PluginMessageRenderer,
 	PluginProcessContext,
@@ -167,6 +170,19 @@ export type PluginMessageRendererContribution =
 export type PluginEntryRendererContribution =
 	PluginRendererContribution<PluginEntryRenderer>;
 
+export type PluginMarkdownTransformerRegistration = Readonly<{
+	messageTypes: readonly PluginMarkdownMessageType[];
+	transformer: PluginMarkdownTransformer;
+}>;
+
+export type PluginMarkdownTransformerContribution = Readonly<{
+	order: number;
+	pluginId: string;
+	sourcePath: string;
+	messageTypes: readonly PluginMarkdownMessageType[];
+	transformer: PluginMarkdownTransformer;
+}>;
+
 export type PluginProviderDescriptor = PluginProviderRegistration &
 	Readonly<{
 		pluginId: string;
@@ -185,6 +201,7 @@ export type LoadedPlugin = Readonly<{
 	providers?: readonly PluginProviderDescriptor[];
 	messageRenderers?: readonly PluginRendererRegistration<PluginMessageRenderer>[];
 	entryRenderers?: readonly PluginRendererRegistration<PluginEntryRenderer>[];
+	markdownTransformer?: PluginMarkdownTransformerRegistration;
 	toolRenderers?: readonly PluginRendererRegistration<PluginToolRenderer>[];
 	shortcuts?: readonly PluginShortcutRegistration[];
 	sourceIdentity?: string;
@@ -268,6 +285,15 @@ export type PluginRuntime = Readonly<{
 	getEntryRenderers: (
 		sessionId?: string
 	) => readonly PluginEntryRendererContribution[];
+	hasMarkdownTransformers: (
+		messageType: PluginMarkdownMessageType,
+		sessionId?: string
+	) => boolean;
+	transformMarkdown: (
+		markdown: string,
+		context: PluginMarkdownTransformerContext,
+		sessionId?: string
+	) => string;
 	getRendererRevision: () => number;
 	subscribeRendererChanges: (listener: () => void) => () => void;
 	refreshStatusPanel: (pluginId: string, panelId: string) => Promise<void>;
@@ -488,6 +514,22 @@ export const createPluginRuntime = (
 	const entryRenderers = collectRendererContributions(
 		(plugin) => plugin.entryRenderers
 	);
+	const markdownTransformers: PluginMarkdownTransformerContribution[] = [];
+	for (const plugin of plugins) {
+		const registration = plugin.markdownTransformer;
+		if (registration === undefined) {
+			continue;
+		}
+		markdownTransformers.push(
+			Object.freeze({
+				messageTypes: registration.messageTypes,
+				order: markdownTransformers.length,
+				pluginId: plugin.id,
+				sourcePath: plugin.sourcePath,
+				transformer: registration.transformer,
+			})
+		);
+	}
 	const notifyRendererChanges = (): void => {
 		rendererRevision += 1;
 		for (const listener of [...rendererListeners]) {
@@ -821,6 +863,60 @@ export const createPluginRuntime = (
 		sessionId?: string
 	): readonly PluginEntryRendererContribution[] =>
 		activeRenderersForSession(entryRenderers, sessionId);
+	const hasMarkdownTransformers = (
+		messageType: PluginMarkdownMessageType,
+		sessionId?: string
+	): boolean =>
+		!renderersClosed &&
+		markdownTransformers.some((contribution) => {
+			const plugin = plugins.find(({ id }) => id === contribution.pluginId);
+			return (
+				plugin !== undefined &&
+				isEnabledForSession(plugin, sessionId) &&
+				contribution.messageTypes.includes(messageType)
+			);
+		});
+	const transformMarkdown = (
+		markdown: string,
+		context: PluginMarkdownTransformerContext,
+		sessionId?: string
+	): string => {
+		let transformed = markdown;
+		if (renderersClosed) {
+			return transformed;
+		}
+		for (const contribution of markdownTransformers) {
+			const plugin = plugins.find(({ id }) => id === contribution.pluginId);
+			if (
+				plugin === undefined ||
+				!isEnabledForSession(plugin, sessionId) ||
+				!contribution.messageTypes.includes(context.messageType)
+			) {
+				continue;
+			}
+			try {
+				const next = contribution.transformer(transformed, context);
+				if (typeof next !== "string") {
+					throw new Error(
+						"Plugin Markdown Transformers must return a string synchronously."
+					);
+				}
+				transformed = next;
+			} catch (error) {
+				void logger.error(
+					"Plugin Markdown transformer failed; preserving the last successful output",
+					{
+						cause: getErrorMessage(error, String(error)),
+						operation: "plugin.ui.markdown.transform",
+						pluginId: contribution.pluginId,
+						sourcePath: contribution.sourcePath,
+						messageType: context.messageType,
+					}
+				);
+			}
+		}
+		return transformed;
+	};
 	const registerPluginShortcuts = (
 		plugin: LoadedPlugin,
 		sessionId: string,
@@ -1924,6 +2020,8 @@ export const createPluginRuntime = (
 		getToolRenderers,
 		getMessageRenderers,
 		getEntryRenderers,
+		hasMarkdownTransformers,
+		transformMarkdown,
 		getRendererRevision: () => rendererRevision,
 		subscribeRendererChanges(listener) {
 			rendererListeners.add(listener);

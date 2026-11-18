@@ -1,11 +1,17 @@
-import { TextAttributes } from "@opentui/core";
+import { type BoxRenderable, TextAttributes } from "@opentui/core";
 import { formatModelTokenCount } from "@wincode/ai";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useInteractivePluginRuntime } from "@/modules/plugins/ui/plugin-renderer-boundary";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import {
 	type SessionCompaction,
 	withoutFileOperationsSection,
 } from "../../compaction";
+import {
+	type MarkdownPresentationProps,
+	useMarkdownTransformation,
+	useMeasuredMarkdownWidth,
+} from "../messages/markdown-message-part";
 
 const TRIGGER_LABELS: Record<SessionCompaction["trigger"], string> = {
 	manual: "manual",
@@ -20,6 +26,40 @@ export const formatCompactionDivider = (
 	>
 ): string =>
 	`Compacted (${TRIGGER_LABELS[entry.trigger]}) · ${formatModelTokenCount(entry.tokensBefore)}→${formatModelTokenCount(entry.estimatedTokensAfter)} tokens`;
+
+function CompactionSummary({
+	entry,
+	text,
+}: Readonly<{ entry: SessionCompaction; text: string }>) {
+	const pluginRuntime = useInteractivePluginRuntime();
+	const messageType = "summary";
+	const enabled =
+		pluginRuntime?.hasMarkdownTransformers(messageType, entry.sessionId) ??
+		false;
+	const widthRef = useRef<BoxRenderable>(null);
+	const { availableWidth, onSizeChange } = useMeasuredMarkdownWidth(
+		widthRef,
+		enabled
+	);
+	const presentation: MarkdownPresentationProps = {
+		isStreaming: false,
+		messageId: entry.id,
+		messageType,
+		pluginRuntime,
+		sessionId: entry.sessionId,
+		text,
+		timestamp: entry.createdAt.toISOString(),
+	};
+	const transformed = useMarkdownTransformation(presentation, availableWidth);
+	const { colors } = useTheme();
+	return (
+		<box onSizeChange={onSizeChange} ref={widthRef} width="100%">
+			<text fg={colors.text} width="100%">
+				{transformed}
+			</text>
+		</box>
+	);
+}
 
 export function CompactionDivider({ entry }: { entry: SessionCompaction }) {
 	const { colors } = useTheme();
@@ -82,7 +122,7 @@ export function CompactionDivider({ entry }: { entry: SessionCompaction }) {
 					paddingLeft={1}
 				>
 					{summaryText.length > 0 ? (
-						<text fg={colors.text}>{summaryText}</text>
+						<CompactionSummary entry={entry} text={summaryText} />
 					) : null}
 					{fileOperations === undefined ? null : (
 						<box flexDirection="column" gap={1}>

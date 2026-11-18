@@ -738,7 +738,10 @@ const renderReasoningGroup = (
 	hideThinking: boolean,
 	hiddenThinkingLabel: string | undefined,
 	streaming: boolean,
-	colors: ThemeColors
+	colors: ThemeColors,
+	messageId: string | undefined,
+	pluginRuntime: PluginRuntime | undefined,
+	sessionId: string | undefined
 ): ReactNode => {
 	if (hideThinking) {
 		return (
@@ -754,6 +757,9 @@ const renderReasoningGroup = (
 	return (
 		<box marginBottom={1} width="100%">
 			<ReasoningMessagePart
+				messageId={messageId}
+				pluginRuntime={pluginRuntime}
+				sessionId={sessionId}
 				streaming={streaming}
 				text={getReasoningText(group.parts)}
 			/>
@@ -994,9 +1000,12 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 
 type BotMessagePartRenderOptions = Readonly<{
 	agent: AgentId;
+	messageId?: string;
 	expanded?: boolean;
 	onExpandedChange?: (expanded: boolean) => void;
 	pluginRenderers: readonly PluginToolRendererContribution[];
+	pluginRuntime?: PluginRuntime;
+	sessionId?: string;
 	pluginToolsByName: ReadonlyMap<string, PluginToolPresentationDescriptor>;
 	rendererRevision: number;
 	streaming: boolean;
@@ -1032,6 +1041,9 @@ const renderBotMessagePart = (
 		return (
 			<MarkdownMessagePart
 				key={getContentPartKey(part, index)}
+				messageId={options.messageId}
+				pluginRuntime={options.pluginRuntime}
+				sessionId={options.sessionId}
 				streaming={options.streaming}
 				text={part.text}
 			/>
@@ -1042,6 +1054,7 @@ const renderBotMessagePart = (
 
 export function BotMessageContent({
 	agent = buildAgent.id,
+	messageId,
 	parts,
 	pluginRuntime,
 	sessionId,
@@ -1049,6 +1062,7 @@ export function BotMessageContent({
 }: {
 	/** The agent that produced the message; drives the running-tool spinner color. */
 	agent?: AgentId;
+	messageId?: string;
 	parts: SessionMessage["parts"];
 	pluginRuntime?: PluginRuntime;
 	sessionId?: string;
@@ -1089,11 +1103,14 @@ export function BotMessageContent({
 		: undefined;
 	const partRenderOptions: BotMessagePartRenderOptions = {
 		agent,
+		messageId,
 		expanded: shellOutputExpanded,
 		onExpandedChange: hasHostedToolExpansion
 			? onExpandedToolsChange
 			: undefined,
 		pluginRenderers,
+		pluginRuntime,
+		sessionId,
 		pluginToolsByName,
 		rendererRevision,
 		streaming,
@@ -1122,7 +1139,10 @@ export function BotMessageContent({
 								hideThinking,
 								contributions.hiddenThinkingLabel,
 								streaming,
-								colors
+								colors,
+								messageId,
+								pluginRuntime,
+								sessionId
 							)
 						: group.parts.map((part, index) =>
 								renderBotMessagePart(part, index, partRenderOptions)

@@ -44,6 +44,7 @@ function AssistantTranscriptContent({
 		return (
 			<BotMessageContent
 				agent={message.metadata?.agent ?? buildAgent.id}
+				messageId={streaming ? undefined : message.id}
 				parts={message.parts}
 				pluginRuntime={pluginRuntime}
 				sessionId={sessionId}
@@ -56,6 +57,7 @@ function AssistantTranscriptContent({
 			<ErrorMessage error={new Error(failureText)} />
 			<BotMessageContent
 				agent={message.metadata?.agent ?? buildAgent.id}
+				messageId={streaming ? undefined : message.id}
 				parts={message.parts.filter((part) => part.type !== "text")}
 				pluginRuntime={pluginRuntime}
 				sessionId={sessionId}
@@ -79,7 +81,10 @@ function DefaultSessionTranscriptMessage({
 		return (
 			<UserMessage
 				appliedSkill={getAppliedSkill(message.metadata)}
+				messageId={message.id}
 				parts={message.parts}
+				pluginRuntime={pluginRuntime}
+				sessionId={sessionId}
 				submissionFailure={message.metadata?.submissionFailure}
 			/>
 		);

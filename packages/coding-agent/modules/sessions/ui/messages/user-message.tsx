@@ -1,5 +1,6 @@
 import { isObjectLike, isString, isUndefined } from "@wincode/utils";
 import { findFileMentionRanges } from "@/modules/file-mentions";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { ATTACHMENT_ID_DISPLAY_LENGTH } from "../../storage/attachment-store";
@@ -7,8 +8,11 @@ import { MarkdownContent } from "./markdown-message-part";
 
 type UserMessageProps = {
 	appliedSkill?: AppliedSkill;
-	submissionFailure?: string;
+	messageId?: string;
 	parts: SessionMessage["parts"];
+	pluginRuntime?: PluginRuntime;
+	sessionId?: string;
+	submissionFailure?: string;
 };
 
 export type AppliedSkill = {
@@ -103,7 +107,10 @@ const getImageBadgeKeys = (
 };
 export function UserMessage({
 	appliedSkill,
+	messageId,
 	parts,
+	pluginRuntime,
+	sessionId,
 	submissionFailure,
 }: UserMessageProps) {
 	const { colors } = useTheme();
@@ -126,7 +133,14 @@ export function UserMessage({
 			>
 				{body && (
 					<box justifyContent="center" paddingX={2} paddingY={1} width="100%">
-						<MarkdownContent text={body} />
+						<MarkdownContent
+							isStreaming={false}
+							messageId={messageId}
+							messageType="user"
+							pluginRuntime={pluginRuntime}
+							sessionId={sessionId}
+							text={body}
+						/>
 					</box>
 				)}
 

@@ -1,22 +1,62 @@
-import { useMemo } from "react";
+import type { BoxRenderable } from "@opentui/core";
+import { useMemo, useRef } from "react";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getMarkdownTreeSitterClient } from "../tree-sitter-client";
 import { useSyntaxStyle } from "../use-syntax-style";
-import { stripMarkdownControlCharacters } from "./markdown-message-part";
+import {
+	type MarkdownPresentationProps,
+	stripMarkdownControlCharacters,
+	useMarkdownTransformation,
+	useMeasuredMarkdownWidth,
+} from "./markdown-message-part";
 
 export function ReasoningMessagePart({
+	messageId,
+	pluginRuntime,
+	sessionId,
 	streaming,
 	text,
 }: {
+	messageId?: string;
+	pluginRuntime?: PluginRuntime;
+	sessionId?: string;
 	streaming: boolean;
 	text: string;
 }) {
 	const { colors } = useTheme();
-	const content = useMemo(() => stripMarkdownControlCharacters(text), [text]);
+	const messageType = "assistant-thinking";
+	const widthRef = useRef<BoxRenderable>(null);
+	const enabled =
+		pluginRuntime?.hasMarkdownTransformers(messageType, sessionId) ?? false;
+	const { availableWidth, onSizeChange } = useMeasuredMarkdownWidth(
+		widthRef,
+		enabled,
+		1
+	);
+	const presentation: MarkdownPresentationProps = {
+		isStreaming: streaming,
+		messageId,
+		messageType,
+		pluginRuntime,
+		sessionId,
+		text,
+	};
+	const transformed = useMarkdownTransformation(presentation, availableWidth);
+	const content = useMemo(
+		() => stripMarkdownControlCharacters(transformed),
+		[transformed]
+	);
 	const syntaxStyle = useSyntaxStyle("thinking");
 
 	return (
-		<box flexShrink={0} paddingLeft={1}>
+		<box
+			flexShrink={0}
+			onSizeChange={onSizeChange}
+			paddingLeft={1}
+			ref={widthRef}
+			width="100%"
+		>
 			<code
 				conceal
 				content={content}
@@ -25,6 +65,7 @@ export function ReasoningMessagePart({
 				streaming={streaming}
 				syntaxStyle={syntaxStyle}
 				treeSitterClient={getMarkdownTreeSitterClient()}
+				width="100%"
 			/>
 		</box>
 	);

@@ -42,6 +42,9 @@ import type {
 	PluginFactory,
 	PluginJsonValue,
 	PluginLoadContext,
+	PluginMarkdownMessageType,
+	PluginMarkdownTransformer,
+	PluginMarkdownTransformerOptions,
 	PluginMessageRenderer,
 	PluginProcessStartHook,
 	PluginProviderRegistration,
@@ -103,10 +106,16 @@ type MutablePluginRendererRegistration<Renderer> = Readonly<{
 	renderer: Renderer;
 }>;
 
+type MutablePluginMarkdownTransformerRegistration = Readonly<{
+	messageTypes: readonly PluginMarkdownMessageType[];
+	transformer: PluginMarkdownTransformer;
+}>;
+
 type MutablePluginDraft = {
 	agents: Map<string, PluginAgentRegistration>;
 	commands: Map<string, PluginCommand>;
 	entryRenderers: MutablePluginRendererRegistration<PluginEntryRenderer>[];
+	markdownTransformer?: MutablePluginMarkdownTransformerRegistration;
 	messageRenderers: MutablePluginRendererRegistration<PluginMessageRenderer>[];
 	toolRenderers: MutablePluginRendererRegistration<PluginToolRenderer>[];
 	mcpServers: Map<string, PluginJsonValue>;
@@ -155,6 +164,20 @@ const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
 const pluginMcpServerNamePattern = /^[A-Za-z0-9_-]{1,64}$/u;
 const pluginResourceNamePattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const RESERVED_TOOL_NAMES = new Set([...codingToolNames, "skill"]);
+const defaultMarkdownMessageTypes = [
+	"user",
+	"assistant",
+	"assistant-thinking",
+] as const satisfies readonly PluginMarkdownMessageType[];
+const markdownMessageTypes = [
+	...defaultMarkdownMessageTypes,
+	"summary",
+] as const satisfies readonly PluginMarkdownMessageType[];
+
+const isMarkdownMessageType = (
+	value: unknown
+): value is PluginMarkdownMessageType =>
+	markdownMessageTypes.some((messageType) => messageType === value);
 
 const own = (value: object, key: string): boolean => Object.hasOwn(value, key);
 
@@ -600,7 +623,9 @@ const createPluginAPI = (
 	};
 	const requireDraft = (): MutablePluginDraft => {
 		if (draft === undefined) {
-			throw new Error("Define the Plugin before registering its renderers.");
+			throw new Error(
+				"Define the Plugin before registering its contributions."
+			);
 		}
 		return draft;
 	};
@@ -618,6 +643,27 @@ const createPluginAPI = (
 			throw new Error("Plugin Renderer priority must be a finite number.");
 		}
 		return options.priority ?? 0;
+	};
+	const markdownTransformerMessageTypes = (
+		options?: PluginMarkdownTransformerOptions
+	): readonly PluginMarkdownMessageType[] => {
+		if (options === undefined) {
+			return defaultMarkdownMessageTypes;
+		}
+		if (
+			!isPlainObject(options) ||
+			Object.keys(options).some((key) => key !== "messageTypes") ||
+			(options.messageTypes !== undefined &&
+				(!Array.isArray(options.messageTypes) ||
+					options.messageTypes.some(
+						(messageType) => !isMarkdownMessageType(messageType)
+					)))
+		) {
+			throw new Error("Plugin Markdown Transformer messageTypes are invalid.");
+		}
+		return Object.freeze([
+			...(options.messageTypes ?? defaultMarkdownMessageTypes),
+		]);
 	};
 	return Object.freeze({
 		setModel: promptSelectionBridge.setModel,
@@ -666,6 +712,17 @@ const createPluginAPI = (
 				renderer,
 			});
 			return { success: true };
+		},
+		registerMarkdownTransformer(transformer, options) {
+			assertOpen();
+			if (typeof transformer !== "function") {
+				throw new Error("Plugin Markdown Transformers require a function.");
+			}
+			const plugin = requireDraft();
+			plugin.markdownTransformer = {
+				messageTypes: markdownTransformerMessageTypes(options),
+				transformer,
+			};
 		},
 		definePlugin(identity) {
 			if (
@@ -816,6 +873,7 @@ const loadedPluginFromDraft = (
 		agents: Object.freeze([...draft.agents.values()]),
 		commands: Object.freeze(registeredCommands),
 		entryRenderers: Object.freeze([...draft.entryRenderers]),
+		markdownTransformer: draft.markdownTransformer,
 		messageRenderers: Object.freeze([...draft.messageRenderers]),
 		toolRenderers: Object.freeze([...draft.toolRenderers]),
 		mcpServers: Object.freeze(

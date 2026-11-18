@@ -1,4 +1,3 @@
-import type { TextareaOptions } from "@opentui/core";
 import type {
 	AgentDefinition,
 	AgentId,
@@ -143,6 +142,34 @@ export type PluginRendererNext = () => ReactNode;
 /** Higher values run first; equal priorities retain registration order. */
 export type PluginRendererOptions = Readonly<{ priority?: number }>;
 
+/** Markdown surfaces currently rendered by Interactive Mode. */
+export type PluginMarkdownMessageType =
+	| "assistant"
+	| "assistant-thinking"
+	| "summary"
+	| "user";
+
+export type PluginMarkdownTransformerContext = Readonly<{
+	/** The host renderable's available width in terminal columns. */
+	availableWidth: number;
+	/** Whether the source content is still streaming. */
+	isStreaming: boolean;
+	/** Durable message or session-entry ID, when the host surface has one. */
+	messageId: string | undefined;
+	messageType: PluginMarkdownMessageType;
+	/** Durable entry creation time in ISO format, when available. */
+	timestamp: string | undefined;
+}>;
+
+export type PluginMarkdownTransformer = (
+	markdown: string,
+	context: PluginMarkdownTransformerContext
+) => string;
+
+export type PluginMarkdownTransformerOptions = Readonly<{
+	messageTypes?: readonly PluginMarkdownMessageType[];
+}>;
+
 /** Resolver context for any host or Plugin Tool row. */
 export type PluginToolRendererContext = PluginToolRenderContext &
 	Readonly<{
@@ -190,9 +217,7 @@ export class PluginUICustomError extends Error {
 	}
 }
 
-type PluginUICustomComposerKeybinding = Readonly<
-	NonNullable<TextareaOptions["keyBindings"]>[number]
->;
+type PluginUICustomComposerKeybinding = PluginEditorKeybinding;
 
 export type PluginUICustomKeybindings = Readonly<{
 	composer: readonly PluginUICustomComposerKeybinding[];
@@ -430,9 +455,14 @@ export type PluginAutocompleteProviderFactory = (
 	current: PluginAutocompleteProvider
 ) => PluginAutocompleteProvider;
 
-export type PluginEditorKeybinding = Readonly<
-	NonNullable<TextareaOptions["keyBindings"]>[number]
->;
+export type PluginEditorKeybinding = Readonly<{
+	action: string;
+	ctrl?: boolean;
+	meta?: boolean;
+	name: string;
+	shift?: boolean;
+	super?: boolean;
+}>;
 
 export type PluginEditorContext = Readonly<{
 	cursorOffset: number;
@@ -974,6 +1004,10 @@ export type PluginAPI = Readonly<{
 		renderer: PluginMessageRenderer,
 		options?: PluginRendererOptions
 	) => PluginUIContributionResult;
+	registerMarkdownTransformer: (
+		transformer: PluginMarkdownTransformer,
+		options?: PluginMarkdownTransformerOptions
+	) => void;
 	/** Registers a shortcut for the Plugin declared with definePlugin(). */
 	registerShortcut: (shortcut: string, options: PluginShortcutOptions) => void;
 	/** Set the focused Interactive composer model for future Submissions. */

@@ -123,6 +123,34 @@ All categories below are in scope; delivery may be incremental, but implementing
 | Markdown transforms | Ordered display-only transformation on the reference's applicable surfaces; errors preserve prior successful output |
 | Input and shortcuts | Registered shortcuts and Interactive-only raw input subscriptions, subject to host system-key precedence |
 
+### Markdown transformer delivery (#291)
+
+`PluginAPI.registerMarkdownTransformer(transformer, options?)` is a synchronous,
+ordered, display-only Interactive Mode contribution. Each Plugin has one active
+transformer; a later registration replaces that Plugin's previous transformer.
+Across Plugins, transformers follow Plugin load order. The supported
+`messageTypes` map to current render paths: `user` to user transcript text,
+`assistant` to assistant transcript text, `assistant-thinking` to reasoning
+blocks, and opt-in `summary` to expanded compaction text in `CompactionDivider`.
+The reference `custom` surface (Plugin custom messages and expanded skill
+blocks) and `changelog` surface (What's New, `/changelog`, and update notices)
+have no current application Markdown render path, so they are not public
+`messageTypes`. The Session History Tree's record preview remains plain text and
+does not add another summary Markdown surface. This delivery adds no new
+message/history writes.
+
+The transcript renderers pass the measured Markdown/code renderable width as
+`availableWidth`, recompute from the source message text after stream or width
+updates, and pass `messageId` only for non-streaming transcript entries.
+Expanded compaction summaries pass their measured width, compaction entry ID,
+and ISO `createdAt` timestamp. `SessionMessage` currently has no timestamp, so
+`timestamp` is `undefined` on transcript surfaces. Each transformer receives
+the last successful output; a throw
+preserves it, logs through the central logger, and does not stop later
+transformers. Transformed text is never persisted or included in Session
+Context. The verified authoring example is
+[`markdown-transformer-plugin.ts`](../../packages/coding-agent/examples/markdown-transformer-plugin.ts).
+
 Reference dialog defaults remain: select/input timeout returns `undefined`; confirm timeout returns `false`. Preserve caller-abort observability without extending the custom UI result into an outcome union.
 
 ### Contribution ownership
