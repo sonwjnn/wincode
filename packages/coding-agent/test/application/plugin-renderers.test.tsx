@@ -102,26 +102,6 @@ const withPluginRuntime = async (
 	}
 };
 
-const TURN_COMPLETION_TIMEOUT_MS = 10_000;
-
-const waitForTurnCompletion = async (
-	completion: Promise<boolean>
-): Promise<boolean> => {
-	const timeout = Promise.withResolvers<never>();
-	const timeoutId = setTimeout(
-		() =>
-			timeout.reject(
-				new Error("Timed out waiting for the session turn to complete.")
-			),
-		TURN_COMPLETION_TIMEOUT_MS
-	);
-	try {
-		return await Promise.race([completion, timeout.promise]);
-	} finally {
-		clearTimeout(timeoutId);
-	}
-};
-
 const activeSessionFixtureCleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
 	await Promise.all(
@@ -204,7 +184,7 @@ const createActiveSessionPluginHistory = async (): Promise<{
 					})
 				).rejected
 			).toBe(false);
-			expect(await waitForTurnCompletion(turnCompleted.promise)).toBe(true);
+			expect(await turnCompleted.promise).toBe(true);
 		} finally {
 			unsubscribeTurn();
 		}
@@ -240,9 +220,7 @@ const createActiveSessionPluginHistory = async (): Promise<{
 					})
 				).rejected
 			).toBe(false);
-			expect(await waitForTurnCompletion(followupTurnCompleted.promise)).toBe(
-				true
-			);
+			expect(await followupTurnCompleted.promise).toBe(true);
 		} finally {
 			unsubscribeFollowupTurn();
 		}
