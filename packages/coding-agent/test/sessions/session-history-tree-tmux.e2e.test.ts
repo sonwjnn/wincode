@@ -370,6 +370,7 @@ test(
 				sendCommand,
 				sendKeys,
 				sendPrompt,
+				smokeHome,
 				waitForFrame,
 				waitForResponse,
 			}) => {
@@ -488,7 +489,24 @@ test(
 						!frame.includes("/new") && frame.includes("Ask anything..."),
 					"the cleared command draft after reopening"
 				);
+				const requestCountPath = path.join(
+					smokeHome,
+					"workspace",
+					".smoke-provider-request-count"
+				);
+				const requestsBeforeReopen = Number(
+					await Bun.file(requestCountPath).text()
+				);
 				await sendPrompt("reopen preserved path");
+				await waitForFrame(
+					(frame) => frame.includes("reopen-preserved-path-ok"),
+					"the reopened Provider response text"
+				);
+				const requestsAfterReopen = Number(
+					await Bun.file(requestCountPath).text()
+				);
+				// Reopening a Session must submit this prompt once, not leave a duplicate turn active.
+				expect(requestsAfterReopen - requestsBeforeReopen).toBe(1);
 				await waitForResponse("reopen-preserved-path-ok");
 			}
 		);

@@ -30,6 +30,8 @@ export const createRendererSession = async (
 		targetFps: 120,
 		useMouse: true,
 	});
+	// Visible transcript rows subscribe individually to resize; their count can exceed the default and write warnings into the TUI.
+	renderer.setMaxListeners(0);
 	let clipboard: TuiClipboard;
 	try {
 		clipboard = createTuiClipboard(renderer);
