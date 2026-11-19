@@ -3,6 +3,7 @@ import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { formatStartupDiagnostics } from "@/modules/application/startup-diagnostics";
+import { PluginUIHostProvider } from "@/modules/plugins/ui/plugin-ui-host";
 import { getInteractiveSessionHostManager } from "@/modules/sessions/host/session-host-manager";
 import { CopyOnSelectFromSettings } from "@/modules/settings";
 import { resolveWorkspaceRoot } from "@/modules/tools";
@@ -83,9 +84,11 @@ export function RootLayout() {
 							<DialogProvider>
 								<CopyOnSelectFromSettings />
 								<DialogProvider>
-									<CommandControllerProvider>
-										<Outlet key={currentPath} />
-									</CommandControllerProvider>
+									<PluginUIHostProvider>
+										<CommandControllerProvider>
+											<Outlet key={currentPath} />
+										</CommandControllerProvider>
+									</PluginUIHostProvider>
 								</DialogProvider>
 							</DialogProvider>
 						</SettingsProviders>

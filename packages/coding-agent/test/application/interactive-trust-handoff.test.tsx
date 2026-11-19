@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import type { createCliRenderer } from "@opentui/core";
+import type { createCliRenderer } from "@wincode/tui/core";
 import {
 	createTestRenderer,
 	type TestRendererSetup,
-} from "@opentui/core/testing";
+} from "@wincode/tui/testing";
 import { act } from "react";
 import type { ProjectTrustPromptRequest } from "@/modules/project-trust/project-trust";
 import { runProjectTrustPreflight } from "@/tui/project-trust-preflight";

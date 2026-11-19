@@ -57,6 +57,7 @@ export type PluginToolProviderContext = Pick<
 	| "existingToolNames"
 	| "pluginTools"
 	| "pluginRuntime"
+	| "registerTurnCleanup"
 	| "sessionId"
 	| "signal"
 	| "workspace"

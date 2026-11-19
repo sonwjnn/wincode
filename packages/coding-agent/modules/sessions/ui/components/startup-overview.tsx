@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes } from "@wincode/tui/core";
 import { getErrorMessage } from "@wincode/utils";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useAgentRegistry } from "@/modules/agents";

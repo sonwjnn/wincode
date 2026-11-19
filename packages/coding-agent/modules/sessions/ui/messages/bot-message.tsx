@@ -1,5 +1,6 @@
-import type { BoxRenderable } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
+import { useTerminalDimensions } from "@wincode/tui";
+import type { BoxRenderable } from "@wincode/tui/core";
 import {
 	isArray,
 	isNull,
@@ -7,10 +8,40 @@ import {
 	isPlainObject,
 	isString,
 	isUndefined,
+	logger,
+	omitUndefined,
 } from "@wincode/utils";
-import { memo, type ReactNode, useMemo, useRef, useState } from "react";
+import {
+	Component,
+	createElement,
+	memo,
+	type ReactNode,
+	useCallback,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { UnknownRecord } from "type-fest";
 import { buildAgent } from "@/modules/agents";
+import type {
+	PluginToolCall,
+	PluginToolRenderContext,
+	PluginToolRendererContext,
+	PluginToolResult,
+} from "@/modules/plugins/public";
+import type {
+	PluginRuntime,
+	PluginToolPresentationDescriptor,
+	PluginToolRendererContribution,
+} from "@/modules/plugins/runtime";
+import {
+	PluginRendererResolution,
+	usePluginRendererRevision,
+} from "@/modules/plugins/ui/plugin-renderer-boundary";
+import {
+	useOptionalPluginUIHost,
+	usePluginUIContributions,
+} from "@/modules/plugins/ui/plugin-ui-host";
 import type { SessionMessage } from "@/modules/sessions/message";
 import { useHideThinking } from "@/modules/settings/hide-thinking-settings";
 import {
@@ -385,7 +416,17 @@ const ToolFailureMessage = ({
 	);
 };
 
-function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
+function HostToolMessagePart({
+	agent,
+	expanded,
+	onExpandedChange,
+	part,
+}: {
+	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const fallbackError = getFallbackError(part);
 	const isSkillCall =
@@ -418,7 +459,13 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	return (
 		<>
 			{toolLine}
-			{isShellOutput ? <ShellOutputBlock part={part} /> : null}
+			{isShellOutput ? (
+				<ShellOutputBlock
+					expanded={expanded}
+					onExpandedChange={onExpandedChange}
+					part={part}
+				/>
+			) : null}
 			{isEditPreview && part.type === "tool-edit" ? (
 				<EditDiffBlock agent={agent} part={part} />
 			) : null}
@@ -434,7 +481,291 @@ function ToolMessagePart({ agent, part }: { agent: AgentId; part: ToolPart }) {
 	);
 }
 
+type PluginToolRendererErrorBoundaryProps = Readonly<{
+	children: ReactNode;
+	fallback: ReactNode;
+	tool: PluginToolPresentationDescriptor;
+}>;
+
+class PluginToolRendererErrorBoundary extends Component<
+	PluginToolRendererErrorBoundaryProps,
+	Readonly<{ failed: boolean }>
+> {
+	override state = { failed: false };
+
+	static getDerivedStateFromError(): Readonly<{ failed: boolean }> {
+		return { failed: true };
+	}
+
+	override componentDidCatch(error: Error): void {
+		void logger.error("Plugin Tool presentation failed; using host renderer", {
+			cause: error.message,
+			operation: "plugin.tool.presentation",
+			pluginId: this.props.tool.pluginId,
+			sourcePath: this.props.tool.sourcePath,
+			toolName: this.props.tool.name,
+		});
+	}
+
+	override render(): ReactNode {
+		return this.state.failed ? this.props.fallback : this.props.children;
+	}
+}
+
+const pluginToolCallFor = (part: ToolPart): PluginToolCall =>
+	Object.freeze({
+		input: structuredClone(part.input),
+		...omitUndefined({
+			rawInput:
+				part.rawInput === undefined
+					? undefined
+					: structuredClone(part.rawInput),
+		}),
+		state: part.state,
+		toolCallId: part.toolCallId,
+		toolName:
+			part.type === "dynamic-tool"
+				? part.toolName
+				: part.type.slice("tool-".length),
+	});
+
+const pluginToolResultFor = (part: ToolPart): PluginToolResult | undefined => {
+	if (part.state === "output-available") {
+		return Object.freeze(
+			structuredClone({ type: "success" as const, output: part.output })
+		);
+	}
+	if (part.state === "output-error") {
+		return Object.freeze(
+			structuredClone({
+				errorText: part.errorText ?? "Tool call failed.",
+				...omitUndefined({ failure: part.failure }),
+				type: "failure" as const,
+			})
+		);
+	}
+	return;
+};
+
+function PluginToolPresentation({
+	agent,
+	expanded: expandedOverride,
+	onExpandedChange,
+	part,
+	tool,
+}: {
+	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	part: Extract<ToolPart, { type: "dynamic-tool" }>;
+	tool: PluginToolPresentationDescriptor;
+}) {
+	const { colors, currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const [localExpanded, setLocalExpanded] = useState(false);
+	const expanded = expandedOverride ?? localExpanded;
+	const onToggleExpanded = useCallback(() => {
+		const next = !expanded;
+		if (onExpandedChange === undefined) {
+			setLocalExpanded(next);
+		} else {
+			onExpandedChange(next);
+		}
+	}, [expanded, onExpandedChange]);
+	const call = useMemo(() => pluginToolCallFor(part), [part]);
+	const result = useMemo(() => pluginToolResultFor(part), [part]);
+	useToggleShortcut(
+		"ctrl+o",
+		onToggleExpanded,
+		tool.renderResult !== undefined && result !== undefined
+	);
+	const context: PluginToolRenderContext = Object.freeze({
+		call,
+		expanded,
+		height: dimensions.height,
+		onToggleExpanded,
+		theme: currentTheme,
+		width: dimensions.width,
+	});
+	const callContent =
+		tool.renderCall === undefined ? (
+			<ToolCallLine agent={agent} colors={colors} part={part} />
+		) : (
+			createElement(tool.renderCall, context)
+		);
+	const resultContent =
+		tool.renderResult === undefined || result === undefined
+			? null
+			: createElement(tool.renderResult, { ...context, result });
+	const fallbackError =
+		tool.renderResult === undefined ? getFallbackError(part) : "";
+	const shell = (content: ReactNode): ReactNode =>
+		tool.ownsRowShell === true ? (
+			content
+		) : (
+			<box marginBottom={1} paddingX={1} width="100%">
+				{content}
+			</box>
+		);
+	let renderedResult: ReactNode = null;
+	if (resultContent !== null) {
+		renderedResult = shell(resultContent);
+	} else if (fallbackError !== "") {
+		renderedResult = (
+			<ToolFailureMessage
+				colors={colors}
+				errorText={fallbackError}
+				part={part}
+			/>
+		);
+	}
+
+	return (
+		<>
+			{tool.renderCall === undefined ? callContent : shell(callContent)}
+			{renderedResult}
+		</>
+	);
+}
+
+function PluginToolMessagePart({
+	agent,
+	expanded,
+	onExpandedChange,
+	part,
+	tool,
+}: {
+	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	part: Extract<ToolPart, { type: "dynamic-tool" }>;
+	tool: PluginToolPresentationDescriptor;
+}) {
+	return (
+		<PluginToolRendererErrorBoundary
+			fallback={
+				<HostToolMessagePart
+					agent={agent}
+					expanded={expanded}
+					onExpandedChange={onExpandedChange}
+					part={part}
+				/>
+			}
+			tool={tool}
+		>
+			<PluginToolPresentation
+				agent={agent}
+				expanded={expanded}
+				onExpandedChange={onExpandedChange}
+				part={part}
+				tool={tool}
+			/>
+		</PluginToolRendererErrorBoundary>
+	);
+}
+
+function ToolMessagePart({
+	agent,
+	expanded,
+	onExpandedChange,
+	part,
+	pluginRenderers,
+	pluginTool,
+	rendererRevision,
+}: {
+	agent: AgentId;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	part: ToolPart;
+	pluginRenderers: readonly PluginToolRendererContribution[];
+	pluginTool?: PluginToolPresentationDescriptor;
+	rendererRevision: number;
+}) {
+	const { currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const call = useMemo(() => pluginToolCallFor(part), [part]);
+	const result = useMemo(() => pluginToolResultFor(part), [part]);
+	const fallback =
+		part.type === "dynamic-tool" &&
+		pluginTool !== undefined &&
+		(pluginTool.renderCall !== undefined ||
+			pluginTool.renderResult !== undefined) ? (
+			<PluginToolMessagePart
+				agent={agent}
+				expanded={expanded}
+				onExpandedChange={onExpandedChange}
+				part={part}
+				tool={pluginTool}
+			/>
+		) : (
+			<HostToolMessagePart
+				agent={agent}
+				expanded={expanded}
+				onExpandedChange={onExpandedChange}
+				part={part}
+			/>
+		);
+	if (pluginRenderers.length === 0) {
+		return fallback;
+	}
+	const context: PluginToolRendererContext = Object.freeze({
+		call,
+		expanded: expanded ?? false,
+		height: dimensions.height,
+		onToggleExpanded: () => onExpandedChange?.(!(expanded ?? false)),
+		originPluginId: pluginTool?.pluginId,
+		...omitUndefined({ result }),
+		theme: currentTheme,
+		type: part.type,
+		width: dimensions.width,
+	});
+	return (
+		<PluginRendererResolution
+			context={context}
+			fallback={fallback}
+			key={`${getToolKey(part, 0)}:${rendererRevision}`}
+			resolvers={pluginRenderers}
+			surface="tool"
+			target={`${context.originPluginId ?? "host"}:${context.type}:${call.toolName}`}
+		/>
+	);
+}
+
 const MemoizedToolMessagePart = memo(ToolMessagePart);
+
+const renderReasoningGroup = (
+	group: PartGroup,
+	hideThinking: boolean,
+	hiddenThinkingLabel: string | undefined,
+	streaming: boolean,
+	colors: ThemeColors,
+	messageId: string | undefined,
+	pluginRuntime: PluginRuntime | undefined,
+	sessionId: string | undefined
+): ReactNode => {
+	if (hideThinking) {
+		return (
+			<box marginBottom={1} width="100%">
+				<box paddingX={1} width="100%">
+					<text fg={colors.thinkingText}>
+						<em>{hiddenThinkingLabel ?? "Thinking..."}</em>
+					</text>
+				</box>
+			</box>
+		);
+	}
+	return (
+		<box marginBottom={1} width="100%">
+			<ReasoningMessagePart
+				messageId={messageId}
+				pluginRuntime={pluginRuntime}
+				sessionId={sessionId}
+				streaming={streaming}
+				text={getReasoningText(group.parts)}
+			/>
+		</box>
+	);
+};
 
 /**
  * The themed session block for a completed `shell` call: the bounded
@@ -446,11 +777,20 @@ const MemoizedToolMessagePart = memo(ToolMessagePart);
  * output and the measured width, so streamed updates of neighboring parts
  * never re-sanitize or re-lay-out settled results.
  */
-function ShellOutputBlock({ part }: { part: ToolPart }) {
+function ShellOutputBlock({
+	expanded: expandedOverride,
+	onExpandedChange,
+	part,
+}: {
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	part: ToolPart;
+}) {
 	const { colors } = useTheme();
 	const blockRef = useRef<BoxRenderable>(null);
 	const [contentWidth, setContentWidth] = useState(0);
-	const [expanded, setExpanded] = useState(false);
+	const [localExpanded, setLocalExpanded] = useState(false);
+	const expanded = expandedOverride ?? localExpanded;
 	const output = getToolOutputRecord(part);
 	const rawText = formatUnknown(output.output);
 	const exitCode = isNumber(output.exitCode) ? output.exitCode : null;
@@ -475,7 +815,15 @@ function ShellOutputBlock({ part }: { part: ToolPart }) {
 	);
 	const indicator = resolveOverflowIndicator(preview);
 	const canExpand = preview.hasOverflow;
-	useToggleShortcut("ctrl+o", () => setExpanded((value) => !value), canExpand);
+	const toggleExpanded = useCallback(() => {
+		const next = !expanded;
+		if (onExpandedChange === undefined) {
+			setLocalExpanded(next);
+		} else {
+			onExpandedChange(next);
+		}
+	}, [expanded, onExpandedChange]);
+	useToggleShortcut("ctrl+o", toggleExpanded, canExpand);
 
 	// The measured content width drives preview wrapping and the header bound.
 	// Reflowing on real size changes (terminal resize, sidebar toggle) keeps the
@@ -650,18 +998,123 @@ function SkillActivityRow({ part }: { part: ToolPart }) {
 	);
 }
 
+type BotMessagePartRenderOptions = Readonly<{
+	agent: AgentId;
+	messageId?: string;
+	expanded?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
+	pluginRenderers: readonly PluginToolRendererContribution[];
+	pluginRuntime?: PluginRuntime;
+	sessionId?: string;
+	pluginToolsByName: ReadonlyMap<string, PluginToolPresentationDescriptor>;
+	rendererRevision: number;
+	streaming: boolean;
+}>;
+
+const renderBotMessagePart = (
+	part: MessagePart,
+	index: number,
+	options: BotMessagePartRenderOptions
+): ReactNode => {
+	if (part.type === "reasoning") {
+		return null;
+	}
+	if (isToolPart(part)) {
+		return (
+			<MemoizedToolMessagePart
+				agent={options.agent}
+				expanded={options.expanded}
+				key={getToolKey(part, index)}
+				onExpandedChange={options.onExpandedChange}
+				part={part}
+				pluginRenderers={options.pluginRenderers}
+				pluginTool={
+					part.type === "dynamic-tool"
+						? options.pluginToolsByName.get(part.toolName)
+						: undefined
+				}
+				rendererRevision={options.rendererRevision}
+			/>
+		);
+	}
+	if (part.type === "text") {
+		return (
+			<MarkdownMessagePart
+				key={getContentPartKey(part, index)}
+				messageId={options.messageId}
+				pluginRuntime={options.pluginRuntime}
+				sessionId={options.sessionId}
+				streaming={options.streaming}
+				text={part.text}
+			/>
+		);
+	}
+	return null;
+};
+
 export function BotMessageContent({
 	agent = buildAgent.id,
+	messageId,
 	parts,
+	pluginRuntime,
+	sessionId,
 	streaming = false,
 }: {
 	/** The agent that produced the message; drives the running-tool spinner color. */
 	agent?: AgentId;
+	messageId?: string;
 	parts: SessionMessage["parts"];
+	pluginRuntime?: PluginRuntime;
+	sessionId?: string;
 	streaming?: boolean;
 }) {
 	const { colors } = useTheme();
 	const hideThinking = useHideThinking();
+	const rendererRevision = usePluginRendererRevision(pluginRuntime);
+	const pluginRenderers =
+		pluginRuntime !== undefined && sessionId !== undefined
+			? pluginRuntime.getToolRenderers(sessionId)
+			: [];
+	const pluginToolsByName = new Map<string, PluginToolPresentationDescriptor>();
+	if (pluginRuntime !== undefined && sessionId !== undefined) {
+		for (const tool of pluginRuntime.getToolDescriptors(sessionId, {
+			includeTurnRenderers: true,
+		})) {
+			if (!pluginToolsByName.has(tool.name)) {
+				pluginToolsByName.set(tool.name, tool);
+			}
+		}
+	}
+	const pluginUIHost = useOptionalPluginUIHost();
+	const contributions = usePluginUIContributions(sessionId ?? "");
+	const hasHostedToolExpansion =
+		pluginUIHost !== null && sessionId !== undefined;
+	const expandedTools = contributions.toolsExpanded;
+	const onExpandedToolsChange = useCallback(
+		(expanded: boolean) => {
+			if (sessionId !== undefined) {
+				pluginUIHost?.setToolsExpanded(sessionId, expanded);
+			}
+		},
+		[pluginUIHost, sessionId]
+	);
+	const shellOutputExpanded = hasHostedToolExpansion
+		? expandedTools
+		: undefined;
+	const partRenderOptions: BotMessagePartRenderOptions = {
+		agent,
+		messageId,
+		expanded: shellOutputExpanded,
+		onExpandedChange: hasHostedToolExpansion
+			? onExpandedToolsChange
+			: undefined,
+		pluginRenderers,
+		pluginRuntime,
+		sessionId,
+		pluginToolsByName,
+		rendererRevision,
+		streaming,
+	};
 	const groups = groupConsecutiveParts(parts).filter(
 		(group) => group.type !== "step-start"
 	);
@@ -680,50 +1133,20 @@ export function BotMessageContent({
 					}
 					width="100%"
 				>
-					{group.type === "reasoning" ? (
-						<box marginBottom={1} width="100%">
-							{hideThinking ? (
-								<box paddingX={1} width="100%">
-									<text fg={colors.thinkingText}>
-										<em>Thinking...</em>
-									</text>
-								</box>
-							) : (
-								<ReasoningMessagePart
-									streaming={streaming}
-									text={getReasoningText(group.parts)}
-								/>
+					{group.type === "reasoning"
+						? renderReasoningGroup(
+								group,
+								hideThinking,
+								contributions.hiddenThinkingLabel,
+								streaming,
+								colors,
+								messageId,
+								pluginRuntime,
+								sessionId
+							)
+						: group.parts.map((part, index) =>
+								renderBotMessagePart(part, index, partRenderOptions)
 							)}
-						</box>
-					) : (
-						group.parts.map((part, index) => {
-							if (part.type === "reasoning") {
-								return null;
-							}
-
-							if (isToolPart(part)) {
-								return (
-									<MemoizedToolMessagePart
-										agent={agent}
-										key={getToolKey(part, index)}
-										part={part}
-									/>
-								);
-							}
-
-							if (part.type === "text") {
-								return (
-									<MarkdownMessagePart
-										key={getContentPartKey(part, index)}
-										streaming={streaming}
-										text={part.text}
-									/>
-								);
-							}
-
-							return null;
-						})
-					)}
 				</box>
 			))}
 		</box>

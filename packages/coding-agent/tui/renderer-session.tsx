@@ -1,5 +1,5 @@
-import { type CliRenderer, createCliRenderer } from "@opentui/core";
-import { createRoot, type Root } from "@opentui/react";
+import { createUiHost } from "@wincode/tui";
+import { type CliRenderer, createCliRenderer } from "@wincode/tui/core";
 import type { ReactNode } from "react";
 import {
 	ClipboardProvider,
@@ -30,6 +30,8 @@ export const createRendererSession = async (
 		targetFps: 120,
 		useMouse: true,
 	});
+	// Visible transcript rows subscribe individually to resize; their count can exceed the default and write warnings into the TUI.
+	renderer.setMaxListeners(0);
 	let clipboard: TuiClipboard;
 	try {
 		clipboard = createTuiClipboard(renderer);
@@ -37,7 +39,7 @@ export const createRendererSession = async (
 		renderer.destroy();
 		throw error;
 	}
-	const root: Root = createRoot(renderer);
+	const uiHost = createUiHost(renderer);
 	const destroyRenderer = renderer.destroy.bind(renderer);
 	let destroyed = false;
 	let unregisterCrashTeardown: () => void = () => undefined;
@@ -49,7 +51,7 @@ export const createRendererSession = async (
 		// Start native shutdown before unmounting; return it so crash teardown can await it.
 		const disposal = clipboard.dispose().catch(() => undefined);
 		try {
-			root.unmount();
+			uiHost.unmount();
 		} finally {
 			unregisterCrashTeardown();
 			destroyRenderer();
@@ -59,7 +61,7 @@ export const createRendererSession = async (
 	unregisterCrashTeardown = registerCrashTeardown(destroy);
 	const render = (node: ReactNode): void => {
 		if (!destroyed) {
-			root.render(
+			uiHost.render(
 				<ThemeProvider>
 					<ThemedRoot>
 						<ClipboardProvider clipboard={clipboard}>{node}</ClipboardProvider>

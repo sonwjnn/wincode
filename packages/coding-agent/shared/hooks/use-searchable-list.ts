@@ -1,4 +1,4 @@
-import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
+import type { InputRenderable, ScrollBoxRenderable } from "@wincode/tui/core";
 import {
 	useCallback,
 	useEffect,

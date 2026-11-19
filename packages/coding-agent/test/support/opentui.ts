@@ -1,4 +1,4 @@
-import type { TestRendererSetup } from "@opentui/core/testing";
+import type { TestRendererSetup } from "@wincode/tui/testing";
 import { act } from "react";
 
 export const isOpenTuiOutputBusy = (error: unknown): boolean =>

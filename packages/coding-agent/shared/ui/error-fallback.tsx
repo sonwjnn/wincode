@@ -1,4 +1,4 @@
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard } from "@wincode/tui";
 import {
 	getErrorMessage,
 	isDebugMode,

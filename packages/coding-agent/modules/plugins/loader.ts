@@ -38,21 +38,31 @@ import type {
 	PluginCompactionCompletedHook,
 	PluginCompactionFailedHook,
 	PluginDefinitionAPI,
+	PluginEntryRenderer,
 	PluginFactory,
 	PluginJsonValue,
 	PluginLoadContext,
+	PluginMarkdownMessageType,
+	PluginMarkdownTransformer,
+	PluginMarkdownTransformerOptions,
+	PluginMessageRenderer,
 	PluginProcessStartHook,
 	PluginProviderRegistration,
+	PluginRendererOptions,
 	PluginSessionHistoryNavigatedHook,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
+	PluginShortcutRegistration,
 	PluginShutdownHook,
 	PluginStatusPanelRegistration,
+	PluginToolRenderer,
+	PluginUIPromptHook,
 } from "./public";
 import {
 	validatePluginAgent,
 	validatePluginCommand,
 	validatePluginProvider,
+	validatePluginShortcut,
 	validatePluginTool,
 } from "./registration";
 import {
@@ -91,12 +101,27 @@ export type LoadPluginsInput = Readonly<{
 	userDataDir?: string;
 }>;
 
+type MutablePluginRendererRegistration<Renderer> = Readonly<{
+	priority: number;
+	renderer: Renderer;
+}>;
+
+type MutablePluginMarkdownTransformerRegistration = Readonly<{
+	messageTypes: readonly PluginMarkdownMessageType[];
+	transformer: PluginMarkdownTransformer;
+}>;
+
 type MutablePluginDraft = {
 	agents: Map<string, PluginAgentRegistration>;
 	commands: Map<string, PluginCommand>;
+	entryRenderers: MutablePluginRendererRegistration<PluginEntryRenderer>[];
+	markdownTransformer?: MutablePluginMarkdownTransformerRegistration;
+	messageRenderers: MutablePluginRendererRegistration<PluginMessageRenderer>[];
+	toolRenderers: MutablePluginRendererRegistration<PluginToolRenderer>[];
 	mcpServers: Map<string, PluginJsonValue>;
 	providers: Map<string, PluginProviderRegistration>;
 	resources: Map<string, PluginResourceDescriptor>;
+	shortcuts: Map<string, PluginShortcutRegistration>;
 	statusPanels: Map<string, PluginStatusPanelRegistration>;
 	id: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
@@ -105,6 +130,8 @@ type MutablePluginDraft = {
 	onSessionHistoryNavigated?: PluginSessionHistoryNavigatedHook;
 	onCompactionCompleted?: PluginCompactionCompletedHook;
 	onCompactionFailed?: PluginCompactionFailedHook;
+	onUIPromptStart?: PluginUIPromptHook;
+	onUIPromptEnd?: PluginUIPromptHook;
 	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
@@ -137,6 +164,20 @@ const pluginIdentifierPattern = /^[a-z0-9_]+$/u;
 const pluginMcpServerNamePattern = /^[A-Za-z0-9_-]{1,64}$/u;
 const pluginResourceNamePattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const RESERVED_TOOL_NAMES = new Set([...codingToolNames, "skill"]);
+const defaultMarkdownMessageTypes = [
+	"user",
+	"assistant",
+	"assistant-thinking",
+] as const satisfies readonly PluginMarkdownMessageType[];
+const markdownMessageTypes = [
+	...defaultMarkdownMessageTypes,
+	"summary",
+] as const satisfies readonly PluginMarkdownMessageType[];
+
+const isMarkdownMessageType = (
+	value: unknown
+): value is PluginMarkdownMessageType =>
+	markdownMessageTypes.some((messageType) => messageType === value);
 
 const own = (value: object, key: string): boolean => Object.hasOwn(value, key);
 
@@ -429,6 +470,25 @@ const createRegistrationAPI = (
 			}
 			plugin.onCompactionFailed = handler;
 		},
+		onUIPromptStart(handler) {
+			assertOpen();
+			if (
+				typeof handler !== "function" ||
+				plugin.onUIPromptStart !== undefined
+			) {
+				throw new Error(
+					"Plugin hook 'onUIPromptStart' must be registered once."
+				);
+			}
+			plugin.onUIPromptStart = handler;
+		},
+		onUIPromptEnd(handler) {
+			assertOpen();
+			if (typeof handler !== "function" || plugin.onUIPromptEnd !== undefined) {
+				throw new Error("Plugin hook 'onUIPromptEnd' must be registered once.");
+			}
+			plugin.onUIPromptEnd = handler;
+		},
 		onStart(handler) {
 			registerProcessLifecycleHook(
 				handler,
@@ -448,6 +508,25 @@ const createRegistrationAPI = (
 					plugin.onShutdown = handler;
 				}
 			);
+		},
+		registerShortcut(shortcut, options) {
+			assertOpen();
+			try {
+				const validated = validatePluginShortcut(shortcut, options);
+				if (plugin.shortcuts.has(validated.shortcut)) {
+					throw new Error(
+						`Plugin Shortcut '${validated.shortcut}' is already registered by this Plugin.`
+					);
+				}
+				plugin.shortcuts.set(validated.shortcut, validated);
+			} catch (error) {
+				addDiagnostic(
+					diagnostics,
+					`Plugin Shortcut registration failed: ${messageFor(error)}`,
+					plugin.sourcePath
+				);
+				throw error;
+			}
 		},
 		registerProvider(provider) {
 			assertOpen();
@@ -534,10 +613,117 @@ const createPluginAPI = (
 	commandNames: ReadonlySet<string>,
 	customCommandNames: ReadonlySet<string>,
 	promptSelectionBridge: PluginPromptSelectionBridge
-): PluginAPI =>
-	Object.freeze({
+): PluginAPI => {
+	let draft: MutablePluginDraft | undefined;
+	let definitionAPI: PluginDefinitionAPI | undefined;
+	const assertOpen = (): void => {
+		if (!isOpen()) {
+			throw new Error("Plugin registration is closed.");
+		}
+	};
+	const requireDraft = (): MutablePluginDraft => {
+		if (draft === undefined) {
+			throw new Error(
+				"Define the Plugin before registering its contributions."
+			);
+		}
+		return draft;
+	};
+	const rendererPriority = (options?: PluginRendererOptions): number => {
+		if (options === undefined) {
+			return 0;
+		}
+		if (
+			!isPlainObject(options) ||
+			Object.keys(options).some((key) => key !== "priority") ||
+			(options.priority !== undefined &&
+				(typeof options.priority !== "number" ||
+					!Number.isFinite(options.priority)))
+		) {
+			throw new Error("Plugin Renderer priority must be a finite number.");
+		}
+		return options.priority ?? 0;
+	};
+	const markdownTransformerMessageTypes = (
+		options?: PluginMarkdownTransformerOptions
+	): readonly PluginMarkdownMessageType[] => {
+		if (options === undefined) {
+			return defaultMarkdownMessageTypes;
+		}
+		if (
+			!isPlainObject(options) ||
+			Object.keys(options).some((key) => key !== "messageTypes") ||
+			(options.messageTypes !== undefined &&
+				(!Array.isArray(options.messageTypes) ||
+					options.messageTypes.some(
+						(messageType) => !isMarkdownMessageType(messageType)
+					)))
+		) {
+			throw new Error("Plugin Markdown Transformer messageTypes are invalid.");
+		}
+		return Object.freeze([
+			...(options.messageTypes ?? defaultMarkdownMessageTypes),
+		]);
+	};
+	return Object.freeze({
 		setModel: promptSelectionBridge.setModel,
 		setThinkingLevel: promptSelectionBridge.setThinkingLevel,
+		registerShortcut(shortcut, options) {
+			assertOpen();
+			if (definitionAPI === undefined) {
+				throw new Error("Define the Plugin before registering its shortcuts.");
+			}
+			definitionAPI.registerShortcut(shortcut, options);
+		},
+		registerToolRenderer(renderer, options) {
+			assertOpen();
+			if (typeof renderer !== "function") {
+				throw new Error("Plugin Tool Renderers require a resolver function.");
+			}
+			const plugin = requireDraft();
+			plugin.toolRenderers.push({
+				priority: rendererPriority(options),
+				renderer,
+			});
+			return { success: true };
+		},
+		registerMessageRenderer(renderer, options) {
+			assertOpen();
+			if (typeof renderer !== "function") {
+				throw new Error(
+					"Plugin Message Renderers require a resolver function."
+				);
+			}
+			const plugin = requireDraft();
+			plugin.messageRenderers.push({
+				priority: rendererPriority(options),
+				renderer,
+			});
+			return { success: true };
+		},
+		registerEntryRenderer(renderer, options) {
+			assertOpen();
+			if (typeof renderer !== "function") {
+				throw new Error("Plugin Entry Renderers require a resolver function.");
+			}
+			const plugin = requireDraft();
+			plugin.entryRenderers.push({
+				priority: rendererPriority(options),
+				renderer,
+			});
+			return { success: true };
+		},
+		registerMarkdownTransformer(transformer, options) {
+			assertOpen();
+			if (typeof transformer !== "function") {
+				throw new Error("Plugin Markdown Transformers require a function.");
+			}
+			const plugin = requireDraft();
+			plugin.markdownTransformer = {
+				messageTypes: markdownTransformerMessageTypes(options),
+				transformer,
+			};
+		},
 		definePlugin(identity) {
 			if (
 				!(isOpen() && isObjectLike(identity)) ||
@@ -550,12 +736,16 @@ const createPluginAPI = (
 				validatePluginSessionStatePluginId(identity.id);
 				validatePluginSessionStateSchemaVersion(identity.sessionStateVersion);
 			}
-			const draft: MutablePluginDraft = {
+			const nextDraft: MutablePluginDraft = {
 				agents: new Map(),
 				commands: new Map(),
+				entryRenderers: [],
+				messageRenderers: [],
+				toolRenderers: [],
 				mcpServers: new Map(),
 				providers: new Map(),
 				resources: new Map(),
+				shortcuts: new Map(),
 				statusPanels: new Map(),
 				id: identity.id,
 				...omitUndefined({ sessionStateVersion: identity.sessionStateVersion }),
@@ -563,17 +753,20 @@ const createPluginAPI = (
 				tools: new Map(),
 				workspace: context.workspace,
 			};
-			setDraft(draft);
-			return createRegistrationAPI(
-				draft,
+			setDraft(nextDraft);
+			draft = nextDraft;
+			definitionAPI = createRegistrationAPI(
+				nextDraft,
 				isOpen,
 				diagnostics,
 				toolNames,
 				commandNames,
 				customCommandNames
 			);
+			return definitionAPI;
 		},
 	});
+};
 
 const loadedPluginFromDraft = (
 	draft: MutablePluginDraft,
@@ -641,6 +834,11 @@ const loadedPluginFromDraft = (
 			inputSchema: tool.inputSchema,
 			localName: tool.name,
 			name: tool.modelName ?? `plugin_${draft.id}_${tool.name}`,
+			...omitUndefined({
+				ownsRowShell: tool.ownsRowShell,
+				renderCall: tool.renderCall,
+				renderResult: tool.renderResult,
+			}),
 			pluginId: draft.id,
 			sourcePath: draft.sourcePath,
 		})
@@ -674,6 +872,10 @@ const loadedPluginFromDraft = (
 	return Object.freeze({
 		agents: Object.freeze([...draft.agents.values()]),
 		commands: Object.freeze(registeredCommands),
+		entryRenderers: Object.freeze([...draft.entryRenderers]),
+		markdownTransformer: draft.markdownTransformer,
+		messageRenderers: Object.freeze([...draft.messageRenderers]),
+		toolRenderers: Object.freeze([...draft.toolRenderers]),
 		mcpServers: Object.freeze(
 			[...draft.mcpServers].map(([name, config]) =>
 				Object.freeze({ config, name, ownerPluginId: draft.id })
@@ -681,6 +883,7 @@ const loadedPluginFromDraft = (
 		),
 		id: draft.id,
 		resources: Object.freeze([...draft.resources.values()]),
+		shortcuts: Object.freeze([...draft.shortcuts.values()]),
 		statusPanels: Object.freeze([...draft.statusPanels.values()]),
 		providers: Object.freeze(registeredProviders),
 		sourceIdentity,
@@ -690,6 +893,8 @@ const loadedPluginFromDraft = (
 		onSessionHistoryNavigated: draft.onSessionHistoryNavigated,
 		onCompactionCompleted: draft.onCompactionCompleted,
 		onCompactionFailed: draft.onCompactionFailed,
+		onUIPromptStart: draft.onUIPromptStart,
+		onUIPromptEnd: draft.onUIPromptEnd,
 		onStart: draft.onStart,
 		onSessionShutdown: draft.onSessionShutdown,
 		onSessionStart: draft.onSessionStart,

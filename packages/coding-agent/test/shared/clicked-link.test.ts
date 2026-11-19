@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CliRenderer, MouseEvent, Selection } from "@opentui/core";
+import type { CliRenderer, MouseEvent, Selection } from "@wincode/tui/core";
 import { clickedLink } from "@/shared/links/clicked-link";
 
 const createSelection = (

@@ -26,23 +26,32 @@ import {
 } from "./prompt-selection";
 import type {
 	PluginAgentRegistration,
-	PluginBeforeAgentTurnContext,
 	PluginBeforeAgentTurnHook,
+	PluginBeforeAgentTurnInputContext,
 	PluginBeforeCompactionHook,
 	PluginBeforeCompactionResult,
 	PluginBeforeSessionHistoryNavigationContext,
 	PluginBeforeSessionHistoryNavigationHook,
+	PluginCommandArgumentCompletion,
 	PluginCommandContext,
 	PluginCommandHandler,
+	PluginCommandInputContext,
 	PluginCommandRegistration,
 	PluginCompactionCompletedContext,
 	PluginCompactionCompletedHook,
-	PluginCompactionContext,
+	PluginCompactionCompletedInputContext,
 	PluginCompactionFailedContext,
 	PluginCompactionFailedHook,
+	PluginCompactionFailedInputContext,
+	PluginCompactionInputContext,
+	PluginEntryRenderer,
 	PluginInputSchema,
 	PluginJsonValue,
+	PluginMarkdownMessageType,
+	PluginMarkdownTransformer,
+	PluginMarkdownTransformerContext,
 	PluginMcpServerRegistration,
+	PluginMessageRenderer,
 	PluginProcessContext,
 	PluginProcessStartHook,
 	PluginProviderRegistration,
@@ -50,16 +59,26 @@ import type {
 	PluginSessionContext,
 	PluginSessionHistory,
 	PluginSessionHistoryNavigatedHook,
-	PluginSessionHistoryNavigationContext,
+	PluginSessionHistoryNavigationInputContext,
 	PluginSessionHistoryReader,
 	PluginSessionShutdownHook,
 	PluginSessionStartHook,
 	PluginSessionState,
+	PluginShortcutContext,
+	PluginShortcutRegistration,
 	PluginShutdownHook,
 	PluginStatusPanelActionContext,
 	PluginStatusPanelRegistration,
 	PluginToolRegistration,
 	PluginToolRegistrationAPI,
+	PluginToolRenderer,
+	PluginUI,
+	PluginUIContext,
+	PluginUICustomFactory,
+	PluginUICustomOptions,
+	PluginUIPromptContext,
+	PluginUIPromptHook,
+	PluginUIPromptKind,
 } from "./public";
 import {
 	PluginSessionHistoryWriteError,
@@ -68,6 +87,13 @@ import {
 } from "./public";
 import { validatePluginCommand, validatePluginTool } from "./registration";
 import type { PluginCommand, PluginTool } from "./types";
+import { unsupportedPluginUI } from "./ui/plugin-ui-default";
+import type {
+	PluginUIHandle,
+	PluginUIHostBinding,
+	PluginUIOwner,
+	PluginUIUpdate,
+} from "./ui/plugin-ui-host-contract";
 
 export type PluginDiagnostic = Readonly<{
 	message: string;
@@ -85,9 +111,25 @@ export type PluginToolDescriptor = Readonly<{
 	inputSchema: PluginTool["inputSchema"];
 	localName: string;
 	name: string;
+	ownsRowShell?: boolean;
+	renderCall?: PluginTool["renderCall"];
+	renderResult?: PluginTool["renderResult"];
 	pluginId: string;
 	sourcePath: string;
 }>;
+
+export type PluginToolPresentationDescriptor = Readonly<
+	Pick<
+		PluginToolDescriptor,
+		| "localName"
+		| "name"
+		| "ownsRowShell"
+		| "renderCall"
+		| "renderResult"
+		| "pluginId"
+		| "sourcePath"
+	>
+>;
 
 export type PluginResourceDescriptor = Readonly<{
 	name: string;
@@ -96,6 +138,7 @@ export type PluginResourceDescriptor = Readonly<{
 
 export type PluginCommandDescriptor = Readonly<{
 	description: string;
+	getArgumentCompletions?: PluginCommandArgumentCompletion;
 	handler?: PluginCommandHandler;
 	name: string;
 	statusPanelId?: string;
@@ -106,6 +149,39 @@ export type PluginCommandDescriptor = Readonly<{
 
 export type PluginStatusPanelDescriptor = PluginStatusPanelRegistration &
 	Readonly<{ pluginId: string; sourcePath: string }>;
+
+export type PluginRendererRegistration<Renderer> = Readonly<{
+	priority: number;
+	renderer: Renderer;
+}>;
+
+export type PluginRendererContribution<Renderer> = Readonly<{
+	order: number;
+	pluginId: string;
+	priority: number;
+	renderer: Renderer;
+	sourcePath: string;
+}>;
+
+export type PluginToolRendererContribution =
+	PluginRendererContribution<PluginToolRenderer>;
+export type PluginMessageRendererContribution =
+	PluginRendererContribution<PluginMessageRenderer>;
+export type PluginEntryRendererContribution =
+	PluginRendererContribution<PluginEntryRenderer>;
+
+export type PluginMarkdownTransformerRegistration = Readonly<{
+	messageTypes: readonly PluginMarkdownMessageType[];
+	transformer: PluginMarkdownTransformer;
+}>;
+
+export type PluginMarkdownTransformerContribution = Readonly<{
+	order: number;
+	pluginId: string;
+	sourcePath: string;
+	messageTypes: readonly PluginMarkdownMessageType[];
+	transformer: PluginMarkdownTransformer;
+}>;
 
 export type PluginProviderDescriptor = PluginProviderRegistration &
 	Readonly<{
@@ -123,6 +199,11 @@ export type LoadedPlugin = Readonly<{
 	mcpServers?: readonly PluginMcpServerRegistration[];
 	statusPanels?: readonly PluginStatusPanelRegistration[];
 	providers?: readonly PluginProviderDescriptor[];
+	messageRenderers?: readonly PluginRendererRegistration<PluginMessageRenderer>[];
+	entryRenderers?: readonly PluginRendererRegistration<PluginEntryRenderer>[];
+	markdownTransformer?: PluginMarkdownTransformerRegistration;
+	toolRenderers?: readonly PluginRendererRegistration<PluginToolRenderer>[];
+	shortcuts?: readonly PluginShortcutRegistration[];
 	sourceIdentity?: string;
 	onBeforeAgentTurn?: PluginBeforeAgentTurnHook;
 	onBeforeCompaction?: PluginBeforeCompactionHook;
@@ -130,6 +211,8 @@ export type LoadedPlugin = Readonly<{
 	onSessionHistoryNavigated?: PluginSessionHistoryNavigatedHook;
 	onCompactionCompleted?: PluginCompactionCompletedHook;
 	onCompactionFailed?: PluginCompactionFailedHook;
+	onUIPromptStart?: PluginUIPromptHook;
+	onUIPromptEnd?: PluginUIPromptHook;
 	onStart?: PluginProcessStartHook;
 	onSessionShutdown?: PluginSessionShutdownHook;
 	onSessionStart?: PluginSessionStartHook;
@@ -152,17 +235,34 @@ export type PluginRuntime = Readonly<{
 	executeCommand: (
 		pluginId: string,
 		name: string,
-		context: PluginCommandContext
+		context: PluginCommandInputContext
 	) => Promise<string>;
 	getAgentRegistrations: () => readonly PluginAgentRegistration[];
 	getProviderRegistrations: (
 		sessionId?: string
 	) => readonly PluginProviderDescriptor[];
 	getCommands: (sessionId?: string) => readonly PluginCommandDescriptor[];
-	getToolDescriptors: (sessionId: string) => readonly PluginToolDescriptor[];
+	getToolDescriptors: {
+		(sessionId: string): readonly PluginToolDescriptor[];
+		(
+			sessionId: string,
+			options: Readonly<{ includeTurnRenderers: true }>
+		): readonly PluginToolPresentationDescriptor[];
+	};
+	recordToolPresentationDescriptors?: (
+		sessionId: string,
+		tools: readonly PluginToolDescriptor[],
+		registerTurnCleanup?: (cleanup: () => void) => void
+	) => void;
 	bindPromptSelectionTarget: (
 		target: PluginPromptSelectionTarget
 	) => () => void;
+	bindPluginUIHost: (
+		sessionId: string,
+		host: PluginUIHostBinding
+	) => () => void;
+	notifyPluginUIUpdate: (sessionId: string, update: PluginUIUpdate) => void;
+	getPluginUI: (pluginId: string, sessionId?: string) => PluginUI;
 	getResource: <Resource = unknown>(
 		pluginId: string,
 		name: string
@@ -176,6 +276,26 @@ export type PluginRuntime = Readonly<{
 		sessionId: string
 	) => PluginSessionState | undefined;
 	getStatusPanels: () => readonly PluginStatusPanelDescriptor[];
+	getToolRenderers: (
+		sessionId?: string
+	) => readonly PluginToolRendererContribution[];
+	getMessageRenderers: (
+		sessionId?: string
+	) => readonly PluginMessageRendererContribution[];
+	getEntryRenderers: (
+		sessionId?: string
+	) => readonly PluginEntryRendererContribution[];
+	hasMarkdownTransformers: (
+		messageType: PluginMarkdownMessageType,
+		sessionId?: string
+	) => boolean;
+	transformMarkdown: (
+		markdown: string,
+		context: PluginMarkdownTransformerContext,
+		sessionId?: string
+	) => string;
+	getRendererRevision: () => number;
+	subscribeRendererChanges: (listener: () => void) => () => void;
 	refreshStatusPanel: (pluginId: string, panelId: string) => Promise<void>;
 	runStatusPanelAction: (
 		pluginId: string,
@@ -192,25 +312,25 @@ export type PluginRuntime = Readonly<{
 	) => () => void;
 	waitForBackgroundWork: (sessionId: string) => Promise<void>;
 	resolveToolsForTurn: (
-		context: PluginBeforeAgentTurnContext,
+		context: PluginBeforeAgentTurnInputContext,
 		hostContext?: unknown
 	) => Promise<readonly PluginToolDescriptor[]>;
 	/** The first Plugin decision that cancels or replaces the summary wins. */
 	runBeforeCompactionHooks: (
-		context: PluginCompactionContext
+		context: PluginCompactionInputContext
 	) => Promise<{ cancel?: string; summary?: string } | undefined>;
 	runBeforeSessionHistoryNavigation?: (
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	) => Promise<string | undefined>;
 	notifySessionHistoryNavigated?: (
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	) => Promise<void>;
 	/** Reports a committed compaction; a hook failure cannot undo it. */
 	notifyCompactionCompleted: (
-		context: PluginCompactionCompletedContext
+		context: PluginCompactionCompletedInputContext
 	) => Promise<void>;
 	notifyCompactionFailed: (
-		context: PluginCompactionFailedContext
+		context: PluginCompactionFailedInputContext
 	) => Promise<void>;
 	start: () => Promise<readonly PluginDiagnostic[]>;
 	shutdown: () => Promise<void>;
@@ -241,7 +361,26 @@ type SessionPluginState = {
 	startPromise: Promise<void>;
 	storageError?: Error;
 	stopPromise?: Promise<void>;
+	toolPresentationDescriptors: Map<string, PluginToolPresentationDescriptor>;
 	tools: Map<string, PluginToolDescriptor>;
+};
+
+type PluginUIHostRegistration = Readonly<{
+	host: PluginUIHostBinding;
+	shortcutUnsubscribers: Map<string, () => void>;
+}>;
+
+type PluginUIInvocation = "command" | "event";
+
+type PluginUIHandleBinding = Readonly<{
+	binding: PluginUIHostRegistration;
+	handle: PluginUIHandle;
+	pluginId: string;
+}>;
+
+type PluginUIPromptSpan = {
+	context: PluginUIPromptContext;
+	count: number;
 };
 
 class PluginRegistrationError extends Error {
@@ -271,8 +410,28 @@ const descriptorForTool = (
 		inputSchema: tool.inputSchema,
 		localName: tool.name,
 		name: tool.modelName ?? toolNameFor(plugin.id, tool.name),
+		...omitUndefined({
+			ownsRowShell: tool.ownsRowShell,
+			renderCall: tool.renderCall,
+			renderResult: tool.renderResult,
+		}),
 		pluginId: plugin.id,
 		sourcePath: plugin.sourcePath,
+	});
+
+const presentationDescriptorForTool = (
+	tool: PluginToolDescriptor
+): PluginToolPresentationDescriptor =>
+	Object.freeze({
+		localName: tool.localName,
+		name: tool.name,
+		...omitUndefined({
+			ownsRowShell: tool.ownsRowShell,
+			renderCall: tool.renderCall,
+			renderResult: tool.renderResult,
+		}),
+		pluginId: tool.pluginId,
+		sourcePath: tool.sourcePath,
 	});
 
 const descriptorForCommand = (
@@ -281,11 +440,12 @@ const descriptorForCommand = (
 ): PluginCommandDescriptor =>
 	Object.freeze({
 		description: command.description,
-		...(command.handler === undefined ? {} : { handler: command.handler }),
+		...omitUndefined({
+			getArgumentCompletions: command.getArgumentCompletions,
+		}),
+		...omitUndefined({ handler: command.handler }),
 		name: command.name,
-		...(command.statusPanelId === undefined
-			? {}
-			: { statusPanelId: command.statusPanelId }),
+		...omitUndefined({ statusPanelId: command.statusPanelId }),
 		pluginId: plugin.id,
 		sourcePath: plugin.sourcePath,
 		value: `/${command.name}`,
@@ -316,9 +476,105 @@ export const createPluginRuntime = (
 	const diagnostics = [...initialDiagnostics];
 	const disabledPlugins = new Set<string>();
 	const sessionStates = new Map<string, SessionPluginState>();
+	const rendererListeners = new Set<() => void>();
+	let rendererRevision = 0;
+	let renderersClosed = false;
+	const collectRendererContributions = <Renderer>(
+		getRegistrations: (
+			plugin: LoadedPlugin
+		) => readonly PluginRendererRegistration<Renderer>[] | undefined
+	): readonly PluginRendererContribution<Renderer>[] => {
+		const contributions: PluginRendererContribution<Renderer>[] = [];
+		for (const plugin of plugins) {
+			for (const registration of getRegistrations(plugin) ?? []) {
+				contributions.push(
+					Object.freeze({
+						order: contributions.length,
+						pluginId: plugin.id,
+						priority: registration.priority,
+						renderer: registration.renderer,
+						sourcePath: plugin.sourcePath,
+					})
+				);
+			}
+		}
+		return Object.freeze(
+			contributions.sort(
+				(left, right) =>
+					right.priority - left.priority || left.order - right.order
+			)
+		);
+	};
+	const toolRenderers = collectRendererContributions(
+		(plugin) => plugin.toolRenderers
+	);
+	const messageRenderers = collectRendererContributions(
+		(plugin) => plugin.messageRenderers
+	);
+	const entryRenderers = collectRendererContributions(
+		(plugin) => plugin.entryRenderers
+	);
+	const markdownTransformers: PluginMarkdownTransformerContribution[] = [];
+	for (const plugin of plugins) {
+		const registration = plugin.markdownTransformer;
+		if (registration === undefined) {
+			continue;
+		}
+		markdownTransformers.push(
+			Object.freeze({
+				messageTypes: registration.messageTypes,
+				order: markdownTransformers.length,
+				pluginId: plugin.id,
+				sourcePath: plugin.sourcePath,
+				transformer: registration.transformer,
+			})
+		);
+	}
+	const notifyRendererChanges = (): void => {
+		rendererRevision += 1;
+		for (const listener of [...rendererListeners]) {
+			try {
+				listener();
+			} catch {
+				// A renderer observer cannot interfere with Plugin lifecycle.
+			}
+		}
+	};
 	const backgroundWork = new Map<string, Set<Promise<void>>>();
 	const backgroundWorkErrors = new Map<string, unknown[]>();
 	const backgroundWorkListeners = new Map<string, Set<() => void>>();
+	const pluginUIHosts = new Map<string, PluginUIHostRegistration>();
+	// Host chrome outlives a Session view, but this registry must not retain an unmounted host.
+	const pluginUIHostReferences = new Set<WeakRef<PluginUIHostBinding>>();
+	const forEachPluginUIHost = (
+		visit: (host: PluginUIHostBinding) => void
+	): void => {
+		for (const reference of pluginUIHostReferences) {
+			const host = reference.deref();
+			if (host === undefined) {
+				pluginUIHostReferences.delete(reference);
+				continue;
+			}
+			visit(host);
+		}
+	};
+	const trackPluginUIHost = (host: PluginUIHostBinding): void => {
+		let tracked = false;
+		for (const reference of pluginUIHostReferences) {
+			const currentHost = reference.deref();
+			if (currentHost === undefined) {
+				pluginUIHostReferences.delete(reference);
+			} else if (currentHost === host) {
+				tracked = true;
+			}
+		}
+		if (!tracked) {
+			pluginUIHostReferences.add(new WeakRef(host));
+		}
+	};
+	const pluginUIHandles = new Map<string, Map<string, PluginUIHandleBinding>>();
+	const pluginUIPromptSpans = new Map<string, PluginUIPromptSpan>();
+	const closingPluginUISessions = new Set<string>();
 	const notifyBackgroundWorkChange = (sessionId: string): void => {
 		for (const listener of [
 			...(backgroundWorkListeners.get(sessionId) ?? []),
@@ -346,9 +602,181 @@ export const createPluginRuntime = (
 			sourcePath: plugin.sourcePath,
 		});
 	};
+	const reportUIPromptHookFailure = (
+		plugin: LoadedPlugin,
+		operation: "prompt-start" | "prompt-end",
+		error: unknown
+	): void => {
+		void logPluginFailure(
+			`Plugin UI prompt ${operation} hook failed`,
+			plugin,
+			`ui-${operation}`,
+			error
+		).catch(() => undefined);
+	};
+	const notifyUIPromptHook = (
+		plugin: LoadedPlugin,
+		hook: PluginUIPromptHook | undefined,
+		context: PluginUIPromptContext,
+		operation: "prompt-start" | "prompt-end"
+	): void => {
+		if (hook === undefined) {
+			return;
+		}
+		void Promise.resolve()
+			.then(() => hook(context))
+			.catch((error: unknown) =>
+				reportUIPromptHookFailure(plugin, operation, error)
+			);
+	};
+	const beginUIPrompt = (
+		plugin: LoadedPlugin,
+		state: SessionPluginState,
+		kind: PluginUIPromptKind,
+		title: string
+	): (() => void) => {
+		const sessionId = state.context.sessionId;
+		const key = JSON.stringify([plugin.id, sessionId]);
+		const context: PluginUIPromptContext = Object.freeze({
+			executionMode: state.context.executionMode,
+			kind,
+			pluginId: plugin.id,
+			reason: "ui_prompt",
+			sessionId,
+			title,
+		});
+		let span = pluginUIPromptSpans.get(key);
+		if (span === undefined) {
+			span = { context, count: 0 };
+			pluginUIPromptSpans.set(key, span);
+			notifyUIPromptHook(
+				plugin,
+				plugin.onUIPromptStart,
+				context,
+				"prompt-start"
+			);
+		}
+		span.count += 1;
+		let released = false;
+		return () => {
+			if (released) {
+				return;
+			}
+			released = true;
+			span.count -= 1;
+			if (span.count === 0) {
+				pluginUIPromptSpans.delete(key);
+				notifyUIPromptHook(
+					plugin,
+					plugin.onUIPromptEnd,
+					span.context,
+					"prompt-end"
+				);
+			}
+		};
+	};
+	const closePluginUIShortcuts = (
+		sessionId: string,
+		binding?: PluginUIHostRegistration,
+		pluginId?: string
+	): void => {
+		const activeBinding = binding ?? pluginUIHosts.get(sessionId);
+		if (activeBinding === undefined) {
+			return;
+		}
+		for (const [
+			ownerPluginId,
+			unsubscribe,
+		] of activeBinding.shortcutUnsubscribers) {
+			if (pluginId !== undefined && ownerPluginId !== pluginId) {
+				continue;
+			}
+			unsubscribe();
+			activeBinding.shortcutUnsubscribers.delete(ownerPluginId);
+		}
+	};
+	const closePluginUIHandles = (
+		sessionId: string,
+		binding?: PluginUIHostRegistration,
+		pluginId?: string
+	): void => {
+		closePluginUIShortcuts(sessionId, binding, pluginId);
+		const handles = pluginUIHandles.get(sessionId);
+		if (handles === undefined) {
+			return;
+		}
+		for (const [handleKey, entry] of handles) {
+			if (
+				(pluginId !== undefined && entry.pluginId !== pluginId) ||
+				(binding !== undefined && entry.binding !== binding)
+			) {
+				continue;
+			}
+			try {
+				entry.handle.close();
+			} catch {
+				// UI cleanup must not block Session or Plugin shutdown.
+			}
+			handles.delete(handleKey);
+		}
+		if (handles.size === 0) {
+			pluginUIHandles.delete(sessionId);
+		}
+	};
+	const clearPluginUIContributions = (pluginId: string): void => {
+		forEachPluginUIHost((host) => host.clearPlugin?.(pluginId));
+	};
+	const getPluginUI = (
+		pluginId: string,
+		sessionId?: string,
+		invocation: PluginUIInvocation = "event"
+	): PluginUI => {
+		if (sessionId === undefined) {
+			return unsupportedPluginUI;
+		}
+		const plugin = plugins.find((candidate) => candidate.id === pluginId);
+		const state = sessionStates.get(sessionId);
+		const binding = pluginUIHosts.get(sessionId);
+		if (
+			plugin === undefined ||
+			state === undefined ||
+			state.closed ||
+			disabledPlugins.has(pluginId) ||
+			state.disabled.has(pluginId) ||
+			closingPluginUISessions.has(sessionId) ||
+			(state.context.executionMode !== undefined &&
+				state.context.executionMode !== "interactive" &&
+				state.context.executionMode !== "rpc") ||
+			binding === undefined
+		) {
+			return unsupportedPluginUI;
+		}
+		let handles = pluginUIHandles.get(sessionId);
+		if (handles === undefined) {
+			handles = new Map();
+			pluginUIHandles.set(sessionId, handles);
+		}
+		const handleKey = `${pluginId}:${invocation}`;
+		const current = handles.get(handleKey);
+		if (current?.binding === binding) {
+			return current.handle.ui;
+		}
+		current?.handle.close();
+		const handle = binding.host.create(
+			{ pluginId, sessionId } satisfies PluginUIOwner,
+			(kind, title) => beginUIPrompt(plugin, state, kind, title),
+			invocation
+		);
+		handles.set(handleKey, { binding, handle, pluginId });
+		return handle.ui;
+	};
 	const start = async (): Promise<readonly PluginDiagnostic[]> => {
 		if (shutdownPromise !== undefined) {
 			await shutdownPromise;
+		}
+		if (renderersClosed) {
+			renderersClosed = false;
+			notifyRendererChanges();
 		}
 		if (processStarted) {
 			return [];
@@ -377,6 +805,7 @@ export const createPluginRuntime = (
 					diagnostics.push(diagnostic);
 					startDiagnostics.push(diagnostic);
 					disabledPlugins.add(plugin.id);
+					notifyRendererChanges();
 					await logPluginFailure(
 						"Plugin process start hook failed; disabled for this runtime",
 						plugin,
@@ -410,6 +839,175 @@ export const createPluginRuntime = (
 		!disabledPlugins.has(plugin.id) &&
 		(sessionId === undefined ||
 			!sessionStates.get(sessionId)?.disabled.has(plugin.id));
+	const activeRenderersForSession = <Renderer>(
+		renderers: readonly PluginRendererContribution<Renderer>[],
+		sessionId?: string
+	): readonly PluginRendererContribution<Renderer>[] => {
+		if (renderersClosed) {
+			return [];
+		}
+		return renderers.filter((renderer) => {
+			const plugin = plugins.find(({ id }) => id === renderer.pluginId);
+			return plugin !== undefined && isEnabledForSession(plugin, sessionId);
+		});
+	};
+	const getToolRenderers = (
+		sessionId?: string
+	): readonly PluginToolRendererContribution[] =>
+		activeRenderersForSession(toolRenderers, sessionId);
+	const getMessageRenderers = (
+		sessionId?: string
+	): readonly PluginMessageRendererContribution[] =>
+		activeRenderersForSession(messageRenderers, sessionId);
+	const getEntryRenderers = (
+		sessionId?: string
+	): readonly PluginEntryRendererContribution[] =>
+		activeRenderersForSession(entryRenderers, sessionId);
+	const hasMarkdownTransformers = (
+		messageType: PluginMarkdownMessageType,
+		sessionId?: string
+	): boolean =>
+		!renderersClosed &&
+		markdownTransformers.some((contribution) => {
+			const plugin = plugins.find(({ id }) => id === contribution.pluginId);
+			return (
+				plugin !== undefined &&
+				isEnabledForSession(plugin, sessionId) &&
+				contribution.messageTypes.includes(messageType)
+			);
+		});
+	const transformMarkdown = (
+		markdown: string,
+		context: PluginMarkdownTransformerContext,
+		sessionId?: string
+	): string => {
+		let transformed = markdown;
+		if (renderersClosed) {
+			return transformed;
+		}
+		for (const contribution of markdownTransformers) {
+			const plugin = plugins.find(({ id }) => id === contribution.pluginId);
+			if (
+				plugin === undefined ||
+				!isEnabledForSession(plugin, sessionId) ||
+				!contribution.messageTypes.includes(context.messageType)
+			) {
+				continue;
+			}
+			try {
+				const next = contribution.transformer(transformed, context);
+				if (typeof next !== "string") {
+					throw new Error(
+						"Plugin Markdown Transformers must return a string synchronously."
+					);
+				}
+				transformed = next;
+			} catch (error) {
+				void logger.error(
+					"Plugin Markdown transformer failed; preserving the last successful output",
+					{
+						cause: getErrorMessage(error, String(error)),
+						operation: "plugin.ui.markdown.transform",
+						pluginId: contribution.pluginId,
+						sourcePath: contribution.sourcePath,
+						messageType: context.messageType,
+					}
+				);
+			}
+		}
+		return transformed;
+	};
+	const registerPluginShortcuts = (
+		plugin: LoadedPlugin,
+		sessionId: string,
+		binding: PluginUIHostRegistration
+	): void => {
+		const shortcuts = plugin.shortcuts ?? [];
+		const state = sessionStates.get(sessionId);
+		const registerShortcut = binding.host.registerShortcut;
+		if (
+			shortcuts.length === 0 ||
+			registerShortcut === undefined ||
+			binding.shortcutUnsubscribers.has(plugin.id) ||
+			state === undefined ||
+			state.closed ||
+			closingPluginUISessions.has(sessionId) ||
+			!state.started.has(plugin.id) ||
+			!isEnabledForSession(plugin, sessionId) ||
+			(state.context.executionMode !== undefined &&
+				state.context.executionMode !== "interactive")
+		) {
+			return;
+		}
+		const unsubscribers: (() => void)[] = [];
+		try {
+			for (const registration of shortcuts) {
+				unsubscribers.push(
+					registerShortcut(
+						{ pluginId: plugin.id, sessionId },
+						registration.shortcut,
+						() => {
+							const activeState = sessionStates.get(sessionId);
+							if (
+								pluginUIHosts.get(sessionId) !== binding ||
+								activeState !== state ||
+								activeState.closed ||
+								closingPluginUISessions.has(sessionId) ||
+								!activeState.started.has(plugin.id) ||
+								!isEnabledForSession(plugin, sessionId)
+							) {
+								return;
+							}
+							const ui = getPluginUI(plugin.id, sessionId);
+							if (ui === unsupportedPluginUI) {
+								return;
+							}
+							const context = Object.freeze({
+								pluginId: plugin.id,
+								sessionId,
+								shortcut: registration.shortcut,
+								ui,
+							}) satisfies PluginShortcutContext;
+							try {
+								void Promise.resolve(registration.handler(context)).catch(
+									(error: unknown) =>
+										logPluginFailure(
+											"Plugin keyboard shortcut failed",
+											plugin,
+											"shortcut",
+											error
+										)
+								);
+							} catch (error) {
+								void logPluginFailure(
+									"Plugin keyboard shortcut failed",
+									plugin,
+									"shortcut",
+									error
+								);
+							}
+						}
+					)
+				);
+			}
+		} catch (error) {
+			for (const unsubscribe of unsubscribers) {
+				unsubscribe();
+			}
+			void logPluginFailure(
+				"Plugin keyboard shortcut registration failed",
+				plugin,
+				"shortcut-registration",
+				error
+			);
+			return;
+		}
+		binding.shortcutUnsubscribers.set(plugin.id, () => {
+			for (const unsubscribe of unsubscribers) {
+				unsubscribe();
+			}
+		});
+	};
 	const commandsForPlugin = (
 		plugin: LoadedPlugin,
 		sessionId?: string
@@ -743,7 +1341,7 @@ export const createPluginRuntime = (
 		plugin: LoadedPlugin,
 		state: SessionPluginState | undefined,
 		context: Context
-	): Context => {
+	): Context & PluginUIContext => {
 		const {
 			sessionHistory: _ignoredHistory,
 			sessionState: _ignoredState,
@@ -755,7 +1353,8 @@ export const createPluginRuntime = (
 		return Object.freeze({
 			...base,
 			...omitUndefined({ sessionHistory, sessionState }),
-		}) as Context;
+			ui: getPluginUI(plugin.id, context.sessionId, "event"),
+		}) as Context & PluginUIContext;
 	};
 	const initializePluginSession = async (
 		plugin: LoadedPlugin,
@@ -790,13 +1389,23 @@ export const createPluginRuntime = (
 			);
 			publishScope();
 			state.started.add(plugin.id);
+			const binding = pluginUIHosts.get(state.context.sessionId);
+			if (binding !== undefined) {
+				registerPluginShortcuts(plugin, state.context.sessionId, binding);
+			}
 		} catch (error) {
 			if (error instanceof PluginRegistrationError) {
 				publishScope();
 				state.started.add(plugin.id);
+				const binding = pluginUIHosts.get(state.context.sessionId);
+				if (binding !== undefined) {
+					registerPluginShortcuts(plugin, state.context.sessionId, binding);
+				}
 				return;
 			}
 			state.disabled.add(plugin.id);
+			notifyRendererChanges();
+			closePluginUIHandles(state.context.sessionId, undefined, plugin.id);
 			addDiagnostic(
 				plugin,
 				`Plugin Session start hook failed; disabled for this Session: ${getErrorMessage(error, String(error))}`
@@ -830,6 +1439,7 @@ export const createPluginRuntime = (
 			maskedTools: new Set(),
 			started: new Set(),
 			startPromise: deferred.promise,
+			toolPresentationDescriptors: new Map(),
 			tools: new Map(),
 		};
 		sessionStates.set(context.sessionId, state);
@@ -845,34 +1455,40 @@ export const createPluginRuntime = (
 		if (state === undefined) {
 			return;
 		}
+		closingPluginUISessions.add(context.sessionId);
+		closePluginUIHandles(context.sessionId);
 		if (state.stopPromise !== undefined) {
 			return state.stopPromise;
 		}
 		const closing = (async () => {
-			await state.startPromise;
-			for (const plugin of [...plugins].reverse()) {
-				if (
-					!state.started.has(plugin.id) ||
-					plugin.onSessionShutdown === undefined
-				) {
-					continue;
+			try {
+				await state.startPromise;
+				for (const plugin of [...plugins].reverse()) {
+					if (
+						!state.started.has(plugin.id) ||
+						plugin.onSessionShutdown === undefined
+					) {
+						continue;
+					}
+					try {
+						await plugin.onSessionShutdown(
+							contextForPlugin(plugin, state, context)
+						);
+					} catch (error) {
+						await logPluginFailure(
+							"Plugin Session shutdown hook failed",
+							plugin,
+							"session-shutdown",
+							error
+						);
+					}
 				}
-				try {
-					await plugin.onSessionShutdown(
-						contextForPlugin(plugin, state, context)
-					);
-				} catch (error) {
-					await logPluginFailure(
-						"Plugin Session shutdown hook failed",
-						plugin,
-						"session-shutdown",
-						error
-					);
+			} finally {
+				state.closed = true;
+				closingPluginUISessions.delete(context.sessionId);
+				if (sessionStates.get(context.sessionId) === state) {
+					sessionStates.delete(context.sessionId);
 				}
-			}
-			state.closed = true;
-			if (sessionStates.get(context.sessionId) === state) {
-				sessionStates.delete(context.sessionId);
 			}
 		})();
 		state.stopPromise = closing;
@@ -880,7 +1496,7 @@ export const createPluginRuntime = (
 	};
 	const resolvePluginToolsForTurn = async (
 		plugin: LoadedPlugin,
-		context: PluginBeforeAgentTurnContext,
+		context: PluginBeforeAgentTurnInputContext,
 		hostContext: unknown,
 		turnToolOwners: Map<string, string>
 	): Promise<readonly PluginToolDescriptor[] | null> => {
@@ -940,7 +1556,7 @@ export const createPluginRuntime = (
 		return pluginTools;
 	};
 	const resolveToolsForTurn = async (
-		context: PluginBeforeAgentTurnContext,
+		context: PluginBeforeAgentTurnInputContext,
 		hostContext?: unknown
 	): Promise<readonly PluginToolDescriptor[]> => {
 		const resolved: PluginToolDescriptor[] = [];
@@ -975,12 +1591,12 @@ export const createPluginRuntime = (
 	};
 	const requestCompactionDecision = async (
 		plugin: LoadedPlugin,
-		context: PluginCompactionContext
+		context: PluginCompactionInputContext
 	): Promise<PluginBeforeCompactionResult> => {
 		const state = sessionStates.get(context.sessionId);
 		try {
 			const decision = await plugin.onBeforeCompaction?.(
-				state === undefined ? context : contextForPlugin(plugin, state, context)
+				contextForPlugin(plugin, state, context)
 			);
 			if (state?.storageError !== undefined) {
 				throw state.storageError;
@@ -1001,7 +1617,7 @@ export const createPluginRuntime = (
 	};
 	const compactionDecisionFor = async (
 		plugin: LoadedPlugin,
-		context: PluginCompactionContext
+		context: PluginCompactionInputContext
 	): Promise<{ cancel?: string; summary?: string } | undefined> => {
 		if (
 			plugin.onBeforeCompaction === undefined ||
@@ -1024,7 +1640,7 @@ export const createPluginRuntime = (
 		return Object.freeze({ summary: decision.summary });
 	};
 	const runBeforeCompactionHooks = async (
-		context: PluginCompactionContext
+		context: PluginCompactionInputContext
 	): Promise<{ cancel?: string; summary?: string } | undefined> => {
 		let summary: string | undefined;
 		for (const plugin of plugins) {
@@ -1041,7 +1657,9 @@ export const createPluginRuntime = (
 	};
 	const notifyCompactionHooks = async (
 		operation: "completed" | "failed",
-		context: PluginCompactionCompletedContext | PluginCompactionFailedContext
+		context:
+			| PluginCompactionCompletedInputContext
+			| PluginCompactionFailedInputContext
 	): Promise<void> => {
 		for (const plugin of plugins) {
 			if (!isEnabledForSession(plugin, context.sessionId)) {
@@ -1049,10 +1667,7 @@ export const createPluginRuntime = (
 			}
 			try {
 				const state = sessionStates.get(context.sessionId);
-				const pluginContext =
-					state === undefined
-						? context
-						: contextForPlugin(plugin, state, context);
+				const pluginContext = contextForPlugin(plugin, state, context);
 				if (operation === "completed") {
 					await plugin.onCompactionCompleted?.(
 						pluginContext as PluginCompactionCompletedContext
@@ -1075,7 +1690,7 @@ export const createPluginRuntime = (
 	const beforeNavigationContextForPlugin = (
 		plugin: LoadedPlugin,
 		state: SessionPluginState,
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	): PluginBeforeSessionHistoryNavigationContext => {
 		const pluginContext = contextForPlugin(plugin, state, context);
 		const sessionHistory = pluginContext.sessionHistory;
@@ -1095,7 +1710,7 @@ export const createPluginRuntime = (
 		});
 	};
 	const runBeforeSessionHistoryNavigation = async (
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	): Promise<string | undefined> => {
 		const state = sessionStates.get(context.sessionId);
 		if (state === undefined) {
@@ -1128,7 +1743,7 @@ export const createPluginRuntime = (
 		}
 	};
 	const notifySessionHistoryNavigated = async (
-		context: PluginSessionHistoryNavigationContext
+		context: PluginSessionHistoryNavigationInputContext
 	): Promise<void> => {
 		const state = sessionStates.get(context.sessionId);
 		if (state === undefined) {
@@ -1167,18 +1782,159 @@ export const createPluginRuntime = (
 		}
 	};
 
+	function getToolDescriptors(
+		sessionId: string
+	): readonly PluginToolDescriptor[];
+	function getToolDescriptors(
+		sessionId: string,
+		options: Readonly<{ includeTurnRenderers: true }>
+	): readonly PluginToolPresentationDescriptor[];
+	function getToolDescriptors(
+		sessionId: string,
+		options?: Readonly<{ includeTurnRenderers?: true }>
+	): readonly (PluginToolDescriptor | PluginToolPresentationDescriptor)[] {
+		const availableTools = plugins
+			.filter((plugin) => isEnabledForSession(plugin, sessionId))
+			.flatMap((plugin) => pluginToolsForSession(plugin, sessionId));
+		if (options?.includeTurnRenderers !== true) {
+			return Object.freeze(availableTools);
+		}
+		const presentationDescriptors = new Map<
+			string,
+			PluginToolPresentationDescriptor
+		>(
+			availableTools.map((tool) => [
+				tool.name,
+				presentationDescriptorForTool(tool),
+			])
+		);
+		const state = sessionStates.get(sessionId);
+		for (const descriptor of state?.toolPresentationDescriptors.values() ??
+			[]) {
+			if (
+				!(
+					disabledPlugins.has(descriptor.pluginId) ||
+					state?.disabled.has(descriptor.pluginId)
+				)
+			) {
+				presentationDescriptors.set(descriptor.name, descriptor);
+			}
+		}
+		return Object.freeze([...presentationDescriptors.values()]);
+	}
+	const recordToolPresentationDescriptors = (
+		sessionId: string,
+		tools: readonly PluginToolDescriptor[],
+		registerTurnCleanup?: (cleanup: () => void) => void
+	): void => {
+		const state = sessionStates.get(sessionId);
+		if (state === undefined || state.closed) {
+			return;
+		}
+		state.toolPresentationDescriptors.clear();
+		const turnDescriptors = new Map<string, PluginToolPresentationDescriptor>();
+		for (const tool of tools) {
+			const plugin = plugins.find(({ id }) => id === tool.pluginId);
+			if (plugin === undefined || !isEnabledForSession(plugin, sessionId)) {
+				continue;
+			}
+			const descriptor = presentationDescriptorForTool(tool);
+			state.toolPresentationDescriptors.set(tool.name, descriptor);
+			turnDescriptors.set(tool.name, descriptor);
+		}
+		registerTurnCleanup?.(() => {
+			if (sessionStates.get(sessionId) !== state) {
+				return;
+			}
+			for (const [name, descriptor] of turnDescriptors) {
+				if (state.toolPresentationDescriptors.get(name) === descriptor) {
+					state.toolPresentationDescriptors.delete(name);
+				}
+			}
+		});
+	};
+
+	const shutdownStartedPlugins = async (): Promise<void> => {
+		for (const plugin of [...plugins].reverse()) {
+			if (
+				!processStartAttemptedPlugins.has(plugin.id) ||
+				plugin.onShutdown === undefined
+			) {
+				continue;
+			}
+			const context: PluginProcessContext = {
+				sourcePath: plugin.sourcePath,
+				workspace: plugin.workspace,
+			};
+			try {
+				await plugin.onShutdown(context);
+			} catch (error) {
+				await logPluginFailure(
+					"Plugin shutdown hook failed",
+					plugin,
+					"shutdown",
+					error
+				);
+			}
+		}
+		processStartAttemptedPlugins.clear();
+		processStarted = false;
+	};
+
 	return Object.freeze({
 		get diagnostics() {
 			return Object.freeze([...diagnostics]);
 		},
 
 		bindPromptSelectionTarget: promptSelectionBridge.bindPromptSelectionTarget,
+		bindPluginUIHost(sessionId, host) {
+			trackPluginUIHost(host);
+			const binding: PluginUIHostRegistration = Object.freeze({
+				host,
+				shortcutUnsubscribers: new Map(),
+			});
+			const previous = pluginUIHosts.get(sessionId);
+			if (previous !== undefined) {
+				closePluginUIHandles(sessionId, previous);
+			}
+			pluginUIHosts.set(sessionId, binding);
+			for (const plugin of plugins) {
+				registerPluginShortcuts(plugin, sessionId, binding);
+			}
+			return () => {
+				if (pluginUIHosts.get(sessionId) !== binding) {
+					return;
+				}
+				closePluginUIHandles(sessionId, binding);
+				pluginUIHosts.delete(sessionId);
+			};
+		},
+		notifyPluginUIUpdate(sessionId, update) {
+			pluginUIHosts.get(sessionId)?.host.update?.(update);
+		},
+		getPluginUI,
 		disablePlugin(pluginId, message) {
 			const plugin = plugins.find(({ id }) => id === pluginId);
 			if (plugin === undefined || disabledPlugins.has(pluginId)) {
 				return;
 			}
 			disabledPlugins.add(pluginId);
+			for (const state of sessionStates.values()) {
+				for (const [name, descriptor] of state.toolPresentationDescriptors) {
+					if (descriptor.pluginId === pluginId) {
+						state.toolPresentationDescriptors.delete(name);
+					}
+				}
+			}
+			notifyRendererChanges();
+			const sessionIds = new Set([
+				...pluginUIHandles.keys(),
+				...pluginUIHosts.keys(),
+			]);
+			for (const sessionId of sessionIds) {
+				closePluginUIHandles(sessionId, undefined, pluginId);
+			}
+			clearPluginUIContributions(pluginId);
 			addDiagnostic(plugin, message);
 		},
 		async executeCommand(pluginId, name, context) {
@@ -1217,15 +1973,33 @@ export const createPluginRuntime = (
 					sessionState: _ignoredState,
 					...base
 				} = context;
-				const pluginContext = Object.freeze({
-					...base,
-					...omitUndefined({ sessionHistory, sessionState }),
+				const eventUI = getPluginUI(plugin.id, context.sessionId, "event");
+				const commandUI = getPluginUI(plugin.id, context.sessionId, "command");
+				let commandInvocationActive = true;
+				const ui: PluginUI = Object.freeze({
+					...eventUI,
+					custom: <Value>(
+						factory: PluginUICustomFactory<Value>,
+						options?: PluginUICustomOptions
+					) =>
+						commandInvocationActive
+							? commandUI.custom(factory, options)
+							: eventUI.custom(factory, options),
 				});
-				const result = await command.handler(pluginContext);
-				if (typeof result !== "string") {
-					throw new Error("Plugin Command returned invalid text.");
+				try {
+					const pluginContext: PluginCommandContext = Object.freeze({
+						...base,
+						...omitUndefined({ sessionHistory, sessionState }),
+						ui,
+					});
+					const result = await command.handler(pluginContext);
+					if (typeof result !== "string") {
+						throw new Error("Plugin Command returned invalid text.");
+					}
+					return result;
+				} finally {
+					commandInvocationActive = false;
 				}
-				return result;
 			} catch (error) {
 				await logPluginFailure(
 					"Plugin command failed",
@@ -1242,6 +2016,16 @@ export const createPluginRuntime = (
 					.filter((plugin) => isEnabledForSession(plugin))
 					.map(({ id, sourcePath }) => Object.freeze({ id, sourcePath }))
 			);
+		},
+		getToolRenderers,
+		getMessageRenderers,
+		getEntryRenderers,
+		hasMarkdownTransformers,
+		transformMarkdown,
+		getRendererRevision: () => rendererRevision,
+		subscribeRendererChanges(listener) {
+			rendererListeners.add(listener);
+			return () => rendererListeners.delete(listener);
 		},
 		getAgentRegistrations() {
 			return Object.freeze(
@@ -1260,13 +2044,8 @@ export const createPluginRuntime = (
 		getCommands(sessionId) {
 			return Object.freeze(allCommands(sessionId));
 		},
-		getToolDescriptors(sessionId) {
-			return Object.freeze(
-				plugins
-					.filter((plugin) => isEnabledForSession(plugin, sessionId))
-					.flatMap((plugin) => pluginToolsForSession(plugin, sessionId ?? ""))
-			);
-		},
+		getToolDescriptors,
+		recordToolPresentationDescriptors,
 		getResource<Resource>(pluginId: string, name: string) {
 			const resource = plugins
 				.find((plugin) => plugin.id === pluginId)
@@ -1403,6 +2182,8 @@ export const createPluginRuntime = (
 			if (shutdownPromise !== undefined) {
 				return shutdownPromise;
 			}
+			renderersClosed = true;
+			notifyRendererChanges();
 			const closing = (async () => {
 				await waitForStartToSettle();
 				for (const [sessionId, state] of [...sessionStates]) {
@@ -1411,30 +2192,17 @@ export const createPluginRuntime = (
 						sessionStates.delete(sessionId);
 					}
 				}
-				for (const plugin of [...plugins].reverse()) {
-					if (
-						!processStartAttemptedPlugins.has(plugin.id) ||
-						plugin.onShutdown === undefined
-					) {
-						continue;
-					}
-					const context: PluginProcessContext = {
-						sourcePath: plugin.sourcePath,
-						workspace: plugin.workspace,
-					};
-					try {
-						await plugin.onShutdown(context);
-					} catch (error) {
-						await logPluginFailure(
-							"Plugin shutdown hook failed",
-							plugin,
-							"shutdown",
-							error
-						);
-					}
+				for (const [sessionId, binding] of pluginUIHosts) {
+					pluginUIHosts.delete(sessionId);
+					closePluginUIHandles(sessionId, binding);
 				}
-				processStartAttemptedPlugins.clear();
-				processStarted = false;
+				forEachPluginUIHost((host) => {
+					for (const plugin of plugins) {
+						host.clearPlugin?.(plugin.id);
+					}
+				});
+				pluginUIHostReferences.clear();
+				await shutdownStartedPlugins();
 			})();
 			shutdownPromise = closing;
 			try {

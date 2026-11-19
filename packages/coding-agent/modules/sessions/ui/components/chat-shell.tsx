@@ -1,5 +1,3 @@
-import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
 import type {
 	AgentId,
 	ModelRetryStatus,
@@ -7,6 +5,8 @@ import type {
 	SessionRecordId,
 } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
+import { useKeyboard } from "@wincode/tui";
+import { type ScrollBoxRenderable, TextAttributes } from "@wincode/tui/core";
 import { isUndefined } from "@wincode/utils";
 import {
 	type ReactNode,
@@ -17,6 +17,13 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import {
+	PluginUIContributionStatus,
+	PluginUICustomPresentation,
+	PluginUIFooter,
+	PluginUIHeader,
+	usePluginUIContributions,
+} from "@/modules/plugins/ui/plugin-ui-host";
 import type { CacheWarmingStatus } from "@/modules/prompt-cache/cache-warming";
 import { usePromptConfig } from "@/modules/prompt-settings/context/prompt-config-provider";
 import type { InteractiveProviderController } from "@/modules/providers/interactive-provider-controller";
@@ -121,6 +128,7 @@ function ActivityFooter({
 	isCompacting,
 	retryStatus,
 	retryOperation,
+	sessionId,
 }: {
 	accentColor: string;
 	agent: AgentId;
@@ -128,7 +136,31 @@ function ActivityFooter({
 	isCompacting: boolean;
 	retryStatus?: ModelRetryStatus;
 	retryOperation?: "agent-turn" | "compaction-summary";
+	sessionId: string;
 }) {
+	const contributions = usePluginUIContributions(sessionId);
+	const indicator = contributions.workingIndicator;
+	const [frameIndex, setFrameIndex] = useState(0);
+	useEffect(() => {
+		setFrameIndex(0);
+		if (indicator === undefined || indicator.frames.length === 0) {
+			return;
+		}
+		const configuredInterval = indicator.intervalMs;
+		const intervalMs =
+			configuredInterval === undefined ||
+			!Number.isFinite(configuredInterval) ||
+			configuredInterval <= 0
+				? 80
+				: Math.max(16, configuredInterval);
+		const interval = setInterval(() => {
+			setFrameIndex((index) => (index + 1) % indicator.frames.length);
+		}, intervalMs);
+		return () => clearInterval(interval);
+	}, [indicator]);
+	if (contributions.workingVisible === false) {
+		return null;
+	}
 	if (retryStatus !== undefined) {
 		return (
 			<ModelRetryIndicator
@@ -139,11 +171,20 @@ function ActivityFooter({
 		);
 	}
 	const compactionLabel = autoCompact ? "Auto-compacting..." : "Compacting...";
+	let workingIndicator: ReactNode = (
+		<Spinner agent={agent} color={accentColor} />
+	);
+	if (indicator !== undefined) {
+		const frame = indicator.frames[frameIndex % indicator.frames.length];
+		workingIndicator =
+			frame === undefined ? null : <text fg={accentColor}>{frame}</text>;
+	}
 	return (
 		<box alignItems="center" flexDirection="row" gap={1}>
-			<Spinner agent={agent} color={accentColor} />
+			{workingIndicator}
 			<text fg={accentColor}>
-				{isCompacting ? compactionLabel : "Working..."}
+				{contributions.workingMessage ??
+					(isCompacting ? compactionLabel : "Working...")}
 			</text>
 		</box>
 	);
@@ -539,6 +580,7 @@ export function ChatShell({
 			paddingX={0}
 			width="100%"
 		>
+			<PluginUIHeader />
 			<scrollbox
 				flexGrow={1}
 				height="100%"
@@ -601,6 +643,7 @@ export function ChatShell({
 									onRetry={canRetryTurn ? onRetry : undefined}
 									onRewindCheckpoint={onRewindCheckpoint}
 									rewindingCheckpointId={rewindingCheckpointId}
+									sessionId={viewId}
 									showActions={showActions && !isBusy}
 									streaming={isBusy && turn.id === turns.at(-1)?.id}
 								/>
@@ -619,49 +662,57 @@ export function ChatShell({
 				<WaitingMessageStrip queued={queuedSubmissions} />
 
 				<box flexShrink={0} position="relative" width="100%">
-					<ChatTextArea
-						activityIndicator={
-							isBusy ? (
-								<ActivityFooter
-									accentColor={activityAccentColor}
-									agent={agent}
-									autoCompact={autoCompact}
-									isCompacting={isCompacting}
-									retryOperation={retryOperation}
-									retryStatus={retryStatus}
-								/>
-							) : undefined
-						}
-						composerBorderColor={composerBorderColor}
-						draftKey={draftKey}
-						id={composerId}
-						isSelectionReady={isSelectionReady}
-						onCompact={onCompact}
-						onEmptySubmit={onEmptySubmit}
-						onOpenSessionHistory={onOpenSessionHistory}
-						onOpenSettings={onOpenSettings}
-						onProviderModelChanged={onProviderModelChanged}
-						onSubmit={handleSubmit}
-						providerController={providerController}
-						recalledSubmissions={recalledSubmissions}
-						recallRevision={recallRevision}
-						sessionId={viewId}
-						sessionPromptHistory={promptHistory}
-					/>
+					<PluginUICustomPresentation sessionId={viewId}>
+						<ChatTextArea
+							activityIndicator={
+								isBusy ? (
+									<ActivityFooter
+										accentColor={activityAccentColor}
+										agent={agent}
+										autoCompact={autoCompact}
+										isCompacting={isCompacting}
+										retryOperation={retryOperation}
+										retryStatus={retryStatus}
+										sessionId={viewId}
+									/>
+								) : undefined
+							}
+							composerBorderColor={composerBorderColor}
+							draftKey={draftKey}
+							id={composerId}
+							isSelectionReady={isSelectionReady}
+							onCompact={onCompact}
+							onEmptySubmit={onEmptySubmit}
+							onOpenSessionHistory={onOpenSessionHistory}
+							onOpenSettings={onOpenSettings}
+							onProviderModelChanged={onProviderModelChanged}
+							onSubmit={handleSubmit}
+							providerController={providerController}
+							recalledSubmissions={recalledSubmissions}
+							recallRevision={recallRevision}
+							sessionId={viewId}
+							sessionPromptHistory={promptHistory}
+						/>
+					</PluginUICustomPresentation>
 				</box>
-				<SessionFooterStatuses scope={viewId} />
-				<box
-					flexDirection="row"
-					flexShrink={0}
-					justifyContent="space-between"
-					paddingLeft={1}
-					width="100%"
-				>
-					<WorkspacePath />
-					{usage ? (
-						<SessionUsageBar autoCompact={autoCompact} summary={usage} />
-					) : null}
-				</box>
+				<PluginUIFooter sessionId={viewId}>
+					<box flexDirection="column" flexShrink={0} width="100%">
+						<PluginUIContributionStatus sessionId={viewId} />
+						<SessionFooterStatuses scope={viewId} />
+						<box
+							flexDirection="row"
+							flexShrink={0}
+							justifyContent="space-between"
+							paddingLeft={1}
+							width="100%"
+						>
+							<WorkspacePath />
+							{usage ? (
+								<SessionUsageBar autoCompact={autoCompact} summary={usage} />
+							) : null}
+						</box>
+					</box>
+				</PluginUIFooter>
 			</box>
 		</box>
 	);

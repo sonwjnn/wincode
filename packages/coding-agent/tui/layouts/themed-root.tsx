@@ -1,5 +1,5 @@
-import { MouseButton, type MouseEvent } from "@opentui/core";
-import { useRenderer } from "@opentui/react";
+import { useRenderer } from "@wincode/tui";
+import { MouseButton, type MouseEvent } from "@wincode/tui/core";
 import type { ReactNode } from "react";
 import { requestSelectionCopy } from "@/shared/clipboard";
 import { clickedLink } from "@/shared/links/clicked-link";

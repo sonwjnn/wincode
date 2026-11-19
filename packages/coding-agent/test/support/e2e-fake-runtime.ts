@@ -38,7 +38,8 @@ export type FakeProviderRecorder = {
 
 export type FakeProviderStepScript = (
 	request: ProviderChatRequest,
-	recorder: FakeProviderRecorder
+	recorder: FakeProviderRecorder,
+	signal: AbortSignal | undefined
 ) => AsyncGenerator<ProviderChatEvent>;
 
 const requestText = (request: ProviderChatRequest): string =>
@@ -192,7 +193,7 @@ export const createFakeProviderCollection = (
 				const events =
 					recorder.stepScript === undefined
 						? defaultProviderStepScript(request, recorder, context.model)
-						: recorder.stepScript(request, recorder);
+						: recorder.stepScript(request, recorder, context.signal);
 				for await (const event of events) {
 					yield event.type === "finish" && event.completion === undefined
 						? { ...event, completion: { kind: "completed" } }

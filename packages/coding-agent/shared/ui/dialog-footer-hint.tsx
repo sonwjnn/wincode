@@ -1,4 +1,4 @@
-import type { RGBA } from "@opentui/core";
+import type { RGBA } from "@wincode/tui/core";
 import type { ReactNode } from "react";
 import { useTheme } from "../providers/theme/theme-provider";
 

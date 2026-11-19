@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { MouseButtons } from "@opentui/core/testing";
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard } from "@wincode/tui";
+import { MouseButtons } from "@wincode/tui/testing";
 import { act, useEffect } from "react";
 import { CopyOnSelect } from "@/shared/clipboard";
 import {

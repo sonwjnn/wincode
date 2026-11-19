@@ -1,4 +1,4 @@
-import type { Extmark, TextareaRenderable } from "@opentui/core";
+import type { Extmark, TextareaRenderable } from "@wincode/tui/core";
 import { isUndefined, omitUndefined } from "@wincode/utils";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { SessionSubmissionComposition } from "@/modules/sessions/submission-types";

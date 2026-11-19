@@ -2,7 +2,6 @@ import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { TestRendererSetup } from "@opentui/core/testing";
 import type {
 	ProviderChatEvent,
 	ProviderChatRequest,
@@ -12,6 +11,7 @@ import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,
 } from "@wincode/subagents/plugin";
+import type { TestRendererSetup } from "@wincode/tui/testing";
 import { act } from "react";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";
 import { loadPlugins } from "@/modules/plugins/loader";

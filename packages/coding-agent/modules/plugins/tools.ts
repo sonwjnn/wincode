@@ -12,6 +12,7 @@ import { isJsonValue, logger, omitUndefined } from "@wincode/utils";
 import { isPluginOutputWithinLimit } from "./output";
 import type { PluginRuntime, PluginToolDescriptor } from "./runtime";
 import type { PluginTool } from "./types";
+import { unsupportedPluginUI } from "./ui/plugin-ui-default";
 
 export type PluginToolsContext = Readonly<{
 	agentId?: AgentId;
@@ -19,6 +20,7 @@ export type PluginToolsContext = Readonly<{
 	pluginRuntime?: PluginRuntime;
 	existingToolNames?: readonly string[];
 	registerBackgroundWork?: (sessionId: string, work: Promise<unknown>) => void;
+	registerTurnCleanup?: (cleanup: () => void) => void;
 	sessionId?: string;
 	signal?: AbortSignal;
 	workspace?: string;
@@ -117,6 +119,9 @@ const executePluginToolHandler = async (
 			agentId,
 			sessionId: context.sessionId ?? "",
 			...omitUndefined({ sessionHistory, sessionState }),
+			ui:
+				context.pluginRuntime?.getPluginUI(tool.pluginId, context.sessionId) ??
+				unsupportedPluginUI,
 			signal: signal ?? context.signal ?? new AbortController().signal,
 			toolCallId,
 			registerBackgroundWork: (work) =>
@@ -180,12 +185,20 @@ export const createPluginTools = (
 	}
 	const reserved = new Set(context.existingToolNames ?? []);
 	const resolved: ResolvedTool[] = [];
+	const selectedPluginTools: PluginToolDescriptor[] = [];
 	for (const tool of context.pluginTools) {
 		if (reserved.has(tool.name)) {
 			continue;
 		}
 		reserved.add(tool.name);
 		resolved.push(pluginTool(tool, context));
+		selectedPluginTools.push(tool);
 	}
+	// Only admitted Tools can own renderer metadata for their Session rows.
+	context.pluginRuntime?.recordToolPresentationDescriptors?.(
+		context.sessionId,
+		selectedPluginTools,
+		context.registerTurnCleanup
+	);
 	return resolved;
 };

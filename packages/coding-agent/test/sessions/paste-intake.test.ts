@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decodePasteBytes, PasteEvent } from "@opentui/core";
+import { decodePasteBytes, PasteEvent } from "@wincode/tui/core";
 import type { ClipboardImageResult } from "@/modules/sessions/clipboard-image";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import { createComposerDocument } from "@/modules/sessions/ui/composer-document";
@@ -152,6 +152,19 @@ describe("Paste Intake", () => {
 			pastedText: [{ text, token: "[Pasted ~3 lines]" }],
 			text: "[Pasted ~3 lines] ",
 		});
+	});
+
+	test("Plugin text paste uses normal collapse and preserves its source text", async () => {
+		const harness = createHarness();
+		const text = "first line\nsecond line\nthird line";
+
+		await harness.intake.pasteText(text, harness.dependencies);
+
+		expect(harness.document.capture()).toMatchObject({
+			pastedText: [{ text, token: "[Pasted ~3 lines]" }],
+			text: "[Pasted ~3 lines] ",
+		});
+		expect(harness.document.capture().files).toEqual([]);
 	});
 
 	test("image size refusal preserves the attachment error boundary", async () => {

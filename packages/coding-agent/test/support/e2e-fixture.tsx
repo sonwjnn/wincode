@@ -1,7 +1,5 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import type { TestRendererSetup } from "@opentui/core/testing";
-import { MockTreeSitterClient } from "@opentui/core/testing";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -11,6 +9,8 @@ import {
 } from "@tanstack/react-router";
 import type { SessionMessageRecord, SessionRecord } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
+import type { TestRendererSetup } from "@wincode/tui/testing";
+import { MockTreeSitterClient } from "@wincode/tui/testing";
 import { isUndefined, logger } from "@wincode/utils";
 import { act, useEffect } from "react";
 import { AgentRegistryProvider, useAgentRegistry } from "@/modules/agents";

@@ -6,7 +6,7 @@
     "module": "Preserve",
     "moduleDetection": "force",
     "jsx": "react-jsx",
-    "jsxImportSource": "@opentui/react",
+    "jsxImportSource": "@wincode/tui",
     "allowJs": true,
     "types": ["bun", "node"],
 

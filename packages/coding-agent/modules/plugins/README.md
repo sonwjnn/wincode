@@ -69,14 +69,15 @@ Plugin Identifiers use lowercase ASCII letters, digits, and underscores; local T
 
 ### Provider SDK Providers
 
-A trusted Plugin may register a custom SDK Provider with `registerProvider`. The host calls `createProvider()` for each Session Host, so return a fresh Provider instance. The `connect` interaction receives only the host's `requestTextInput` operation and an abort signal, then returns a JSON credential value or `undefined` to cancel:
+A trusted Plugin may register a custom SDK Provider with `registerProvider`. The host calls `createProvider()` for each Session Host, so return a fresh Provider instance. The `connect` interaction receives `ui`, the host's `requestTextInput` operation, and an abort signal, then returns a JSON credential value or `undefined` to cancel:
 
 ```ts
 plugin.registerProvider({
   providerId: "acme",
   displayName: "Acme Model Service",
   createProvider: () => createAcmeProvider(),
-  connect: async ({ requestTextInput, signal }) => {
+  connect: async ({ requestTextInput, signal, ui }) => {
+    ui.notify("Connect to Acme Model Service", "info");
     const apiKey = await requestTextInput("Acme API key", signal);
     return apiKey === undefined ? undefined : { apiKey };
   },
@@ -93,6 +94,47 @@ Tools can also be registered from `onSessionStart(context, scope)` or `onBeforeA
 
 Plugin Commands appear in the Interactive command menu and run only after a tracked menu selection. They receive the argument text, workspace, and optional Session identity, and their returned text is displayed to the user. Commands work before a Session is opened; selecting one from the command menu is its explicit execution intent.
 
+### Keyboard shortcuts
+
+After `definePlugin()`, register a keyboard shortcut with `PluginAPI.registerShortcut()` or the returned Plugin definition. The host matches it through the existing keyboard layer. A match consumes the key and invokes all Plugin handlers registered for that shortcut in registration order. Host controls run first, and a focused Plugin UI receives its local input before Plugin shortcuts. Shortcuts are active only while the Plugin's Interactive Session view is bound; they are removed with that view or Plugin. Escape and Ctrl+C are reserved for host dismissal/reclaim actions and cannot be registered.
+
+This keyboard-only editor opens from `Ctrl+Shift+P`, completes on Enter, and leaves Escape/Ctrl+C to the host:
+
+```tsx
+import { useKeyboard } from "@wincode/tui";
+import type {
+  PluginFactory,
+  PluginUICustomComponent,
+} from "@wincode/coding-agent";
+
+const KeyboardHelp: PluginUICustomComponent<string> = ({ done }) => {
+  useKeyboard((key) => {
+    if (key.name !== "enter" && key.name !== "return") return;
+    key.preventDefault();
+    done("Keyboard help closed");
+  });
+  return (
+    <box>
+      <text>Enter closes · Escape dismisses · Ctrl+C returns to the composer</text>
+    </box>
+  );
+};
+
+const keyboardHelpPlugin: PluginFactory = (api) => {
+  api.definePlugin({ id: "keyboard_help" });
+  api.registerShortcut("ctrl+shift+p", {
+    description: "Open keyboard help.",
+    handler: async ({ ui }) => {
+      await ui.custom(() => KeyboardHelp, { title: "Keyboard help" });
+    },
+  });
+};
+
+export default keyboardHelpPlugin;
+```
+
+Handlers receive `pluginId`, `sessionId`, the normalized `shortcut`, and the host-mediated `ui`. `description` identifies the shortcut's purpose for Plugin authors. The public exports include `PluginShortcutContext`, `PluginShortcutHandler`, `PluginShortcutOptions`, and `PluginShortcutRegistration`. Shortcuts do not run while a modal keyboard layer is focused and are inert in RPC, JSON, and Print.
+
 ### Prompt selection
 
 The root `PluginAPI` exposes `setModel(model)` and `setThinkingLevel(level)` for the focused Interactive composer. They change the effective selection for future Submissions, taking precedence over model and ThinkingLevel defaults on the selected Agent while preserving the Agent's identity, instructions, and tools. They do not change an in-flight Agent Turn or configured defaults for new Wincode processes. On an actual model change, Thinking Level starts at `low` when supported; otherwise the host searches higher supported levels first, then lower ones. `Off` is an explicit level and may be the final fallback if declared. `setModel` returns `false` when there is no Interactive composer, the model is unsupported or retired, or its Connection Provider is not connected. Thinking-level requests are checked against the effective model; unsupported non-`undefined` levels are ignored. Pass `undefined` to use the provider default, including when the Agent has a configured ThinkingLevel. Outside Interactive Mode, `setModel` returns `false` and `setThinkingLevel` has no effect.
@@ -103,9 +145,201 @@ A Plugin factory may also register named process resources with `registerResourc
 
 Tool handlers can register background promises with `context.registerBackgroundWork(promise)`. One-Shot waits for all work registered to that Session before exiting. Interactive Mode and RPC keep the parent Session Host alive while registered work is pending, even after its last view is released; normal idle unloading resumes when the work settles.
 
+## Plugin UI
+
+### Package dependencies and TSX
+
+Wincode loads Plugin files but does not install dependencies from a Plugin manifest. A distributable Plugin should declare host-provided packages as peers and keep matching packages available in its authoring environment. For a Plugin that imports `PluginFactory`, shared TUI components, and React hooks:
+
+```json
+{
+  "peerDependencies": {
+    "@wincode/coding-agent": "^0.1.0",
+    "@wincode/tui": "^0.1.0",
+    "react": ">=19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.10",
+    "@wincode/coding-agent": "^0.1.0",
+    "@wincode/tui": "^0.1.0",
+    "react": ">=19.2.0"
+  }
+}
+```
+
+Keep these packages external when bundling; at runtime, the Plugin must resolve the same `@wincode/tui` and React instances as Wincode. `@wincode/tui` owns `@opentui/core` and `@opentui/react`; do not declare those implementation dependencies directly. For TSX, configure the automatic JSX runtime:
+
+```json
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "@wincode/tui"
+  }
+}
+```
+
+Import shared React components and hooks such as `InlineNotice` and `useKeyboard` from `@wincode/tui`, and renderer types from `@wincode/tui/core`. Plugins supply components to the host rather than creating their own renderer or React root.
+
+Session-bound Plugin callbacks, Tools, Commands, Provider `connect()` callbacks, and Status Panel `runAction()` handlers receive `ui`. In Interactive Mode, while that Session has a mounted host view, the host renders dialogs and notifications; Plugin code describes the request but does not create terminal components:
+
+```ts
+plugin.registerCommand({
+  description: "Prepare and confirm a reply draft.",
+  name: "draft_reply",
+  handler: async ({ ui }) => {
+    const recipient = await ui.input("Recipient", "name@example.com");
+    if (recipient === undefined) return "Cancelled";
+
+    const confirmed = await ui.confirm(
+      "Send reply",
+      `Send the reply to ${recipient}?`,
+      { timeout: 30_000 },
+    );
+    if (!confirmed) return "Not sent";
+
+    const draft = await ui.editor("Reply", "Thanks for your message.");
+    if (draft === undefined) return "Cancelled";
+
+    ui.notify("Draft ready", "info");
+    return draft;
+  },
+});
+```
+
+`select(prompt, choices)` returns the selected string; `confirm(title, message?)` returns a boolean; `input(title, placeholder?)` and `editor(title, initialValue?)` return text. Dismissal, timeout, caller cancellation, Plugin disable, Session-view unbinding, or runtime shutdown resolve each request to its default: `undefined` for selection/input/editor and `false` for confirmation. The editor saves with `Ctrl+Enter`; `Escape` dismisses dialogs. Empty selection choices resolve immediately to `undefined`.
+
+Pass `{ signal, timeout }` as the final dialog argument to cancel a request or set a deadline in milliseconds; no deadline is applied unless `timeout` is supplied. In a supported Interactive Session, an already-aborted signal and a zero timeout resolve immediately to the method's default; a negative or non-finite timeout rejects with `RangeError`. Caller abort resolves to the same default, so inspect `signal.aborted` to distinguish it from dismissal or timeout. Unsupported-mode methods use their no-op defaults without opening or validating a dialog request. Cancellation removes only that request's dialog. Concurrent requests keep independent dialog layers, so closing a child request does not close its parent.
+
+`notify(message, level?)` displays a nonblocking toast (`info`, `warning`, or `error`); it does not wait for user input. `getAllThemes()` and `getTheme(name)` return copies of the available theme data. `setTheme(nameOrTheme)` changes the app's shared theme and returns `PluginThemeChangeResult`; an unknown name or invalid theme leaves the current theme unchanged and returns its error. The public exports include `PluginUI`, `PluginUIContext`, `PluginUIDialogOptions`, `PluginNotificationLevel`, `PluginUIPromptKind`, `PluginUIPromptContext`, `PluginThemeChangeResult`, `PluginUIWidgetPlacement`, `PluginUIWidgetOptions`, `PluginUIWorkingIndicator`, `PluginUIStatusContribution`, `PluginUIWidgetContribution`, `PluginUIContributionSurface`, `PluginUIContributionResult`, `PluginUIUpdate`, `PluginUIChromeContext`, `PluginUIHeaderComponent`, `PluginUIFooterContext`, `PluginUIFooterComponent`, `PluginAutocompleteContext`, `PluginAutocompleteEdit`, `PluginAutocompleteItem`, `PluginAutocompleteProvider`, `PluginAutocompleteProviderFactory`, `PluginAutocompleteResult`, `PluginEditorComponent`, `PluginEditorContext`, `PluginEditorKeybinding`, `Theme`, and `ThemeColors` from `@wincode/coding-agent`.
+
+Prompt observers can use `onUIPromptStart` and `onUIPromptEnd`. Their context identifies the Plugin, Session, prompt kind, title, execution mode, and `reason: "ui_prompt"`. Concurrent or nested dialogs for one Plugin and Session share one start/end span. Observer callbacks run best-effort and never delay the dialog; failures are logged without blocking it. These hooks report a UI-request span, not Agent Turn state: they do not pause or resume a Turn, while a Tool or Command that awaits a request remains pending until the request settles.
+
+One-Shot, JSON, and Print never render Plugin UI and use terminal-free defaults: selection/input/editor/custom return `undefined`, confirmation returns `false`, notifications do nothing, theme listing is empty, theme lookup returns `undefined`, and theme changes return `{ success: false, error: "Theme changes are available only in Interactive Mode." }`. RPC remains React-free. Without the client's negotiated `pluginUi` capability, it uses those same defaults. A version-1 RPC UI client can handle select, confirm, input, editor, notifications, and data-only UI updates over JSON-RPC; `custom()` still returns `undefined` without invoking its component factory. See the [RPC Plugin UI protocol](../application/rpc/README.md) for capability negotiation, payloads, cancellation, ordering, and a protocol client example.
+
+### Status, widgets, chrome, and presentation
+
+`ui.setStatus(key, value)` and `ui.setWidget(key, lines, options?)` add or clear persistent view contributions. Status keys and widget keys are qualified by Plugin Identifier, so matching local keys from separate Plugins coexist. The host sorts contributions by Plugin Identifier and then local key; updates do not move an item. Widgets render above the composer by default or below it with `{ placement: "belowEditor" }`. Pass `undefined` to clear a status or widget.
+
+`ui.setHeader(component)` and `ui.setFooter(component)` accept React component types, not imperative renderable factories. The host supplies read-only `{ theme, width, height }` props; a footer also receives `branch` when available and the current Plugin statuses. Each slot has one application-host-wide owner: the first Plugin to claim it wins. A competing claim returns `{ success: false, code: "plugin_ui_contribution_conflict", surface }` without throwing or replacing the owner. The public `PluginUIContributionSurface` union is `"header" | "footer" | "editor" | "entry" | "message"`; these setters report `header` or `footer`. The owner may replace or clear its component; unload, reload, and host teardown restore the built-in slot. Claims do not form a fallback stack.
+
+Presentation controls are host mediated. Statuses, widgets, working text/visibility/indicator, the hidden-thinking label, and tool expansion belong to the current Session view; the terminal title belongs to the application UI host. For view-scoped controls, a later setter takes ownership and replaces the earlier value. Clearing or unloading an earlier owner cannot erase a newer owner's value; there is no previous-owner stack. `undefined` restores the default for `setWorkingMessage`, `setWorkingIndicator`, and `setHiddenThinkingLabel`. `setWorkingVisible` and `setToolsExpanded` take booleans; `getToolsExpanded()` reads the current view's value and defaults to `false`. An empty working-indicator `frames` array hides the indicator, while omitting the indicator restores the built-in spinner. The title setter's `undefined` value restores the terminal default.
+
+`PluginUIUpdate` is the data-only payload union for the RPC `plugin/ui/update` integration seam: status `{ type: "status", pluginId, key, value: string | null }`, widget `{ type: "widget", pluginId, key, value: readonly string[] | null, placement }`, and title `{ type: "title", pluginId, value: string | null }`. The optional host update sink emits only these payloads; RPC capability negotiation and protocol framing remain separate work. These values contain no React components or terminal objects and do not make React UI available to an RPC client. Header/footer components and working, hidden-thinking, and tool-expansion controls are terminal-only. Outside Interactive Mode, their setters are no-ops, `getToolsExpanded()` returns `false`, and header/footer registration returns `{ success: true }`; component types are never invoked in JSON, Print, or RPC execution.
+
+See [`examples/plugin-ui-contributions-plugin.tsx`](../examples/plugin-ui-contributions-plugin.tsx) for a complete Plugin example.
+
+### Persistent composer editor and autocomplete
+
+The Interactive Session composer stays host-owned. A Session-bound Plugin callback can read or replace its text with `ui.getEditorText()` and `ui.setEditorText(text)`, or send text through the normal paste pipeline with `ui.pasteToEditor(text)`. Text access returns `undefined` without an active Interactive composer; set and paste return `false` when unavailable. Paste uses the host's normal paste handling, including large-paste collapsing and pasted-text source metadata.
+
+`ui.addAutocompleteProvider(factory)` wraps the existing completion provider and returns an unregister function. Providers receive a read-only context containing the current text, cursor offset, line and column, split lines, and Session ID. Return `{ items, prefix }` or `null`; `applyCompletion(context, item, prefix)` returns the replacement text and cursor offset. Delegate unmatched requests and items to the `current` provider passed to the factory to preserve built-in file-mention completion. Existing slash-command suggestions remain host-owned and take precedence. Handler-based Plugin Commands can provide `getArgumentCompletions(prefix)` for their arguments; status-panel commands have no argument handler and cannot register completions.
+
+`ui.setEditorComponent(component)` contributes a React editor for this Session, and `ui.getEditorComponent()` returns the contribution only to its owner. One Plugin owns the editor slot at a time. The same owner may replace or clear its component; a competing owner receives a non-throwing `plugin_ui_contribution_conflict` result with `surface: "editor"`. When its Plugin UI host closes or the Plugin unloads, the host editor is restored. `PluginEditorContext` provides the host-controlled text, paste, submit, and prompt-history operations; configured keybindings; theme and dimensions; and a `defaultEditor` slot. Render that slot to wrap the standard composer without taking over its behavior. A replacement that omits it must use the provided host controls for equivalent behavior.
+
+Composer APIs are Interactive-only. Outside Interactive Mode, text lookup returns `undefined`, set and paste return `false`, editor lookup and contribution return `undefined`, and autocomplete registration is a no-op. These paths do not load or invoke React in RPC, JSON, Print, or One-Shot execution. See the [composer editor example](../../examples/composer-editor-plugin.tsx) for a working wrapper and completion provider.
+
+### Terminal input
+
+`ctx.ui.onTerminalInput(handler)` subscribes to raw terminal sequences in Interactive Mode and returns an unsubscribe function. Return `{ consume: true }` to stop a sequence from reaching later Plugin handlers and the host keyboard parser. Returning nothing lets the sequence continue; a throwing handler is logged and does not block other subscribers. Plugin disable/unload, Session-view unbinding, and host shutdown release subscriptions even if the Plugin does not call the returned function.
+
+Raw input cannot take over host dismissal or reclaim actions: Escape and Ctrl+C sequences are not delivered to handlers. In noninteractive modes, `onTerminalInput()` returns a no-op unsubscribe function and does not invoke the handler. The public exports include `PluginTerminalInputHandler` and `PluginTerminalInputResult`.
+
+Using the `KeyboardHelp` component defined above, a command can keep a raw input listener only while its custom UI is active:
+
+```ts
+import type { PluginFactory } from "@wincode/coding-agent";
+
+const rawInputPlugin: PluginFactory = (api) => {
+  const plugin = api.definePlugin({ id: "raw_keyboard_help" });
+  plugin.registerCommand({
+    name: "raw-keyboard-help",
+    description: "Open keyboard help with a raw input listener.",
+    handler: async (ctx) => {
+      const unsubscribe = ctx.ui.onTerminalInput((data) => {
+        if (data === "?") return { consume: true };
+      });
+      try {
+        return (
+          (await ctx.ui.custom(() => KeyboardHelp, { title: "Keyboard help" })) ??
+          "Dismissed"
+        );
+      } finally {
+        unsubscribe();
+      }
+    },
+  });
+};
+
+export default rawInputPlugin;
+```
+
+The handler sees raw input data, not parsed key objects. Use the keyboard-layer shortcut API for key combinations; do not use a raw listener to claim Escape or Ctrl+C.
+
+### Temporary React UI
+
+A Plugin Command can present a React component through `ui.custom(factory, options)`. `options.presentation` selects one of three host-managed placements and defaults to `"editor"`:
+
+- `"editor"` temporarily replaces the composer while leaving the transcript visible.
+- `"overlay"` places a bounded panel over the existing application; the remaining application stays visible.
+- `"full-screen"` covers the visible application region while it remains mounted and continues updating.
+
+Overlay geometry is centered and constrained to the current terminal; a resize updates the component's available `width` and `height` and the current terminal-cell bounds. Every mode uses the existing renderer and React root. Plugins contribute a React component but never create or own a renderer or terminal. The host supplies the current theme, composer keybindings, an `AbortSignal`, `done(value)`, the selected `presentation`, a `presentationHandle`, and the Interactive Session environment. Use `presentationHandle.focus()` / `unfocus()` to update focus independently from `setHidden(hidden)`; read those states with `isFocused()` and `isHidden()`, and read the current host-owned terminal-cell rectangle with `getBounds()`. Focus and visibility changes do not settle the request. The host retains keyboard ownership, so Escape dismisses and Ctrl+C reclaims the host even if component keyboard handlers call `preventDefault()`. The composer binding list and entries are read-only snapshots; copy them before passing them to mutable OpenTUI options.
+
+```tsx
+import { useKeyboard } from "@wincode/tui";
+import type {
+  PluginFactory,
+  PluginUICustomComponent,
+  PluginUICustomFactory,
+} from "@wincode/coding-agent";
+
+const ReplyEditor: PluginUICustomComponent<string> = ({ done, theme }) => {
+  useKeyboard((key) => {
+    if (key.name !== "enter" && key.name !== "return") return;
+    key.preventDefault();
+    done("reply sent");
+  });
+  return <box><text fg={theme.colors.text}>Enter submits; Escape dismisses.</text></box>;
+};
+
+const replyEditorFactory: PluginUICustomFactory<string> = async () => ReplyEditor;
+
+const replyPlugin: PluginFactory = (api) => {
+  const plugin = api.definePlugin({ id: "reply" });
+  plugin.registerCommand({
+    name: "reply",
+    description: "Compose a reply in a temporary editor.",
+    handler: async ({ ui }) => {
+      const reply = await ui.custom(replyEditorFactory, { title: "Reply" });
+      return reply === undefined ? "Reply editor dismissed." : reply;
+    },
+  });
+};
+
+export default replyPlugin;
+```
+
+The example above omits `presentation` to use editor replacement. The same component can be presented with `{ title: "Reply", presentation: "overlay" }` or `{ title: "Reply", presentation: "full-screen" }`.
+
+An explicitly selected Plugin Command opens directly. Requests from Tools or other event-originated callbacks show a new host invitation every time and cannot mount or take focus until accepted. One request at a time is admitted per Interactive UI host; a competing request rejects with `PluginUICustomError` and code `plugin_ui_custom_busy`. Factory or React component failures reject with code `plugin_ui_custom_failed` and are recovered by the host's React error boundary.
+
+`ui.custom()` returns `Promise<T | undefined>`. `done(value)` settles it once; Escape dismisses and Ctrl+C cancels the UI and reclaims the host. `undefined` deliberately does not distinguish dismissal, cancellation, declined consent, unsupported execution mode, or `done(undefined)`. Return a non-`undefined` value when the Plugin needs to distinguish successful completion. Session/view replacement, Plugin reload or disable, and renderer teardown abort the provided signal, unmount the component, release admission, and restore the previous composer, host focus, and current application content. Agent Turn completion or interruption alone does not close custom UI.
+
+In RPC, JSON, and Print execution, `custom()` resolves to `undefined` without invoking the component factory or producing terminal controls. The focused host contract and a runnable React example are in [custom-editor-plugin.tsx](../../examples/custom-editor-plugin.tsx).
+
+## Plugin Tool renderers
+
+A Plugin Tool may register optional React components as `renderCall` and `renderResult` on its own `registerTool()` definition. `renderCall` receives the current `call` (`toolCallId`, tool name, input, and live call state); `renderResult` receives the same row context and the current `PluginToolResult`. Both receive the shared `theme`, terminal `width` and `height`, and host-managed `expanded` state with `onToggleExpanded()`. Call components update when the call state changes; result components mount when a result is available. The host's `Ctrl+O` shortcut toggles expansion while preserving its reserved keyboard handling.
+
+By default, Wincode supplies the row shell around each renderer. Set `ownsRowShell: true` when the Plugin's call and result components provide their own row layout. This changes presentation only: the Plugin renderer does not receive the Tool handler, permission controls, Session writer, or a way to replace results. The host snapshots call/result data before rendering so presentation mutations cannot rewrite Session data.
+
+Renderers run only in Interactive Mode. Print, JSON, RPC, and other noninteractive consumers keep their existing data output and never execute these React components. If a component throws while rendering, the host React boundary logs a diagnostic and replaces the complete Plugin presentation with the default host Tool row; the Tool is neither failed nor rerun.
+
+The verified authoring example is [plugin-tool-renderer.tsx](../../examples/plugin-tool-renderer.tsx). It uses only public `@wincode/coding-agent` types and the Plugin Tool result contract.
+
 ## Status Panels
 
-Plugins may register a status panel with `registerStatusPanel`. The host renders its snapshot in the session sidebar and indicator, routes refresh and item actions through the Plugin Runtime, and lets a command open the same panel with `statusPanelId`. When a panel supplies `refresh`, its dialog exposes `Ctrl+R`; `Space` runs the selected item action. A panel owns its status values and action behavior; the host does not need domain-specific UI or imports.
+Plugins may register a status panel with `registerStatusPanel`. The host renders its snapshot in the session sidebar and indicator, routes refresh and item actions through the Plugin Runtime, and lets a command open the same panel with `statusPanelId`. When a panel supplies `refresh`, its dialog exposes `Ctrl+R`; `Space` runs the selected item action. A panel owns its status values and action behavior; its `runAction` context also receives the Plugin UI API. The host does not need domain-specific UI or imports.
 
 ## Session SDK
 
@@ -202,6 +436,54 @@ checklist.registerTool({
 ```
 
 `read({ cursor, limit })` returns only this Plugin's events on the Selected Path. Pages default to 50 entries, with a maximum of 200, and include an opaque `readPoint`; keep following `nextCursor` to read that same snapshot. The Session tree reader is separate: use `sessionSdk.readSessionHistoryTreePage` only when the Plugin explicitly needs tree metadata. Tree entries show the Plugin Identifier and event type, never the payload. Custom events are not added to Provider context automatically.
+
+### Plugin UI renderers
+
+`api.registerToolRenderer(resolver, options?)`, `api.registerMessageRenderer(resolver, options?)`, and `api.registerEntryRenderer(resolver, options?)` register presentation resolvers for Interactive Mode. Each resolver sees host and Plugin-owned targets and filters them using its context; registration does not select a role, tool, Plugin, or history type. `options.priority` defaults to `0`; higher values run first, and equal priorities retain Plugin load and registration order.
+
+A resolver returns a React node. Returning `undefined` declines and continues to the next resolver. Calling `next()` explicitly delegates and returns the next resolver's React node, so it can be composed inside a wrapper. Returning `null` intentionally renders nothing and stops the chain. A resolver may return an element whose component uses React hooks; do not call hooks inside the resolver itself.
+
+```tsx
+import type { PluginFactory } from "@wincode/coding-agent";
+
+const presentationPlugin: PluginFactory = (api) => {
+  api.definePlugin({ id: "presentation_layers" });
+
+  api.registerMessageRenderer((context, next) => {
+    if (context.originPluginId !== undefined || context.role !== "assistant") {
+      return;
+    }
+    return (
+      <box>
+        <text>Review layer</text>
+        {next()}
+      </box>
+    );
+  }, { priority: 20 });
+
+  api.registerToolRenderer((context, next) => {
+    if (context.originPluginId !== "review_tools" || context.type !== "dynamic-tool") {
+      return;
+    }
+    return <box><text>Review Tool</text>{next()}</box>;
+  }, { priority: 20 });
+
+  api.registerEntryRenderer((context, next) => {
+    if (context.originPluginId !== "review_tools" || context.type !== "review-note") {
+      return;
+    }
+    return <box><text>Review history</text>{next()}</box>;
+  }, { priority: 20 });
+};
+```
+
+Tool context includes `originPluginId` (`undefined` for host Tools), the Tool `type`, `call`, optional `result`, theme, dimensions, and expansion controls. Message context includes `originPluginId` (`undefined` for current host transcript messages), `role`, message, streaming options, theme, and dimensions. Entry context includes the immutable origin `originPluginId`, event `type`, entry, Selected Path status, theme, and dimensions. Context objects are read-only snapshots. Renderers only control presentation: they cannot execute Tools, write another Plugin's history, change permissions, or alter Session Context.
+
+Resolvers run only while their owning Plugin is enabled for the current Session/view. A failed Session start removes that Plugin's resolvers only from that Session; disabling or unloading a Plugin removes only its registrations. Resolver exceptions and React-render failures are reported through the centralized logger, then continue through remaining resolvers to the host presentation. They do not change Tool execution, durable messages/history, history ownership, or model-context inclusion.
+
+Entry resolvers may present another Plugin's entry, but the host still reads the origin Plugin's paginated history and Selected Path snapshot. Missing or disabled history owners, inactive-branch entries, and unavailable payloads keep the opaque host preview; Wincode never loads Plugin code because a history entry names a Plugin. Display-only entries remain excluded from Provider context.
+
+For a tested example that composes Tool, message, and history-entry presentations with `next()`, see [the renderer composition Plugin](../../examples/plugin-renderer-composition.tsx). The history-writing example is [the versioned history renderer](../../examples/history-entry-renderer-plugin.tsx). Enable either with `wincode --plugin packages/coding-agent/examples/plugin-renderer-composition.tsx` or `wincode --plugin packages/coding-agent/examples/history-entry-renderer-plugin.tsx` from the repository root.
 
 `append(type, payload, operationId)` attaches one entry to the current Active Leaf and advances it as one durable history write. Event types must be non-empty and no more than 128 UTF-8 bytes. Payloads must be strict JSON and no more than 64 KiB serialized; the event type and payload schema version belong to the Plugin. Use a version field in payloads and leave unknown versions unapplied while preserving their original entries. Operation IDs follow the same 512-character ASCII format as Plugin Session State: retry with the same ID and identical event; reusing an ID with different content conflicts. A capability from before Navigation is stale; use the refreshed capability from `onSessionHistoryNavigated` or the next `onSessionStart`.
 

@@ -4,6 +4,7 @@ import {
 	createCommandController,
 } from "@/modules/commands/command-controller";
 import type { CustomCommandSpec } from "@/modules/commands/custom/types";
+import type { PluginAutocompleteItem } from "@/modules/plugins/public";
 import type { PluginCommandDescriptor } from "@/modules/plugins/runtime";
 import type { Skill } from "@/modules/skills";
 
@@ -95,6 +96,68 @@ describe("getSuggestions", () => {
 			available.getSuggestions("history").items.map(({ label }) => label)
 		).toEqual(["history"]);
 		expect(unavailable.getSuggestions("history").items).toEqual([]);
+	});
+});
+
+describe("getArgumentCompletions", () => {
+	test("uses the current Plugin Command argument prefix without changing slash selection", async () => {
+		const prefixes: string[] = [];
+		const controller = createController({
+			pluginCommands: [
+				{
+					...OPEN_ISSUE_COMMAND,
+					getArgumentCompletions: (prefix) => {
+						prefixes.push(prefix);
+						return [{ label: "WCO-12", value: "WCO-12" }];
+					},
+				},
+			],
+		});
+
+		expect(
+			await controller.getArgumentCompletions("/open-issue WCO-1", 18)
+		).toEqual({
+			commandName: "open-issue",
+			items: [{ label: "WCO-12", value: "WCO-12" }],
+			pluginId: "jira",
+			prefix: "WCO-1",
+		});
+		expect(prefixes).toEqual(["WCO-1"]);
+		expect(
+			await controller.getArgumentCompletions("/open-issue", 11)
+		).toBeNull();
+	});
+
+	test("discards pending and future argument completions when a Plugin unloads", async () => {
+		const completion = Promise.withResolvers<
+			readonly PluginAutocompleteItem[] | null
+		>();
+		let callbackCalls = 0;
+		const command: PluginCommandDescriptor = {
+			...OPEN_ISSUE_COMMAND,
+			getArgumentCompletions: () => {
+				callbackCalls += 1;
+				return completion.promise;
+			},
+		};
+		let activeCommands: readonly PluginCommandDescriptor[] = [command];
+		const controller = createController({
+			getPluginCommands: () => activeCommands,
+			pluginCommands: activeCommands,
+		});
+
+		const pendingCompletion = controller.getArgumentCompletions(
+			"/open-issue WCO-1",
+			18
+		);
+		activeCommands = [];
+		completion.resolve([{ label: "WCO-12", value: "WCO-12" }]);
+
+		expect(await pendingCompletion).toBeNull();
+		expect(
+			await controller.getArgumentCompletions("/open-issue WCO-1", 18)
+		).toBeNull();
+		expect(callbackCalls).toBe(1);
 	});
 });
 

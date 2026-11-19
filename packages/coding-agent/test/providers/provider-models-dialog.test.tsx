@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
-import type { TestRendererSetup } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	createProviderCollection,
 	type Provider,
 	type ProviderModel,
 } from "@wincode/ai";
+import type { TestRendererSetup } from "@wincode/tui/testing";
+import { testRender } from "@wincode/tui/testing";
 import { act, useEffect, useRef } from "react";
 import {
 	createInteractiveProviderController,

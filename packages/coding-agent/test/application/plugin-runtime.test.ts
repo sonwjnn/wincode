@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
+import { fromPartial } from "@total-typescript/shoehorn";
 import { z } from "zod";
+import type { PluginUI } from "@/modules/plugins/public";
 import {
 	createPluginRuntime,
 	type LoadedPlugin,
 } from "@/modules/plugins/runtime";
+import type { PluginUIHost } from "@/modules/plugins/ui/plugin-ui-host";
+import type { PluginUIOwner } from "@/modules/plugins/ui/plugin-ui-host-contract";
 import type { PluginSessionHistoryPersistence } from "@/modules/sessions/session-plugin-history";
 import { toSessionHistoryEntryId } from "@/shared/identifiers";
 import { createEmptyPluginRuntime } from "../support/plugin-runtime";
@@ -42,6 +46,114 @@ const jiraPlugin = (): LoadedPlugin => ({
 		},
 	],
 	workspace,
+});
+
+test("stopping during Plugin startup leaves no shortcut subscription on its bound host", async () => {
+	const sessionStartEntered = Promise.withResolvers<void>();
+	const finishSessionStart = Promise.withResolvers<void>();
+	const shortcutSubscriptions = new Map<string, () => void>();
+	const sessionContext = { sessionId: "stopped-during-start", workspace };
+	const runtime = createPluginRuntime(
+		[
+			{
+				commands: [],
+				id: "ready-shortcut",
+				shortcuts: [
+					{
+						description: "An earlier registration remains stoppable.",
+						handler: () => undefined,
+						shortcut: "ctrl+shift+r",
+					},
+				],
+				sourcePath: pluginSource,
+				tools: [],
+				workspace,
+			},
+			{
+				commands: [],
+				id: "pending-shortcut",
+				onSessionStart: async () => {
+					sessionStartEntered.resolve();
+					await finishSessionStart.promise;
+				},
+				shortcuts: [
+					{
+						description: "Must not register after Session stop starts.",
+						handler: () => undefined,
+						shortcut: "ctrl+shift+p",
+					},
+				],
+				sourcePath: pluginSource,
+				tools: [],
+				workspace,
+			},
+		],
+		[]
+	);
+	const host = fromPartial<PluginUIHost>({
+		close: () => undefined,
+		create: () => ({
+			close: () => undefined,
+			ui: fromPartial<PluginUI>({
+				confirm: async () => false,
+				custom: async () => undefined,
+				editor: async () => undefined,
+				getAllThemes: () => [],
+				getTheme: () => undefined,
+				input: async () => undefined,
+				notify: () => undefined,
+				onTerminalInput: () => () => undefined,
+				select: async () => undefined,
+				setTheme: () => ({ success: true }),
+			}),
+		}),
+		getCustomUI: () => null,
+		registerShortcut: (
+			owner: PluginUIOwner,
+			_shortcut: string,
+			handler: () => void
+		) => {
+			shortcutSubscriptions.set(owner.pluginId, handler);
+			return () => shortcutSubscriptions.delete(owner.pluginId);
+		},
+		subscribeCustomUI: () => () => undefined,
+	});
+	const unbindHost = runtime.bindPluginUIHost(sessionContext.sessionId, host);
+	let starting: Promise<void> | undefined;
+
+	try {
+		starting = runtime.startSession(sessionContext);
+		await Promise.race([
+			sessionStartEntered.promise,
+			starting.then(() => {
+				throw new Error(
+					`Session startup finished before the delayed hook: ${runtime.diagnostics
+						.map(({ message }) => message)
+						.join(" | ")}`
+				);
+			}),
+		]);
+		expect([...shortcutSubscriptions.keys()]).toEqual(["ready-shortcut"]);
+
+		const stopping = runtime.stopSession(sessionContext);
+		expect([...shortcutSubscriptions.keys()]).toEqual([]);
+
+		finishSessionStart.resolve();
+		await Promise.all([starting, stopping]);
+		expect([...shortcutSubscriptions.keys()]).toEqual([]);
+	} finally {
+		finishSessionStart.resolve();
+		try {
+			await starting?.catch(() => undefined);
+		} finally {
+			try {
+				await runtime.stopSession(sessionContext);
+			} finally {
+				unbindHost();
+				await runtime.shutdown();
+			}
+		}
+	}
 });
 
 test("a failed process start still runs cleanup for partially initialized resources", async () => {

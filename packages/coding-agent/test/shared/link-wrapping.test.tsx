@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { MouseEvent, Selection } from "@opentui/core";
-import { testRender } from "@opentui/react/test-utils";
+import type { MouseEvent, Selection } from "@wincode/tui/core";
+import { testRender } from "@wincode/tui/testing";
 import { clickedLink } from "@/shared/links/clicked-link";
 import { flushTestRenderer, requireTestFrame } from "../support/opentui";
 

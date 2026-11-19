@@ -1,8 +1,15 @@
-import { TextAttributes } from "@opentui/core";
 import type { SessionMessageId, SessionRecordId } from "@wincode/agent-core";
+import { useTerminalDimensions } from "@wincode/tui";
+import { TextAttributes } from "@wincode/tui/core";
 import { isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
 import { buildAgent } from "@/modules/agents";
+import type { PluginRuntime } from "@/modules/plugins/runtime";
+import {
+	PluginRendererResolution,
+	useInteractivePluginRuntime,
+	usePluginRendererRevision,
+} from "@/modules/plugins/ui/plugin-renderer-boundary";
 import type { SessionMessage } from "@/modules/sessions/message";
 import type { SessionForkCheckpointAssessment } from "@/modules/sessions/session-fork-checkpoint-validation";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
@@ -23,9 +30,13 @@ import { SessionWriterAction } from "./session-writer-controls";
 
 function AssistantTranscriptContent({
 	message,
+	pluginRuntime,
+	sessionId,
 	streaming,
 }: {
 	message: SessionMessage;
+	pluginRuntime: PluginRuntime | undefined;
+	sessionId?: string;
 	streaming: boolean;
 }) {
 	const failureText = getAssistantFailureText(message);
@@ -33,7 +44,10 @@ function AssistantTranscriptContent({
 		return (
 			<BotMessageContent
 				agent={message.metadata?.agent ?? buildAgent.id}
+				messageId={streaming ? undefined : message.id}
 				parts={message.parts}
+				pluginRuntime={pluginRuntime}
+				sessionId={sessionId}
 				streaming={streaming}
 			/>
 		);
@@ -43,9 +57,93 @@ function AssistantTranscriptContent({
 			<ErrorMessage error={new Error(failureText)} />
 			<BotMessageContent
 				agent={message.metadata?.agent ?? buildAgent.id}
+				messageId={streaming ? undefined : message.id}
 				parts={message.parts.filter((part) => part.type !== "text")}
+				pluginRuntime={pluginRuntime}
+				sessionId={sessionId}
 			/>
 		</>
+	);
+}
+
+function DefaultSessionTranscriptMessage({
+	message,
+	pluginRuntime,
+	sessionId,
+	streaming,
+}: Readonly<{
+	message: SessionMessage;
+	pluginRuntime: PluginRuntime | undefined;
+	sessionId?: string;
+	streaming: boolean;
+}>) {
+	if (message.role === "user") {
+		return (
+			<UserMessage
+				appliedSkill={getAppliedSkill(message.metadata)}
+				messageId={message.id}
+				parts={message.parts}
+				pluginRuntime={pluginRuntime}
+				sessionId={sessionId}
+				submissionFailure={message.metadata?.submissionFailure}
+			/>
+		);
+	}
+	return (
+		<AssistantTranscriptContent
+			message={message}
+			pluginRuntime={pluginRuntime}
+			sessionId={sessionId}
+			streaming={streaming}
+		/>
+	);
+}
+
+function SessionTranscriptMessage({
+	message,
+	sessionId,
+	streaming,
+}: Readonly<{
+	message: SessionMessage;
+	sessionId?: string;
+	streaming: boolean;
+}>) {
+	const runtime = useInteractivePluginRuntime();
+	const rendererRevision = usePluginRendererRevision(runtime);
+	const { currentTheme } = useTheme();
+	const dimensions = useTerminalDimensions();
+	const renderers = runtime?.getMessageRenderers(sessionId) ?? [];
+	const fallback = (
+		<DefaultSessionTranscriptMessage
+			message={message}
+			pluginRuntime={runtime}
+			sessionId={sessionId}
+			streaming={streaming}
+		/>
+	);
+	if (message.role === "tool" || renderers.length === 0) {
+		return fallback;
+	}
+	const context = Object.freeze({
+		dimensions: Object.freeze({
+			height: dimensions.height,
+			width: dimensions.width,
+		}),
+		message: structuredClone(message),
+		options: Object.freeze({ streaming }),
+		originPluginId: undefined,
+		role: message.role,
+		theme: currentTheme,
+	});
+	return (
+		<PluginRendererResolution
+			context={context}
+			fallback={fallback}
+			key={`${message.id}:${rendererRevision}`}
+			resolvers={renderers}
+			surface="message"
+			target={`${message.role}:${message.id}`}
+		/>
 	);
 }
 
@@ -60,6 +158,7 @@ export function ChatMessage({
 	onRetry,
 	showActions = false,
 	streaming = false,
+	sessionId,
 }: {
 	footerMessage?: SessionMessage;
 	forkCheckpoints?: ReadonlyMap<
@@ -74,6 +173,7 @@ export function ChatMessage({
 	onRetry?: (messageId: SessionMessageId) => void | Promise<void>;
 	showActions?: boolean;
 	streaming?: boolean;
+	sessionId?: string;
 }) {
 	const { colors } = useTheme();
 	const retryMessageId = resolveRetryMessageId(messages);
@@ -158,18 +258,11 @@ export function ChatMessage({
 			<box flexDirection="column" gap={1} width="100%">
 				{messages.map((message) => (
 					<box flexDirection="column" key={message.id} width="100%">
-						{message.role === "user" ? (
-							<UserMessage
-								appliedSkill={getAppliedSkill(message.metadata)}
-								parts={message.parts}
-								submissionFailure={message.metadata?.submissionFailure}
-							/>
-						) : (
-							<AssistantTranscriptContent
-								message={message}
-								streaming={streaming && message === latestAssistant}
-							/>
-						)}
+						<SessionTranscriptMessage
+							message={message}
+							sessionId={sessionId}
+							streaming={streaming && message === latestAssistant}
+						/>
 						{renderCheckpoint(forkCheckpoints?.get(message.id), message)}
 						{notificationsAfterMessage?.get(message.id)?.map((notification) => (
 							<ChatNotificationMessage

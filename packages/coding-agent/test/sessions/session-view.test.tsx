@@ -11,10 +11,6 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	MockTreeSitterClient,
-	type TestRendererSetup,
-} from "@opentui/core/testing";
-import {
 	createMemoryHistory,
 	createRootRoute,
 	createRoute,
@@ -30,6 +26,10 @@ import type {
 	ThinkingLevel,
 	ThinkingSelection,
 } from "@wincode/ai";
+import {
+	MockTreeSitterClient,
+	type TestRendererSetup,
+} from "@wincode/tui/testing";
 import { isNull, isUndefined } from "@wincode/utils";
 import {
 	act,

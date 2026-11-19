@@ -1,5 +1,6 @@
 import type { ResolvedAgent, ResolvedTool } from "@wincode/agent-core";
 import { isNull, isUndefined } from "@wincode/utils";
+import { compareText } from "@/shared/utils/compare-text";
 import {
 	createEnvironmentSnapshot,
 	type PromptEnvironmentSnapshot,
@@ -121,16 +122,6 @@ const TOOL_FAMILY_LABEL: Record<PromptToolFamily, string> = {
 	other: "Other",
 	skill: "Skill",
 };
-const compareToolNames = (first: string, second: string): number => {
-	if (first < second) {
-		return -1;
-	}
-	if (first > second) {
-		return 1;
-	}
-	return 0;
-};
-
 const block = (name: PromptCompositionBlockName, content: string): string =>
 	`<wincode-prompt-block name="${name}">\n${content}\n</wincode-prompt-block>`;
 
@@ -249,7 +240,7 @@ const toolGroupLine = (
 	family: PromptToolFamily,
 	tools: readonly EffectiveVisibleTool[]
 ): string => {
-	const names = tools.map((tool) => tool.name).sort(compareToolNames);
+	const names = tools.map((tool) => tool.name).sort(compareText);
 	return `- ${TOOL_FAMILY_LABEL[family]} tools: ${names.join(", ")}`;
 };
 const codingWorkflowLine = (
@@ -261,7 +252,7 @@ const codingWorkflowLine = (
 	const inspectionTools = codingTools
 		.filter((tool) => ["glob", "grep", "read"].includes(tool.name))
 		.map((tool) => tool.name)
-		.sort(compareToolNames);
+		.sort(compareText);
 	if (inspectionTools.length === 0) {
 		return "- Inspect with the available coding tools before modifying files.";
 	}

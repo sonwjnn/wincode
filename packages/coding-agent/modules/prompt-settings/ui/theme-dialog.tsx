@@ -1,4 +1,4 @@
-import { useTerminalDimensions } from "@opentui/react";
+import { useTerminalDimensions } from "@wincode/tui";
 import { useCallback, useEffect, useRef } from "react";
 import {
 	useDialog,

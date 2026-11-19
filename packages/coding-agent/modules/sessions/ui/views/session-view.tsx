@@ -1,4 +1,3 @@
-import { useKeyboard } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
 import type {
 	AgentId,
@@ -6,6 +5,7 @@ import type {
 	SessionRecordId,
 } from "@wincode/agent-core";
 import type { ThinkingSelection } from "@wincode/ai";
+import { useKeyboard } from "@wincode/tui";
 import {
 	getErrorMessage,
 	isNull,

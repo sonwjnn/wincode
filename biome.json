@@ -88,5 +88,31 @@
     },
     "globals": ["Bun"]
   },
+  "overrides": [
+    {
+      "includes": [
+        "packages/coding-agent/**",
+        "packages/tui/examples/**",
+        "packages/tui/test/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@opentui/**"],
+                    "message": "Import terminal UI facilities from @wincode/tui instead."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "extends": ["ultracite/biome/core", "ultracite/biome/react"]
 }

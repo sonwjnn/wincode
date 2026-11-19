@@ -2,12 +2,12 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { testRender } from "@opentui/react/test-utils";
 import type { McpClient } from "@wincode/mcp";
 import {
 	createMcpPluginFactory,
 	type McpPluginDependencies,
 } from "@wincode/mcp/plugin";
+import { testRender } from "@wincode/tui/testing";
 import { act, useEffect } from "react";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { loadPlugins } from "@/modules/plugins/loader";
@@ -263,6 +263,7 @@ test("MCP resource reads return bounded previews and preserve the full text arti
 			{
 				agentId: agentId("mcp-resource-reader"),
 				sessionId: sessionId("mcp-resource-read-session"),
+				ui: runtime.getPluginUI("mcp", sessionId("mcp-resource-read-session")),
 				toolCallId: toolCallId("mcp-resource-read-call"),
 				workspace,
 				signal: new AbortController().signal,

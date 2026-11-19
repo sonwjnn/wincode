@@ -1,5 +1,5 @@
-import type { CliRenderer, MouseEvent, Renderable } from "@opentui/core";
-import { useFocus, useRenderer } from "@opentui/react";
+import { useFocus, useRenderer } from "@wincode/tui";
+import type { CliRenderer, MouseEvent, Renderable } from "@wincode/tui/core";
 import { useCallback, useMemo } from "react";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 

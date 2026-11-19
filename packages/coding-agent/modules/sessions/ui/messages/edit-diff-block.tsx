@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import { pathToFiletype } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
+import { pathToFiletype } from "@wincode/tui/core";
 import {
 	isArray,
 	isPlainObject,

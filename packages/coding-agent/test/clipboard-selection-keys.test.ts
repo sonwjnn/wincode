@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Selection } from "@opentui/core";
+import type { Selection } from "@wincode/tui/core";
 import {
 	handleSelectionKey,
 	isCopyShortcut,

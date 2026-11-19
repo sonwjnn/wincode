@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import { useTerminalDimensions } from "@opentui/react";
+import { useTerminalDimensions } from "@wincode/tui";
 import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	ProjectTrustChoice,

@@ -1,9 +1,9 @@
-import type { Selection, SelectionBehavior } from "@opentui/core";
+import type { Selection, SelectionBehavior } from "@wincode/tui/core";
 import type {
 	TestRendererOptions,
 	TestRendererSetup,
-} from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
+} from "@wincode/tui/testing";
+import { testRender } from "@wincode/tui/testing";
 import type { ReactNode } from "react";
 import type { TuiClipboard } from "@/shared/clipboard";
 import { ClipboardProvider } from "@/shared/clipboard";

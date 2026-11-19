@@ -1,4 +1,4 @@
-import type { KeyEvent, Selection } from "@opentui/core";
+import type { KeyEvent, Selection } from "@wincode/tui/core";
 import type { ToastOptions } from "../providers/toast/types";
 import {
 	ClipboardTooLargeError,

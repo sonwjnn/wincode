@@ -12,17 +12,28 @@ import {
 	omitUndefined,
 } from "@wincode/utils";
 import { z } from "zod";
+import {
+	formatKeyboardShortcut,
+	parseKeyboardShortcut,
+} from "@/shared/providers/keyboard-layer/shortcut";
 import type {
 	PluginAgentRegistration,
 	PluginCommandRegistration,
 	PluginInputSchema,
 	PluginProviderRegistration,
+	PluginShortcutHandler,
+	PluginShortcutRegistration,
 	PluginToolRegistration,
 } from "./public";
 import type { PluginCommand, PluginTool } from "./types";
 
 const pluginToolNamePattern = /^[a-z0-9_-]+$/u;
 const pluginCommandNamePattern = /^[a-z0-9_-]+$/u;
+const isPluginToolRenderer = (value: unknown): boolean =>
+	typeof value === "function" ||
+	(isObjectLike(value) &&
+		"$$typeof" in value &&
+		typeof value.$$typeof === "symbol");
 const pluginStatusPanelIdPattern = /^[a-z][a-z0-9_-]{0,63}$/u;
 const pluginProviderIdPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const pluginModelNamePattern = /^[a-zA-Z0-9_-]+$/u;
@@ -108,7 +119,13 @@ const isPluginToolCandidate = (
 			candidate.exclusiveInBatch === true) &&
 		(candidate.executionMode === undefined ||
 			candidate.executionMode === "parallel" ||
-			candidate.executionMode === "sequential")
+			candidate.executionMode === "sequential") &&
+		(candidate.ownsRowShell === undefined ||
+			typeof candidate.ownsRowShell === "boolean") &&
+		(candidate.renderCall === undefined ||
+			isPluginToolRenderer(candidate.renderCall)) &&
+		(candidate.renderResult === undefined ||
+			isPluginToolRenderer(candidate.renderResult))
 	);
 };
 
@@ -184,6 +201,11 @@ export const validatePluginTool = (candidate: unknown): PluginTool => {
 		inputSchema: tool.inputSchema,
 		...(modelName === undefined ? {} : { modelName }),
 		name: tool.name,
+		...omitUndefined({
+			ownsRowShell: tool.ownsRowShell,
+			renderCall: tool.renderCall,
+			renderResult: tool.renderResult,
+		}),
 	});
 };
 
@@ -212,25 +234,76 @@ export const validatePluginProvider = (
 	});
 };
 
-/** Validates one Plugin Command before it can replace an owner's registration. */
-export const validatePluginCommand = (candidate: unknown): PluginCommand => {
+/** Validates one Plugin Shortcut registration before it enters the runtime. */
+export const validatePluginShortcut = (
+	shortcutCandidate: unknown,
+	optionsCandidate: unknown
+): PluginShortcutRegistration => {
 	if (
-		!isPlainObject(candidate) ||
-		typeof candidate.name !== "string" ||
-		!pluginCommandNamePattern.test(candidate.name) ||
-		!isNonEmptyString(candidate.description)
+		typeof shortcutCandidate !== "string" ||
+		!isPlainObject(optionsCandidate) ||
+		!isNonEmptyString(optionsCandidate.description) ||
+		typeof optionsCandidate.handler !== "function"
+	) {
+		throw new Error(
+			"Plugin Shortcuts require a shortcut, description, and handler."
+		);
+	}
+	const shortcut = parseKeyboardShortcut(shortcutCandidate);
+	if (
+		shortcut === undefined ||
+		!(shortcut.alt || shortcut.ctrl || shortcut.meta || shortcut.shift)
+	) {
+		throw new Error(
+			"Plugin Shortcuts must use modifier+key notation such as 'ctrl+shift+p'."
+		);
+	}
+	if (shortcut.key === "escape" || (shortcut.ctrl && shortcut.key === "c")) {
+		throw new Error(
+			"Plugin Shortcuts cannot use reserved Escape or Ctrl+C keys."
+		);
+	}
+	return Object.freeze({
+		description: optionsCandidate.description.trim(),
+		handler: optionsCandidate.handler as PluginShortcutHandler,
+		shortcut: formatKeyboardShortcut(shortcut),
+	});
+};
+
+export const validatePluginCommand = (candidate: unknown): PluginCommand => {
+	if (!isPlainObject(candidate)) {
+		throw new Error(
+			"Plugin Command registrations require a short name and description."
+		);
+	}
+	const { name, description, handler, statusPanelId, getArgumentCompletions } =
+		candidate as unknown as PluginCommandRegistration;
+	if (
+		typeof name !== "string" ||
+		!pluginCommandNamePattern.test(name) ||
+		!isNonEmptyString(description)
 	) {
 		throw new Error(
 			"Plugin Command registrations require a short name and description."
 		);
 	}
-	const command = candidate as unknown as PluginCommandRegistration;
-	const hasHandler = command.handler !== undefined;
-	const validHandler = typeof command.handler === "function";
-	const hasStatusPanel = command.statusPanelId !== undefined;
+	const hasHandler = handler !== undefined;
+	const validHandler = typeof handler === "function";
+	const hasStatusPanel = statusPanelId !== undefined;
+	if (
+		getArgumentCompletions !== undefined &&
+		typeof getArgumentCompletions !== "function"
+	) {
+		throw new Error("Plugin Command argument completions must be a function.");
+	}
 	const validStatusPanel =
-		typeof command.statusPanelId === "string" &&
-		pluginStatusPanelIdPattern.test(command.statusPanelId);
+		typeof statusPanelId === "string" &&
+		pluginStatusPanelIdPattern.test(statusPanelId);
+	if (hasStatusPanel && getArgumentCompletions !== undefined) {
+		throw new Error(
+			"Status-panel Plugin Commands do not support argument completions."
+		);
+	}
 	if (
 		(hasHandler && !validHandler) ||
 		(hasStatusPanel && !validStatusPanel) ||
@@ -241,11 +314,10 @@ export const validatePluginCommand = (candidate: unknown): PluginCommand => {
 		);
 	}
 	return Object.freeze({
-		description: command.description,
-		...(command.handler === undefined ? {} : { handler: command.handler }),
-		name: command.name,
-		...(command.statusPanelId === undefined
-			? {}
-			: { statusPanelId: command.statusPanelId }),
+		description,
+		...omitUndefined({ getArgumentCompletions }),
+		...omitUndefined({ handler }),
+		name,
+		...omitUndefined({ statusPanelId }),
 	});
 };

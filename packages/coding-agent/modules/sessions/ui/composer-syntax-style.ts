@@ -1,4 +1,4 @@
-import type { StyleDefinitionInput } from "@opentui/core";
+import type { StyleDefinitionInput } from "@wincode/tui/core";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
 
 const badgeStyle = (colors: ThemeColors): StyleDefinitionInput => ({

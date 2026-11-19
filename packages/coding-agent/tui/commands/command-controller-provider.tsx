@@ -1,5 +1,5 @@
-import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
+import { useRenderer } from "@wincode/tui";
 import { getErrorMessage } from "@wincode/utils";
 import {
 	createElement,
@@ -224,6 +224,8 @@ export function CommandControllerProvider({
 			return createCommandController({
 				...options,
 				customCommands,
+				getPluginCommands: () =>
+					pluginRuntime?.getCommands(options.sessionId) ?? [],
 				pluginCommands: pluginRuntime?.getCommands(options.sessionId) ?? [],
 				executePluginCommand: async (command, argument, sessionId) => {
 					if (pluginRuntime === undefined) {
@@ -248,6 +250,7 @@ export function CommandControllerProvider({
 								children: createElement(PluginStatusPanelDialogContent, {
 									panel,
 									pluginRuntime,
+									sessionId,
 								}),
 								title: panel.title,
 							});

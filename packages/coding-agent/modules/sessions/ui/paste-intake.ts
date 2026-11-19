@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { decodePasteBytes, type PasteEvent } from "@opentui/core";
+import { decodePasteBytes, PasteEvent } from "@wincode/tui/core";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { ClipboardImageResult } from "../clipboard-image";
 import { summarizePastedText } from "../pasted-text";
@@ -24,6 +24,7 @@ export type PasteIntake = Readonly<{
 		event: PasteEvent,
 		dependencies: PasteIntakeDependencies
 	) => Promise<void>;
+	pasteText: (text: string, dependencies: PasteIntakeDependencies) => boolean;
 }>;
 
 const binaryImageMimeType = (event: PasteEvent): string | undefined => {
@@ -147,5 +148,19 @@ export const createPasteIntake = (): PasteIntake => {
 		}
 	};
 
-	return { handle };
+	const pasteText = (
+		text: string,
+		dependencies: PasteIntakeDependencies
+	): boolean => {
+		if (!dependencies.active) {
+			return false;
+		}
+		const event = new PasteEvent(new TextEncoder().encode(text), {
+			kind: "text",
+		});
+		applyTextFallback(event, text, dependencies);
+		return true;
+	};
+
+	return { handle, pasteText };
 };

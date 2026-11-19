@@ -14,8 +14,10 @@ import { isJsonValue } from "@wincode/utils";
 import type {
 	PluginJsonValue,
 	PluginProviderConnectContext,
+	PluginUI,
 } from "@/modules/plugins/public";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";
+import { unsupportedPluginUI } from "@/modules/plugins/ui/plugin-ui-default";
 import {
 	BUILT_IN_API_KEY_PROVIDER_OPTIONS,
 	BUILT_IN_PROVIDER_CATALOG,
@@ -255,6 +257,7 @@ export type InteractiveProviderControllerOptions = Readonly<{
 		providerId: string
 	) => PluginProviderComposition | undefined;
 	getPluginProviderRegistrations?: () => readonly PluginProviderDescriptor[];
+	getPluginUI?: (pluginId: string) => PluginUI | undefined;
 	getTrustedPluginProviderRegistrations?: () => readonly PluginProviderDescriptor[];
 	getTrustedPluginProviderRuntime?: () => object | undefined;
 	supportsModelDiscovery?: (providerId: string) => boolean;
@@ -394,6 +397,7 @@ const pluginCompositionFor = (
 const requestPluginCredential = async (
 	registration: PluginProviderDescriptor,
 	requestTextInput: PluginProviderConnectContext["requestTextInput"],
+	ui: PluginUI,
 	signal: AbortSignal
 ): Promise<PluginJsonValue | undefined> => {
 	if (isAborted(signal)) {
@@ -402,7 +406,7 @@ const requestPluginCredential = async (
 	let credential: PluginJsonValue | undefined;
 	try {
 		credential = await registration.connect(
-			Object.freeze({ requestTextInput, signal })
+			Object.freeze({ requestTextInput, signal, ui })
 		);
 	} catch {
 		if (isAborted(signal)) {
@@ -482,6 +486,8 @@ const runPluginProviderConnection = async (
 	const credential = await requestPluginCredential(
 		composition.registration,
 		requestTextInput,
+		options.getPluginUI?.(composition.registration.pluginId) ??
+			unsupportedPluginUI,
 		signal
 	);
 	if (credential === undefined) {

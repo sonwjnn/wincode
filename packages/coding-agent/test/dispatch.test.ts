@@ -11,6 +11,7 @@ import type {
 	TextWriter,
 } from "../modules/application/modes/types";
 import type { PluginRuntime } from "../modules/plugins/runtime";
+import { unsupportedPluginUI } from "../modules/plugins/ui/plugin-ui-default";
 import { createConfigStore } from "../shared/config/config-store";
 
 const capture = (): { output: string; writer: TextWriter } => {
@@ -363,7 +364,15 @@ describe("application dispatch", () => {
 					sourcePath: "/workspace/plugins/broken.ts",
 				},
 			],
+			getToolRenderers: () => [],
+			getMessageRenderers: () => [],
+			getEntryRenderers: () => [],
+			hasMarkdownTransformers: () => false,
+			transformMarkdown: (markdown) => markdown,
 			bindPromptSelectionTarget: () => () => undefined,
+			bindPluginUIHost: () => () => undefined,
+			notifyPluginUIUpdate: () => undefined,
+			getPluginUI: () => unsupportedPluginUI,
 			disablePlugin: () => undefined,
 			executeCommand: async () => "",
 			getAgentRegistrations: () => [],
@@ -375,6 +384,8 @@ describe("application dispatch", () => {
 			getSessionHistoryForPlugin: () => undefined,
 			getSessionStateForPlugin: () => undefined,
 			getStatusPanels: () => [],
+			getRendererRevision: () => 0,
+			subscribeRendererChanges: () => () => undefined,
 			refreshStatusPanel: async () => undefined,
 			runStatusPanelAction: async () => undefined,
 			registerBackgroundWork: () => undefined,
@@ -419,7 +430,15 @@ describe("application dispatch", () => {
 		let shutdownCount = 0;
 		const runtime: PluginRuntime = {
 			diagnostics: [],
+			getToolRenderers: () => [],
+			getMessageRenderers: () => [],
+			getEntryRenderers: () => [],
+			hasMarkdownTransformers: () => false,
+			transformMarkdown: (markdown) => markdown,
 			bindPromptSelectionTarget: () => () => undefined,
+			bindPluginUIHost: () => () => undefined,
+			notifyPluginUIUpdate: () => undefined,
+			getPluginUI: () => unsupportedPluginUI,
 			disablePlugin: () => undefined,
 			executeCommand: async () => "",
 			getAgentRegistrations: () => [],
@@ -431,6 +450,8 @@ describe("application dispatch", () => {
 			getSessionHistoryForPlugin: () => undefined,
 			getSessionStateForPlugin: () => undefined,
 			getStatusPanels: () => [],
+			getRendererRevision: () => 0,
+			subscribeRendererChanges: () => () => undefined,
 			refreshStatusPanel: async () => undefined,
 			runStatusPanelAction: async () => undefined,
 			registerBackgroundWork: () => undefined,

@@ -6,7 +6,7 @@ import {
 	type ClipboardWriteResult,
 	createClipboard,
 	type HostClipboardService,
-} from "@opentui/core";
+} from "@wincode/tui/core";
 import {
 	CLIPBOARD_IMAGE_MIME_TYPES,
 	type ClipboardServicePort,

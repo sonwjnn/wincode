@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { createTestRenderer } from "@opentui/core/testing";
+import { createTestRenderer } from "@wincode/tui/testing";
 import { createModeRunnerLoader } from "../../bin/mode-runners";
 import type { DispatchModeRunners } from "../../modules/application/dispatch";
 import { dispatch } from "../../modules/application/dispatch";

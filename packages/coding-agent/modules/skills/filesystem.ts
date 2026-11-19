@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { readUtf8File } from "@wincode/utils";
 import type { SetReadonly, SetRequired } from "type-fest";
+import { compareText } from "@/shared/utils/compare-text";
 import { parseSkillFile } from "./frontmatter";
 import { hashSkillBody } from "./hash";
 import type { Skill, SkillScope } from "./types";
@@ -35,16 +36,6 @@ export type LoadedSkill = Readonly<
 		source: string;
 	}
 >;
-
-const compareText = (first: string, second: string): number => {
-	if (first < second) {
-		return -1;
-	}
-	if (first > second) {
-		return 1;
-	}
-	return 0;
-};
 
 const compareRoots = (
 	first: SkillRootDescriptor,

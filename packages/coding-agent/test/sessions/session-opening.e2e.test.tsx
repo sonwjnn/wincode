@@ -10,12 +10,12 @@ import { afterAll, expect, mock, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { TestRendererSetup } from "@opentui/core/testing";
 import {
 	createOperationalFailure,
 	type SessionRecord,
 } from "@wincode/agent-core";
 import type { Provider, ProviderModel } from "@wincode/ai";
+import type { TestRendererSetup } from "@wincode/tui/testing";
 import { act } from "react";
 import {
 	createPluginRuntime,

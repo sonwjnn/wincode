@@ -1,4 +1,4 @@
-import { useTerminalDimensions } from "@opentui/react";
+import { useTerminalDimensions } from "@wincode/tui";
 import type { ReactNode } from "react";
 import {
 	createContext,
@@ -258,6 +258,7 @@ function Toast({ currentToast }: ToastProps) {
 
 	const variantColors: Record<ToastVariant, string> = {
 		success: colors.success,
+		warning: colors.warning,
 		error: colors.error,
 		info: colors.info,
 	};

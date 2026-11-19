@@ -1,5 +1,5 @@
-import { TextAttributes } from "@opentui/core";
 import type { ThinkingSelection } from "@wincode/ai";
+import { TextAttributes } from "@wincode/tui/core";
 import { resolveEffectiveAgentSelection } from "@/modules/agents/agent-call";
 import { useAgentRegistry } from "@/modules/agents/agent-registry-provider";
 import { useTheme } from "@/shared/providers/theme/theme-provider";

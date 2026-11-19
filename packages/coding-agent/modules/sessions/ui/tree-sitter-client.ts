@@ -2,7 +2,7 @@ import {
 	getTreeSitterClient,
 	type SimpleHighlight,
 	type TreeSitterClient,
-} from "@opentui/core";
+} from "@wincode/tui/core";
 
 /**
  * Tree-sitter can report a bracketed label in a standalone strong line as a

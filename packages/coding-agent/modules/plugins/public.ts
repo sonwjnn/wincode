@@ -4,6 +4,7 @@ import type {
 	AgentTurnId,
 	ToolCallId,
 	ToolCallOutput,
+	ToolCallRequest,
 	ToolExecutionMode,
 	ToolJsonSchema,
 } from "@wincode/agent-core";
@@ -12,9 +13,15 @@ import type {
 	ProviderModelSelection,
 	ThinkingLevel,
 } from "@wincode/ai";
+import type { ComponentType, ReactNode } from "react";
 import type { z } from "zod";
 import type { ExecutionMode } from "../../shared/execution-mode";
+import type { Theme } from "../../shared/providers/theme/themes";
+
+export type { Theme, ThemeColors } from "../../shared/providers/theme/themes";
+
 import type { SessionHistoryEntryId } from "../../shared/identifiers";
+import type { SessionMessage } from "../sessions/message";
 import type {
 	SessionSdkAgentSource,
 	SessionSdkCapabilityCeiling,
@@ -22,6 +29,7 @@ import type {
 } from "../sessions/sdk-contract";
 import type {
 	PluginSessionHistory,
+	PluginSessionHistoryEntry,
 	PluginSessionHistoryReader,
 } from "../sessions/session-plugin-history";
 import type {
@@ -30,8 +38,10 @@ import type {
 } from "../sessions/session-plugin-state";
 import type { SessionWriteOutcome } from "../sessions/session-write-outcome";
 
+export type { SessionMessage } from "../sessions/message";
 export type {
 	PluginSessionHistory,
+	PluginSessionHistoryEntry,
 	PluginSessionHistoryReader,
 } from "../sessions/session-plugin-history";
 
@@ -95,6 +105,471 @@ export class PluginSessionHistoryWriteError extends Error {
 export type PluginToolResult = ToolCallOutput;
 export type PluginInputSchema = z.ZodType | ToolJsonSchema;
 
+export type PluginToolCallState =
+	| "input-streaming"
+	| "input-available"
+	| "output-available"
+	| "output-error"
+	| "output-denied";
+
+/** The current public Tool Call data shown while a Plugin Tool runs. */
+export type PluginToolCall = ToolCallRequest &
+	Readonly<{
+		rawInput?: unknown;
+		state: PluginToolCallState;
+		toolName: string;
+	}>;
+
+export type PluginToolRenderContext = Readonly<{
+	call: PluginToolCall;
+	expanded: boolean;
+	height: number;
+	onToggleExpanded: () => void;
+	theme: Theme;
+	width: number;
+}>;
+
+/** A React presentation for one Plugin Tool Call, including its live state. */
+export type PluginToolCallRenderer = ComponentType<PluginToolRenderContext>;
+
+/** A React presentation for the current Plugin Tool result. */
+export type PluginToolResultRenderer = ComponentType<
+	PluginToolRenderContext & Readonly<{ result: PluginToolResult }>
+>;
+
+export type PluginRendererNext = () => ReactNode;
+
+/** Higher values run first; equal priorities retain registration order. */
+export type PluginRendererOptions = Readonly<{ priority?: number }>;
+
+/** Markdown surfaces currently rendered by Interactive Mode. */
+export type PluginMarkdownMessageType =
+	| "assistant"
+	| "assistant-thinking"
+	| "summary"
+	| "user";
+
+export type PluginMarkdownTransformerContext = Readonly<{
+	/** The host renderable's available width in terminal columns. */
+	availableWidth: number;
+	/** Whether the source content is still streaming. */
+	isStreaming: boolean;
+	/** Durable message or session-entry ID, when the host surface has one. */
+	messageId: string | undefined;
+	messageType: PluginMarkdownMessageType;
+	/** Durable entry creation time in ISO format, when available. */
+	timestamp: string | undefined;
+}>;
+
+export type PluginMarkdownTransformer = (
+	markdown: string,
+	context: PluginMarkdownTransformerContext
+) => string;
+
+export type PluginMarkdownTransformerOptions = Readonly<{
+	messageTypes?: readonly PluginMarkdownMessageType[];
+}>;
+
+/** Resolver context for any host or Plugin Tool row. */
+export type PluginToolRendererContext = PluginToolRenderContext &
+	Readonly<{
+		originPluginId: string | undefined;
+		result?: PluginToolResult;
+		type: string;
+	}>;
+
+/** Returns `undefined` to decline, or `next()` to delegate to later resolvers. */
+export type PluginToolRenderer = (
+	context: PluginToolRendererContext,
+	next: PluginRendererNext
+) => ReactNode | undefined;
+
+/** Timeout and caller cancellation options for a blocking Plugin UI request. */
+export type PluginUIDialogOptions = Readonly<{
+	signal?: AbortSignal;
+	timeout?: number;
+}>;
+
+export type PluginNotificationLevel = "info" | "warning" | "error";
+export type PluginUIPromptKind =
+	| "select"
+	| "confirm"
+	| "input"
+	| "editor"
+	| "custom";
+
+export type PluginUICustomErrorCode =
+	| "plugin_ui_custom_busy"
+	| "plugin_ui_custom_failed";
+
+/** A stable coded failure from a Plugin custom UI interaction. */
+export class PluginUICustomError extends Error {
+	readonly code: PluginUICustomErrorCode;
+
+	constructor(code: PluginUICustomErrorCode, cause?: unknown) {
+		const message =
+			code === "plugin_ui_custom_busy"
+				? "Another custom Plugin UI interaction is already active."
+				: "The custom Plugin UI failed to execute.";
+		super(message, cause === undefined ? undefined : { cause });
+		this.name = "PluginUICustomError";
+		this.code = code;
+	}
+}
+
+type PluginUICustomComposerKeybinding = PluginEditorKeybinding;
+
+export type PluginUICustomKeybindings = Readonly<{
+	composer: readonly PluginUICustomComposerKeybinding[];
+	dismiss: "escape";
+	reclaim: "ctrl+c";
+}>;
+
+/** The host-owned placement used for a custom Plugin UI interaction. */
+export type PluginUICustomPresentationMode =
+	| "editor"
+	| "overlay"
+	| "full-screen";
+
+export type PluginUICustomBounds = Readonly<{
+	left: number;
+	top: number;
+	width: number;
+	height: number;
+}>;
+
+export type PluginUICustomPresentationHandle = Readonly<{
+	/** Mark the custom UI focused without changing its visibility or result. */
+	focus: () => void;
+	/** Mark the custom UI unfocused without changing its visibility or result. */
+	unfocus: () => void;
+	/** Hide or show the presentation without settling the interaction. */
+	setHidden: (hidden: boolean) => void;
+	/** Return whether the presentation is hidden. */
+	isHidden: () => boolean;
+	/** Return whether the presentation is focused. */
+	isFocused: () => boolean;
+	/** Return the current host-owned bounds in terminal cells. */
+	getBounds: () => PluginUICustomBounds;
+}>;
+
+export type PluginUICustomContext<Value> = Readonly<{
+	done: (value: Value) => void;
+	environment: Readonly<{
+		executionMode: "interactive";
+		sessionId: string;
+	}>;
+	/** Available presentation height, updated when the terminal is resized. */
+	height: number;
+	keybindings: PluginUICustomKeybindings;
+	/** Selected custom UI placement. */
+	presentation: PluginUICustomPresentationMode;
+	/** Host-owned focus, visibility, and bounds controls; these do not settle UI. */
+	presentationHandle: PluginUICustomPresentationHandle;
+	signal: AbortSignal;
+	theme: Theme;
+	/** Available presentation width, updated when the terminal is resized. */
+	width: number;
+}>;
+
+/** A React component mounted by the host in the requested custom UI presentation. */
+export type PluginUICustomComponent<Value> = ComponentType<
+	PluginUICustomContext<Value>
+>;
+
+/** Returns the component type for an accepted custom UI interaction. */
+export type PluginUICustomFactory<Value> = (
+	context: PluginUICustomContext<Value>
+) => PluginUICustomComponent<Value> | Promise<PluginUICustomComponent<Value>>;
+
+export type PluginUICustomOptions = Readonly<{
+	/**
+	 * Selects where the host presents custom UI: `editor` replaces the composer,
+	 * `overlay` uses a centered bounded layer, and `full-screen` covers the app.
+	 * All modes use the host's renderer and root. Defaults to `editor`.
+	 */
+	presentation?: PluginUICustomPresentationMode;
+	title?: string;
+}>;
+
+export type PluginThemeChangeResult =
+	| Readonly<{ success: true }>
+	| Readonly<{ success: false; error: string }>;
+
+export type PluginUIContributionSurface =
+	| "header"
+	| "footer"
+	| "editor"
+	| "entry"
+	| "message";
+export type PluginUIContributionResult =
+	| Readonly<{ success: true }>
+	| Readonly<{
+			code: "plugin_ui_contribution_conflict";
+			ownerPluginId?: string;
+			success: false;
+			surface: PluginUIContributionSurface;
+	  }>;
+
+export type PluginUIWidgetPlacement = "aboveEditor" | "belowEditor";
+export type PluginUIWorkingIndicator = Readonly<{
+	frames: readonly string[];
+	intervalMs?: number;
+}>;
+export type PluginUIWidgetOptions = Readonly<{
+	placement?: PluginUIWidgetPlacement;
+}>;
+
+export type PluginUIStatusContribution = Readonly<{
+	key: string;
+	pluginId: string;
+	value: string;
+}>;
+
+export type PluginUIWidgetContribution = Readonly<{
+	key: string;
+	lines: readonly string[];
+	placement: PluginUIWidgetPlacement;
+	pluginId: string;
+}>;
+
+/** Data-only status, widget, and title payloads for RPC UI update mapping. */
+export type PluginUIUpdate =
+	| Readonly<{
+			type: "status";
+			pluginId: string;
+			key: string;
+			value: string | null;
+	  }>
+	| Readonly<{
+			type: "widget";
+			pluginId: string;
+			key: string;
+			value: readonly string[] | null;
+			placement: PluginUIWidgetPlacement;
+	  }>
+	| Readonly<{
+			type: "title";
+			pluginId: string;
+			value: string | null;
+	  }>;
+
+export type PluginUIChromeContext = Readonly<{
+	theme: Theme;
+	width: number;
+	height: number;
+}>;
+
+export type PluginUIHeaderComponent = ComponentType<PluginUIChromeContext>;
+
+export type PluginUIFooterContext = PluginUIChromeContext &
+	Readonly<{
+		branch?: string;
+		statuses: readonly PluginUIStatusContribution[];
+	}>;
+
+export type PluginUIFooterComponent = ComponentType<PluginUIFooterContext>;
+
+export type PluginUIDimensions = Readonly<{ height: number; width: number }>;
+export type PluginMessageRole = "assistant" | "system" | "user";
+
+export type PluginMessageRendererProps = Readonly<{
+	dimensions: PluginUIDimensions;
+	message: SessionMessage;
+	options: Readonly<{ streaming: boolean }>;
+	theme: Theme;
+}>;
+
+export type PluginMessageRendererContext = PluginMessageRendererProps &
+	Readonly<{
+		originPluginId: string | undefined;
+		role: PluginMessageRole;
+	}>;
+
+/** Returns `undefined` to decline, or `next()` to delegate to later resolvers. */
+export type PluginMessageRenderer = (
+	context: PluginMessageRendererContext,
+	next: PluginRendererNext
+) => ReactNode | undefined;
+
+export type PluginEntryRendererProps = Readonly<{
+	dimensions: PluginUIDimensions;
+	entry: PluginSessionHistoryEntry;
+	options: Readonly<{ selectedPath: boolean }>;
+	theme: Theme;
+}>;
+
+export type PluginEntryRendererContext = PluginEntryRendererProps &
+	Readonly<{
+		originPluginId: string;
+		type: string;
+	}>;
+
+/** Returns `undefined` to decline, or `next()` to delegate to later resolvers. */
+export type PluginEntryRenderer = (
+	context: PluginEntryRendererContext,
+	next: PluginRendererNext
+) => ReactNode | undefined;
+
+export type PluginAutocompleteItem = Readonly<{
+	description?: string;
+	label: string;
+	value: string;
+}>;
+
+export type PluginAutocompleteResult = Readonly<{
+	items: readonly PluginAutocompleteItem[];
+	prefix: string;
+}>;
+
+export type PluginAutocompleteContext = Readonly<{
+	column: number;
+	cursorOffset: number;
+	line: number;
+	lines: readonly string[];
+	sessionId: string;
+	text: string;
+}>;
+
+export type PluginAutocompleteEdit = Readonly<{
+	cursorOffset: number;
+	text: string;
+}>;
+
+export type PluginAutocompleteProvider = Readonly<{
+	getSuggestions: (
+		context: PluginAutocompleteContext
+	) =>
+		| PluginAutocompleteResult
+		| null
+		| Promise<PluginAutocompleteResult | null>;
+	applyCompletion: (
+		context: PluginAutocompleteContext,
+		item: PluginAutocompleteItem,
+		prefix: string
+	) => PluginAutocompleteEdit;
+	shouldTriggerFileCompletion?: (context: PluginAutocompleteContext) => boolean;
+}>;
+
+export type PluginAutocompleteProviderFactory = (
+	current: PluginAutocompleteProvider
+) => PluginAutocompleteProvider;
+
+export type PluginEditorKeybinding = Readonly<{
+	action: string;
+	ctrl?: boolean;
+	meta?: boolean;
+	name: string;
+	shift?: boolean;
+	super?: boolean;
+}>;
+
+export type PluginEditorContext = Readonly<{
+	cursorOffset: number;
+	defaultEditor: ReactNode;
+	height: number;
+	keybindings: readonly PluginEditorKeybinding[];
+	nextPrompt: () => boolean;
+	paste: (text: string) => boolean;
+	previousPrompt: () => boolean;
+	setText: (text: string, cursorOffset?: number) => void;
+	submit: () => Promise<void>;
+	text: string;
+	theme: Theme;
+	width: number;
+}>;
+
+/** A React editor mounted in place of the host editor or around its default slot. */
+export type PluginEditorComponent = ComponentType<PluginEditorContext>;
+
+export type PluginTerminalInputResult = Readonly<{ consume: true }> | undefined;
+export type PluginTerminalInputHandler = (
+	data: string
+) => PluginTerminalInputResult;
+
+/** UI-neutral operations the host makes available to a Plugin callback. */
+export type PluginUI = Readonly<{
+	select: (
+		prompt: string,
+		choices: readonly string[],
+		options?: PluginUIDialogOptions
+	) => Promise<string | undefined>;
+	confirm: (
+		title: string,
+		message?: string,
+		options?: PluginUIDialogOptions
+	) => Promise<boolean>;
+	input: (
+		title: string,
+		placeholder?: string,
+		options?: PluginUIDialogOptions
+	) => Promise<string | undefined>;
+	editor: (
+		title: string,
+		initialValue?: string,
+		options?: PluginUIDialogOptions
+	) => Promise<string | undefined>;
+	notify: (message: string, level?: PluginNotificationLevel) => void;
+	getAllThemes: () => readonly Theme[];
+	getTheme: (name: string) => Theme | undefined;
+	setTheme: (theme: string | Theme) => PluginThemeChangeResult;
+	custom: <Value>(
+		factory: PluginUICustomFactory<Value>,
+		options?: PluginUICustomOptions
+	) => Promise<Value | undefined>;
+	/** Sets or clears one Plugin-owned status value in the Session footer. */
+	setStatus: (key: string, value: string | undefined) => void;
+	/** Sets or clears one Plugin-owned widget above or below the composer. */
+	setWidget: (
+		key: string,
+		lines: readonly string[] | undefined,
+		options?: PluginUIWidgetOptions
+	) => void;
+	/** Registers or clears the Plugin-owned React header replacement. */
+	setHeader: (
+		component: PluginUIHeaderComponent | undefined
+	) => PluginUIContributionResult;
+	/** Registers or clears the Plugin-owned React footer replacement. */
+	setFooter: (
+		component: PluginUIFooterComponent | undefined
+	) => PluginUIContributionResult;
+	/** Overrides or restores the terminal title. */
+	setTitle: (title?: string) => void;
+	/** Overrides the built-in working text; undefined restores the default. */
+	setWorkingMessage: (message?: string) => void;
+	/** Shows or hides the built-in working indicator row. */
+	setWorkingVisible: (visible: boolean) => void;
+	/** Overrides the working indicator; undefined restores the default spinner. */
+	setWorkingIndicator: (indicator?: PluginUIWorkingIndicator) => void;
+	/** Overrides the label shown instead of hidden reasoning content. */
+	setHiddenThinkingLabel: (label?: string) => void;
+	getToolsExpanded: () => boolean;
+	setToolsExpanded: (expanded: boolean) => void;
+	/** Observes raw terminal sequences in Interactive Mode; return consume to stop host parsing. */
+	onTerminalInput: (handler: PluginTerminalInputHandler) => () => void;
+	getEditorText: () => string | undefined;
+	setEditorText: (text: string) => boolean;
+	pasteToEditor: (text: string) => boolean;
+	addAutocompleteProvider: (
+		provider: PluginAutocompleteProviderFactory
+	) => () => void;
+	getEditorComponent: () => PluginEditorComponent | undefined;
+	setEditorComponent: (
+		component: PluginEditorComponent | undefined
+	) => PluginUIContributionResult | undefined;
+}>;
+
+export type PluginUIContext = Readonly<{ ui: PluginUI }>;
+
+export type PluginUIPromptContext = Readonly<{
+	executionMode?: ExecutionMode;
+	kind: PluginUIPromptKind;
+	pluginId: string;
+	reason: "ui_prompt";
+	sessionId?: string;
+	title: string;
+}>;
+
 export type PluginConfigOrigin = Readonly<{
 	path: string;
 	scope: string;
@@ -140,13 +615,14 @@ export type PluginConfigFileStore = Readonly<{
 	) => Promise<PluginConfigSnapshot>;
 }>;
 
-export type PluginProviderConnectContext = Readonly<{
-	requestTextInput: (
-		prompt: string,
-		signal: AbortSignal
-	) => Promise<string | undefined>;
-	signal: AbortSignal;
-}>;
+export type PluginProviderConnectContext = PluginUIContext &
+	Readonly<{
+		requestTextInput: (
+			prompt: string,
+			signal: AbortSignal
+		) => Promise<string | undefined>;
+		signal: AbortSignal;
+	}>;
 
 /** A trusted Plugin's factory and host-mediated connection interaction. */
 export type PluginProviderRegistration = Readonly<{
@@ -182,12 +658,13 @@ export type PluginStatusPanelSnapshot = Readonly<{
 }>;
 
 /** Declarative host-rendered status and controls contributed by a Plugin. */
-export type PluginStatusPanelActionContext = Readonly<{
-	requestTextInput: (
-		prompt: string,
-		signal: AbortSignal
-	) => Promise<string | undefined>;
-}>;
+export type PluginStatusPanelActionContext = PluginUIContext &
+	Readonly<{
+		requestTextInput: (
+			prompt: string,
+			signal: AbortSignal
+		) => Promise<string | undefined>;
+	}>;
 
 export type PluginStatusPanelRegistration = Readonly<{
 	emptyText?: string;
@@ -239,16 +716,25 @@ export type PluginSessionContext = Readonly<{
 	workspace: string;
 }>;
 
-export type PluginSessionHistoryNavigationContext = PluginSessionContext &
-	Readonly<{
-		fromEntryId: SessionHistoryEntryId | null;
-		historyGeneration: number;
-		operationId: string;
-		toEntryId: SessionHistoryEntryId | null;
-	}>;
+export type PluginSessionHookContext = PluginSessionContext & PluginUIContext;
+
+type PluginSessionHistoryNavigationFields = Readonly<{
+	fromEntryId: SessionHistoryEntryId | null;
+	historyGeneration: number;
+	operationId: string;
+	toEntryId: SessionHistoryEntryId | null;
+}>;
+
+/** Session Host input used to report a completed history navigation. */
+export type PluginSessionHistoryNavigationInputContext = PluginSessionContext &
+	PluginSessionHistoryNavigationFields;
+
+/** Plugin callback context for a completed history navigation. */
+export type PluginSessionHistoryNavigationContext = PluginSessionHookContext &
+	PluginSessionHistoryNavigationFields;
 
 export type PluginBeforeSessionHistoryNavigationContext = Omit<
-	PluginSessionHistoryNavigationContext,
+	PluginSessionHookContext & PluginSessionHistoryNavigationFields,
 	"sessionHistory" | "sessionState"
 > &
 	Readonly<{
@@ -256,7 +742,16 @@ export type PluginBeforeSessionHistoryNavigationContext = Omit<
 		sessionState?: Pick<PluginSessionState, "read">;
 	}>;
 
-export type PluginBeforeAgentTurnContext = PluginSessionContext &
+export type PluginBeforeAgentTurnInputContext = PluginSessionContext &
+	Readonly<{
+		agentId: AgentId;
+		capabilityCeiling?: SessionSdkCapabilityCeiling;
+		registerTurnCleanup?: (cleanup: () => void) => void;
+		signal: AbortSignal;
+		turnId?: AgentTurnId;
+	}>;
+
+export type PluginBeforeAgentTurnContext = PluginSessionHookContext &
 	Readonly<{
 		agentId: AgentId;
 		capabilityCeiling?: SessionSdkCapabilityCeiling;
@@ -273,7 +768,15 @@ export type PluginProcessContext = Readonly<{
 /** Why compaction ran: an operator request, a threshold check, or overflow recovery. */
 export type PluginCompactionTrigger = "manual" | "overflow" | "threshold";
 
-export type PluginCompactionContext = PluginSessionContext &
+export type PluginCompactionInputContext = PluginSessionContext &
+	Readonly<{
+		focus?: string;
+		signal: AbortSignal;
+		trigger: PluginCompactionTrigger;
+		turnId?: AgentTurnId;
+	}>;
+
+export type PluginCompactionContext = PluginSessionHookContext &
 	Readonly<{
 		focus?: string;
 		signal: AbortSignal;
@@ -291,17 +794,25 @@ export type PluginBeforeCompactionResult =
 	| Readonly<{ cancel?: never; summary: string }>
 	| undefined;
 
+type PluginCompactionCompletedFields = Readonly<{
+	compactionId: string;
+	estimatedTokensAfter: number;
+	tokensBefore: number;
+}>;
+
+export type PluginCompactionCompletedInputContext =
+	PluginCompactionInputContext & PluginCompactionCompletedFields;
+
 export type PluginCompactionCompletedContext = PluginCompactionContext &
-	Readonly<{
-		compactionId: string;
-		estimatedTokensAfter: number;
-		tokensBefore: number;
-	}>;
+	PluginCompactionCompletedFields;
+
+export type PluginCompactionFailedInputContext = PluginCompactionInputContext &
+	Readonly<{ error: string }>;
 
 export type PluginCompactionFailedContext = PluginCompactionContext &
 	Readonly<{ error: string }>;
 
-export type PluginToolContext = PluginSessionContext &
+export type PluginToolContext = PluginSessionHookContext &
 	Readonly<{
 		agentId: AgentId;
 		signal: AbortSignal;
@@ -309,13 +820,16 @@ export type PluginToolContext = PluginSessionContext &
 		registerBackgroundWork: (work: Promise<unknown>) => void;
 	}>;
 
-export type PluginCommandContext = Readonly<{
+export type PluginCommandInputContext = Readonly<{
 	argument: string;
+	executionMode?: ExecutionMode;
 	sessionHistory?: PluginSessionHistory;
 	sessionId?: string;
 	sessionState?: PluginSessionState;
 	workspace: string;
 }>;
+
+export type PluginCommandContext = PluginCommandInputContext & PluginUIContext;
 
 export type PluginToolRegistration<Schema extends PluginInputSchema> =
 	Readonly<{
@@ -329,19 +843,37 @@ export type PluginToolRegistration<Schema extends PluginInputSchema> =
 		inputSchema: Schema;
 		modelName?: string;
 		name: string;
+		ownsRowShell?: boolean;
+		renderCall?: PluginToolCallRenderer;
+		renderResult?: PluginToolResultRenderer;
 	}>;
 
 export type PluginCommandHandler = (
 	context: PluginCommandContext
 ) => string | Promise<string>;
 
+export type PluginCommandArgumentCompletion = (
+	prefix: string
+) =>
+	| readonly PluginAutocompleteItem[]
+	| null
+	| Promise<readonly PluginAutocompleteItem[] | null>;
+
 export type PluginCommandRegistration = Readonly<{
 	description: string;
 	name: string;
 }> &
 	(
-		| Readonly<{ handler: PluginCommandHandler; statusPanelId?: never }>
-		| Readonly<{ handler?: never; statusPanelId: string }>
+		| Readonly<{
+				getArgumentCompletions?: PluginCommandArgumentCompletion;
+				handler: PluginCommandHandler;
+				statusPanelId?: never;
+		  }>
+		| Readonly<{
+				getArgumentCompletions?: never;
+				handler?: never;
+				statusPanelId: string;
+		  }>
 	);
 
 export type PluginToolRegistrationAPI = Readonly<{
@@ -356,13 +888,32 @@ export type PluginRegistrationAPI = PluginToolRegistrationAPI &
 		registerCommand: (command: PluginCommandRegistration) => void;
 	}>;
 
+export type PluginShortcutContext = PluginUIContext &
+	Readonly<{
+		pluginId: string;
+		sessionId: string;
+		shortcut: string;
+	}>;
+
+export type PluginShortcutHandler = (
+	context: PluginShortcutContext
+) => void | Promise<void>;
+
+export type PluginShortcutOptions = Readonly<{
+	description: string;
+	handler: PluginShortcutHandler;
+}>;
+
+export type PluginShortcutRegistration = PluginShortcutOptions &
+	Readonly<{ shortcut: string }>;
+
 export type PluginSessionStartHook = (
-	context: PluginSessionContext,
+	context: PluginSessionHookContext,
 	api: PluginRegistrationAPI
 ) => void | Promise<void>;
 
 export type PluginSessionShutdownHook = (
-	context: PluginSessionContext
+	context: PluginSessionHookContext
 ) => void | Promise<void>;
 
 export type PluginBeforeSessionHistoryNavigationResult =
@@ -377,6 +928,10 @@ export type PluginBeforeSessionHistoryNavigationHook = (
 
 export type PluginSessionHistoryNavigatedHook = (
 	context: PluginSessionHistoryNavigationContext
+) => void | Promise<void>;
+
+export type PluginUIPromptHook = (
+	context: PluginUIPromptContext
 ) => void | Promise<void>;
 
 export type PluginBeforeAgentTurnHook = (
@@ -411,6 +966,10 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 		registerAgent: (agent: PluginAgentRegistration) => void;
 		registerResource: (name: string, resource: unknown) => void;
 		registerStatusPanel: (panel: PluginStatusPanelRegistration) => void;
+		registerShortcut: (
+			shortcut: string,
+			options: PluginShortcutOptions
+		) => void;
 		onSessionStart: (handler: PluginSessionStartHook) => void;
 		onSessionShutdown: (handler: PluginSessionShutdownHook) => void;
 		onBeforeSessionHistoryNavigation: (
@@ -423,6 +982,8 @@ export type PluginDefinitionAPI = PluginRegistrationAPI &
 		onBeforeCompaction: (handler: PluginBeforeCompactionHook) => void;
 		onCompactionCompleted: (handler: PluginCompactionCompletedHook) => void;
 		onCompactionFailed: (handler: PluginCompactionFailedHook) => void;
+		onUIPromptStart: (handler: PluginUIPromptHook) => void;
+		onUIPromptEnd: (handler: PluginUIPromptHook) => void;
 		onStart: (handler: PluginProcessStartHook) => void;
 		onShutdown: (handler: PluginShutdownHook) => void;
 	}>;
@@ -431,6 +992,24 @@ export type PluginAPI = Readonly<{
 	definePlugin: (
 		identity: Readonly<{ id: string; sessionStateVersion?: number }>
 	) => PluginDefinitionAPI;
+	registerToolRenderer: (
+		renderer: PluginToolRenderer,
+		options?: PluginRendererOptions
+	) => PluginUIContributionResult;
+	registerEntryRenderer: (
+		renderer: PluginEntryRenderer,
+		options?: PluginRendererOptions
+	) => PluginUIContributionResult;
+	registerMessageRenderer: (
+		renderer: PluginMessageRenderer,
+		options?: PluginRendererOptions
+	) => PluginUIContributionResult;
+	registerMarkdownTransformer: (
+		transformer: PluginMarkdownTransformer,
+		options?: PluginMarkdownTransformerOptions
+	) => void;
+	/** Registers a shortcut for the Plugin declared with definePlugin(). */
+	registerShortcut: (shortcut: string, options: PluginShortcutOptions) => void;
 	/** Set the focused Interactive composer model for future Submissions. */
 	setModel: (model: ProviderModelSelection) => Promise<boolean>;
 	/** Set or clear the focused composer ThinkingLevel for future Submissions; unsupported levels are ignored. */

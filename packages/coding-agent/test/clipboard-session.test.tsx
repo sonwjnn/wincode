@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createTestRenderer } from "@opentui/core/testing";
+import { createTestRenderer } from "@wincode/tui/testing";
 import { act } from "react";
 import { createRendererSession } from "@/tui/renderer-session";
 

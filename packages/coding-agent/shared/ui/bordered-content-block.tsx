@@ -1,4 +1,4 @@
-import type { BoxRenderable } from "@opentui/core";
+import type { BoxRenderable } from "@wincode/tui/core";
 import type { ReactNode, Ref } from "react";
 import { EmptyBorder } from "@/shared/constants";
 import type { ThemeColors } from "@/shared/providers/theme/themes";

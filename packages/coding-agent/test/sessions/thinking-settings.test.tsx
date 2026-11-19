@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import {
 	MockTreeSitterClient,
 	type TestRendererSetup,
-} from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
+	testRender,
+} from "@wincode/tui/testing";
 import { act } from "react";
 import { BotMessageContent } from "@/modules/sessions/ui/messages/bot-message";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";

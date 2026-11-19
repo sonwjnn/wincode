@@ -1,5 +1,5 @@
-import { TextAttributes } from "@opentui/core";
 import { createRootRoute } from "@tanstack/react-router";
+import { TextAttributes } from "@wincode/tui/core";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { RootLayout } from "../layouts/root-layout";
 
