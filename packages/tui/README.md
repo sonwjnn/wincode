@@ -8,11 +8,14 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
 
 - `@wincode/tui`
   - `createUiHost`, `UiHost` — create a React root for a caller-owned renderer and manage its render/unmount lifecycle.
+  - `BoundedContentPanel`, `BoundedContentPanelProps` — size content to its host width and preserve its natural height; the host owns any scroll viewport.
   - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
   - `EditorAutocomplete`, `EditorAutocompleteItem`, `EditorAutocompleteProps` — reusable editor suggestion presentation, keyboard navigation, apply, and dismissal; the host supplies candidates and owns edits.
   - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
   - `createPortal`, `useAppContext`, `useFocus`, `useKeyboard`, `usePaste`, `useRenderer`, `useTerminalDimensions` — access host renderer context, focus, keyboard, paste, and terminal dimensions.
   - `LocalStyleColors`, `LocalStyleProvider`, `ThemeProvider`, `TuiTheme`, `TuiThemeColors`, `TuiThemeColor`, `useTheme` — provide a reactive theme and subtree-local color overrides.
+- `@wincode/tui/bounded-content-panel`
+  - `BoundedContentPanel`, `BoundedContentPanelProps` — import the bounded content sizing composition without using the package-root barrel.
 - `@wincode/tui/core`
   - Renderer: `CapturedFrame`, `CliRenderEvents`, `CliRenderer`, `createCliRenderer`, `NativeResourceOwner`, `Renderable`, `RendererClipboardBoundary`.
   - Renderables and selection: `BoxRenderable`, `InputRenderable`, `MarkdownRenderable`, `MouseButton`, `ScrollBoxRenderable`, `SelectRenderable`, `Selection`, `SelectionBehavior`, `TextareaRenderable`.
@@ -102,6 +105,22 @@ Mount `EditorAutocomplete` beside the editor and set `open` when the host has su
 ```
 
 The runnable independent notes app demonstrates this API with note-specific candidates and edits. Run it with `bun run packages/tui/examples/independent-app.tsx`; Ctrl+Space opens suggestions, Enter applies the selected edit, and Escape dismisses suggestions without changing the note. Escape when the list is closed unmounts the React root and destroys the app-owned renderer.
+
+## Bounded content panel
+
+`BoundedContentPanel` accepts `children` and sizes the content to the available width while preserving its natural height. It is not a scroll container. Place it inside the host's `scrollbox` or another viewport; this lets Coding-Agent retain its single transcript viewport and leaves keyboard, selection handling, clipboard, and link policy with the host. The panel adds no selection, copy, or link handlers.
+
+```tsx
+import { BoundedContentPanel } from "@wincode/tui";
+
+<scrollbox height="100%" width="100%">
+  <BoundedContentPanel>
+    <markdown content={content} syntaxStyle={syntaxStyle} width="100%" />
+  </BoundedContentPanel>
+</scrollbox>
+```
+
+The runnable independent consumer is [`examples/independent-app.tsx`](./examples/independent-app.tsx). The offline Markdown viewer is [`examples/offline-markdown-viewer.tsx`](./examples/offline-markdown-viewer.tsx); run it with `bun packages/tui/examples/offline-markdown-viewer.tsx`. It owns its renderer, wraps `BoundedContentPanel` in one `scrollbox`, and exits on Escape.
 
 ## Architectural boundary
 
