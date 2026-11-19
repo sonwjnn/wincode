@@ -1,5 +1,5 @@
-import { type CliRenderer, createCliRenderer } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
+/** @jsxImportSource @wincode/tui */
+
 import {
 	createUiHost,
 	InlineNotice,
@@ -7,7 +7,9 @@ import {
 	ThemeProvider,
 	type TuiTheme,
 	type UiHost,
+	useKeyboard,
 } from "@wincode/tui";
+import { type CliRenderer, createCliRenderer } from "@wincode/tui/core";
 
 const APP_THEME: TuiTheme = {
 	colors: {

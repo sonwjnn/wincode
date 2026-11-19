@@ -1,6 +1,4 @@
 import * as path from "node:path";
-import type { InputRenderable, KeyEvent } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
 import type {
 	PluginFactory,
 	PluginSessionContext,
@@ -9,6 +7,8 @@ import type {
 	PluginUICustomPresentationHandle,
 	SessionSdkEvent,
 } from "@wincode/coding-agent";
+import { useKeyboard } from "@wincode/tui";
+import type { InputRenderable, KeyEvent } from "@wincode/tui/core";
 import { useEffect, useRef } from "react";
 
 const TERMINAL_AGENT_TURN_EVENTS: ReadonlySet<SessionSdkEvent["type"]> =

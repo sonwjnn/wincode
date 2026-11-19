@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { testRender } from "@opentui/react/test-utils";
+import { testRender } from "@wincode/tui/testing";
 import { act } from "react";
 import { UserMessage } from "@/modules/sessions/ui/messages/user-message";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";

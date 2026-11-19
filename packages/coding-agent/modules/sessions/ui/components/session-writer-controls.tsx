@@ -1,4 +1,4 @@
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes } from "@wincode/tui/core";
 import type { SessionWriterLockOwner } from "@/modules/sessions/storage/session-writer-lock";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 

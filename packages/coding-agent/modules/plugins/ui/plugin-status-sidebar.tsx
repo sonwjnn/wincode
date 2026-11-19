@@ -1,4 +1,4 @@
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes } from "@wincode/tui/core";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { ThemeColors } from "@/shared/providers/theme/themes";
 import { usePluginStatusPanels } from "./use-plugin-status-panels";

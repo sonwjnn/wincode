@@ -2,13 +2,6 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	type CapturedFrame,
-	type InputRenderable,
-	RGBA,
-	type TextareaRenderable,
-} from "@opentui/core";
-import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type { ProviderChatEvent } from "@wincode/ai";
 import type {
@@ -26,7 +19,17 @@ import type {
 	SessionSdkEvent,
 	SessionSdkHandle,
 } from "@wincode/coding-agent";
-import { LocalStyleProvider } from "@wincode/tui";
+import {
+	LocalStyleProvider,
+	useKeyboard,
+	useTerminalDimensions,
+} from "@wincode/tui";
+import {
+	type CapturedFrame,
+	type InputRenderable,
+	RGBA,
+	type TextareaRenderable,
+} from "@wincode/tui/core";
 import { act, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { AgentRegistryProvider } from "@/modules/agents";

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { testRender } from "@opentui/react/test-utils";
+import { testRender } from "@wincode/tui/testing";
 import type { ProjectInstructionSnapshot } from "@/modules/prompt-composition/project-instructions";
 import {
 	ContextStartupSection,

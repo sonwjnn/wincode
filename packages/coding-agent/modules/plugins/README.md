@@ -101,7 +101,7 @@ After `definePlugin()`, register a keyboard shortcut with `PluginAPI.registerSho
 This keyboard-only editor opens from `Ctrl+Shift+P`, completes on Enter, and leaves Escape/Ctrl+C to the host:
 
 ```tsx
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard } from "@wincode/tui";
 import type {
   PluginFactory,
   PluginUICustomComponent,
@@ -146,6 +146,8 @@ A Plugin factory may also register named process resources with `registerResourc
 Tool handlers can register background promises with `context.registerBackgroundWork(promise)`. One-Shot waits for all work registered to that Session before exiting. Interactive Mode and RPC keep the parent Session Host alive while registered work is pending, even after its last view is released; normal idle unloading resumes when the work settles.
 
 ## Plugin UI
+
+Import shared React components and hooks such as `InlineNotice` and `useKeyboard` from `@wincode/tui`, and renderer types from `@wincode/tui/core`. For TSX, set `compilerOptions.jsxImportSource` to `@wincode/tui`. Resolve the same `@wincode/tui` and React instances as the host; don't bundle private copies. Plugins supply components to the host rather than creating their own renderer or React root.
 
 Session-bound Plugin callbacks, Tools, Commands, Provider `connect()` callbacks, and Status Panel `runAction()` handlers receive `ui`. In Interactive Mode, while that Session has a mounted host view, the host renders dialogs and notifications; Plugin code describes the request but does not create terminal components:
 
@@ -253,7 +255,7 @@ A Plugin Command can present a React component through `ui.custom(factory, optio
 Overlay geometry is centered and constrained to the current terminal; a resize updates the component's available `width` and `height` and the current terminal-cell bounds. Every mode uses the existing renderer and React root. Plugins contribute a React component but never create or own a renderer or terminal. The host supplies the current theme, composer keybindings, an `AbortSignal`, `done(value)`, the selected `presentation`, a `presentationHandle`, and the Interactive Session environment. Use `presentationHandle.focus()` / `unfocus()` to update focus independently from `setHidden(hidden)`; read those states with `isFocused()` and `isHidden()`, and read the current host-owned terminal-cell rectangle with `getBounds()`. Focus and visibility changes do not settle the request. The host retains keyboard ownership, so Escape dismisses and Ctrl+C reclaims the host even if component keyboard handlers call `preventDefault()`. The composer binding list and entries are read-only snapshots; copy them before passing them to mutable OpenTUI options.
 
 ```tsx
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard } from "@wincode/tui";
 import type {
   PluginFactory,
   PluginUICustomComponent,

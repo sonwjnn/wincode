@@ -1,4 +1,4 @@
-import type { CliRenderer, MouseEvent } from "@opentui/core";
+import type { CliRenderer, MouseEvent } from "@wincode/tui/core";
 
 /**
  * Resolves the hyperlink under a plain left click. OpenTUI marks the release

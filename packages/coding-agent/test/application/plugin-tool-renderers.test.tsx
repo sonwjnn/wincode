@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { testRender } from "@opentui/react/test-utils";
 import { fromPartial } from "@total-typescript/shoehorn";
 import {
 	agentIdSchema,
@@ -11,6 +10,7 @@ import {
 } from "@wincode/agent-core";
 import type { ProviderChatEvent } from "@wincode/ai";
 import type { PluginFactory } from "@wincode/coding-agent";
+import { testRender } from "@wincode/tui/testing";
 import { act, useState } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";
 import { createPluginTools } from "@/modules/plugins/tools";

@@ -1,4 +1,4 @@
-import type { BoxRenderable, Renderable } from "@opentui/core";
+import type { BoxRenderable, Renderable } from "@wincode/tui/core";
 import {
 	memo,
 	type RefObject,

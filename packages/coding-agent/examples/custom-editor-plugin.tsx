@@ -1,10 +1,10 @@
-import type { InputRenderable } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
 import type {
 	PluginFactory,
 	PluginUICustomComponent,
 	PluginUICustomFactory,
 } from "@wincode/coding-agent";
+import { InlineNotice, useKeyboard } from "@wincode/tui";
+import type { InputRenderable } from "@wincode/tui/core";
 import { useRef } from "react";
 
 const ReplyEditor: PluginUICustomComponent<string> = ({
@@ -26,7 +26,7 @@ const ReplyEditor: PluginUICustomComponent<string> = ({
 
 	return (
 		<box flexDirection="column" gap={1} paddingX={1} width="100%">
-			<text fg={theme.colors.text}>Reply to the current message</text>
+			<InlineNotice>Reply to the current message</InlineNotice>
 			<text fg={theme.colors.textMuted} wrapMode="word">
 				{`${environment.sessionId} · ${width}×${height} · Enter: ${keybindings.composer[0]?.action} · signal: ${signal.aborted ? "cancelled" : "active"}`}
 			</text>

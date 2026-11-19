@@ -1,4 +1,4 @@
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes } from "@wincode/tui/core";
 import type { SessionForkProvenance } from "@/modules/sessions/storage/session-lifecycle";
 import type { SessionWriterLockOwner } from "@/modules/sessions/storage/session-writer-lock";
 import type { SessionId } from "@/shared/identifiers";

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { TestRendererSetup } from "@opentui/core/testing";
 import { fromPartial } from "@total-typescript/shoehorn";
+import type { TestRendererSetup } from "@wincode/tui/testing";
 import { act, useMemo } from "react";
 import type {
 	CommandController,

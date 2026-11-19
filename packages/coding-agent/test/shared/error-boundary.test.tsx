@@ -1,6 +1,4 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import type { TestRendererSetup } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -8,6 +6,8 @@ import {
 	type ErrorComponentProps,
 	RouterProvider,
 } from "@tanstack/react-router";
+import type { TestRendererSetup } from "@wincode/tui/testing";
+import { testRender } from "@wincode/tui/testing";
 import { act, type ErrorInfo, type ReactNode } from "react";
 import { ErrorRecoveryProvider } from "@/shared/providers/error-recovery/error-recovery-provider";
 import { KeyboardLayerProvider } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";

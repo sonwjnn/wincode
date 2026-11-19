@@ -2,12 +2,12 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { testRender } from "@opentui/react/test-utils";
 import type { McpClient } from "@wincode/mcp";
 import {
 	createMcpPluginFactory,
 	type McpPluginDependencies,
 } from "@wincode/mcp/plugin";
+import { testRender } from "@wincode/tui/testing";
 import { act, useEffect } from "react";
 import { getCustomCommands } from "@/modules/commands/custom/loader";
 import { loadPlugins } from "@/modules/plugins/loader";

@@ -1,9 +1,9 @@
+import { useRenderer } from "@wincode/tui";
 import {
 	type NativeResourceOwner,
 	type StyleDefinitionInput,
 	SyntaxStyle,
-} from "@opentui/core";
-import { useRenderer } from "@opentui/react";
+} from "@wincode/tui/core";
 import { useMemo } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { ThemeColors } from "@/shared/providers/theme/themes";

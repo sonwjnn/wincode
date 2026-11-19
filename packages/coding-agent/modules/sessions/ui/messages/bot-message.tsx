@@ -1,6 +1,6 @@
-import type { BoxRenderable } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/react";
 import type { AgentId } from "@wincode/agent-core";
+import { useTerminalDimensions } from "@wincode/tui";
+import type { BoxRenderable } from "@wincode/tui/core";
 import {
 	isArray,
 	isNull,

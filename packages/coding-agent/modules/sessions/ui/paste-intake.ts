@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { decodePasteBytes, PasteEvent } from "@opentui/core";
+import { decodePasteBytes, PasteEvent } from "@wincode/tui/core";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import type { ClipboardImageResult } from "../clipboard-image";
 import { summarizePastedText } from "../pasted-text";

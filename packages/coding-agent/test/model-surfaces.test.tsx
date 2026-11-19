@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { TestRendererSetup } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import { fromPartial } from "@total-typescript/shoehorn";
 import { type AgentId, agentIdSchema } from "@wincode/agent-core";
 import type {
@@ -8,6 +6,8 @@ import type {
 	ProviderModel,
 	ThinkingLevel,
 } from "@wincode/ai";
+import type { TestRendererSetup } from "@wincode/tui/testing";
+import { testRender } from "@wincode/tui/testing";
 import { act, useEffect, useRef } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import type { PluginProviderDescriptor } from "@/modules/plugins/runtime";

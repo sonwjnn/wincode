@@ -1,4 +1,4 @@
-import type { Extmark } from "@opentui/core";
+import type { Extmark } from "@wincode/tui/core";
 import { isUndefined } from "@wincode/utils";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import {

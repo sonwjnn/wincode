@@ -2,8 +2,6 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
-import type { TestRendererSetup } from "@opentui/core/testing";
 import {
 	createMemoryHistory,
 	createRootRoute,
@@ -19,6 +17,8 @@ import type {
 	ProviderModel,
 	ThinkingLevel,
 } from "@wincode/ai";
+import { ScrollBoxRenderable, TextareaRenderable } from "@wincode/tui/core";
+import type { TestRendererSetup } from "@wincode/tui/testing";
 import { act, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";
 import { createPluginPromptSelectionBridge } from "@/modules/plugins/prompt-selection";

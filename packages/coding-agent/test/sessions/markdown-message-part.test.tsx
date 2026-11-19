@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { MarkdownRenderable, SyntaxStyle } from "@opentui/core";
+import { MarkdownRenderable, SyntaxStyle } from "@wincode/tui/core";
 import {
 	createTestRenderer,
 	MockTreeSitterClient,
 	TestRecorder,
 	type TestRendererSetup,
-} from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
+	testRender,
+} from "@wincode/tui/testing";
 import { act, useEffect, useState } from "react";
 import { MarkdownMessagePart } from "@/modules/sessions/ui/messages/markdown-message-part";
 import { setTreeSitterClientOverride } from "@/modules/sessions/ui/tree-sitter-client";

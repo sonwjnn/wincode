@@ -1,5 +1,5 @@
-import type { KeyEvent, Selection } from "@opentui/core";
-import { useAppContext, useRenderer } from "@opentui/react";
+import { useAppContext, useRenderer } from "@wincode/tui";
+import type { KeyEvent, Selection } from "@wincode/tui/core";
 import { useEffect } from "react";
 import { useOptionalKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { useToast } from "../providers/toast/toast-provider";

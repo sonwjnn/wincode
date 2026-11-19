@@ -1,4 +1,4 @@
-import { useKeyboard, useRenderer } from "@opentui/react";
+import { useKeyboard, useRenderer } from "@wincode/tui";
 import { isUndefined, logger } from "@wincode/utils";
 import type React from "react";
 import {

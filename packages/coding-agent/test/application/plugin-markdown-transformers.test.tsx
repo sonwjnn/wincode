@@ -2,12 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MockTreeSitterClient } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import type {
 	PluginFactory,
 	PluginMarkdownTransformerContext,
 } from "@wincode/coding-agent";
+import { MockTreeSitterClient, testRender } from "@wincode/tui/testing";
 import { logger, resolveLogFilePath } from "@wincode/utils";
 import { act, useEffect, useState } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";

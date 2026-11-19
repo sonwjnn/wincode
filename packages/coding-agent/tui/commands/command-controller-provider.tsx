@@ -1,5 +1,5 @@
-import { useRenderer } from "@opentui/react";
 import { useRouter } from "@tanstack/react-router";
+import { useRenderer } from "@wincode/tui";
 import { getErrorMessage } from "@wincode/utils";
 import {
 	createElement,

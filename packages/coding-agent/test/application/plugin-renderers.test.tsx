@@ -2,7 +2,6 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { testRender } from "@opentui/react/test-utils";
 import type {
 	PluginEntryRenderer,
 	PluginEntryRendererContext,
@@ -13,6 +12,7 @@ import type {
 	PluginSessionHistoryEntry,
 	PluginUIContributionResult,
 } from "@wincode/coding-agent";
+import { testRender } from "@wincode/tui/testing";
 import { act, useEffect } from "react";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";

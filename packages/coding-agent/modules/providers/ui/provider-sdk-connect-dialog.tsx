@@ -1,4 +1,4 @@
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard } from "@wincode/tui";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPluginTextInputRequester } from "@/modules/plugins/ui/request-plugin-text-input";

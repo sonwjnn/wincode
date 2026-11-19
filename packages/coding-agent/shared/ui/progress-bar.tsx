@@ -1,5 +1,5 @@
-import { RGBA } from "@opentui/core";
 import type { AgentId } from "@wincode/agent-core";
+import { RGBA } from "@wincode/tui/core";
 import { isNull } from "@wincode/utils";
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";

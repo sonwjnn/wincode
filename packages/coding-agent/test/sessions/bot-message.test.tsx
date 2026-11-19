@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { MockTreeSitterClient } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import { fromAny } from "@total-typescript/shoehorn";
+import { MockTreeSitterClient, testRender } from "@wincode/tui/testing";
 import { act, useEffect, useState } from "react";
 import type { SessionMessage } from "@/modules/sessions/message";
 import {

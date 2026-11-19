@@ -1,11 +1,11 @@
 import * as fs from "node:fs/promises";
+import type { ThinkingSelection } from "@wincode/ai";
+import { useKeyboard, usePaste, useTerminalDimensions } from "@wincode/tui";
 import {
 	decodePasteBytes,
 	type PasteEvent,
 	type TextareaRenderable,
-} from "@opentui/core";
-import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
-import type { ThinkingSelection } from "@wincode/ai";
+} from "@wincode/tui/core";
 import { isNull } from "@wincode/utils";
 import {
 	type ReactNode,

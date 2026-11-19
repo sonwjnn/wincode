@@ -1,5 +1,3 @@
-import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
 import type {
 	AgentId,
 	ModelRetryStatus,
@@ -7,6 +5,8 @@ import type {
 	SessionRecordId,
 } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
+import { useKeyboard } from "@wincode/tui";
+import { type ScrollBoxRenderable, TextAttributes } from "@wincode/tui/core";
 import { isUndefined } from "@wincode/utils";
 import {
 	type ReactNode,

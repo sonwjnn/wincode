@@ -1,6 +1,6 @@
-import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/react";
 import type { SessionRecordId } from "@wincode/agent-core";
+import { useTerminalDimensions } from "@wincode/tui";
+import { TextAttributes } from "@wincode/tui/core";
 import { getErrorMessage, logger } from "@wincode/utils";
 import { randomUUIDv7 } from "bun";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

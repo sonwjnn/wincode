@@ -1,4 +1,4 @@
-import { useTerminalDimensions } from "@opentui/react";
+import { useTerminalDimensions } from "@wincode/tui";
 import type { ReactNode } from "react";
 import {
 	createContext,

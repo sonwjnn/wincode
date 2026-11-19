@@ -1,6 +1,6 @@
-import type { BoxRenderable } from "@opentui/core";
-import { RGBA, TextAttributes } from "@opentui/core";
-import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { useKeyboard, useTerminalDimensions } from "@wincode/tui";
+import type { BoxRenderable } from "@wincode/tui/core";
+import { RGBA, TextAttributes } from "@wincode/tui/core";
 import { isNull, isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
 import {

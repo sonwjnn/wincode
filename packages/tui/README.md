@@ -10,13 +10,16 @@ Reusable OpenTUI + React UI facilities for Coding-Agent, Plugins, and independen
 | `ThemeProvider`, `useTheme`, `TuiTheme`, `TuiThemeColors`, `TuiThemeColor` | `@wincode/tui` | Provide a reactive theme and read its colors from React components. |
 | `LocalStyleProvider`, `LocalStyleColors` | `@wincode/tui` | Override color tokens within one React subtree without changing the application theme. |
 | `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` | `@wincode/tui` | Render a wrapped notice using the active theme's `info`, `success`, `warning`, or `error` token. |
+| Renderer hooks and `createPortal` | `@wincode/tui` | Use the host renderer, terminal dimensions, keyboard, focus, or paste. |
+| Renderer primitives and types | `@wincode/tui/core` | Create or interact with a renderer without importing the React entry point. |
+| Test renderer helpers | `@wincode/tui/testing` | Render and exercise terminal UI in tests. |
 
-`@opentui/core`, `@opentui/react`, and React are peer requirements. The consuming application supplies and owns its renderer lifecycle.
+`@wincode/tui` owns the OpenTUI dependencies. Consumers share the host's React peer and set `compilerOptions.jsxImportSource` to `@wincode/tui`. Coding-Agent's project-trust UI, the reply-editor Plugin, and the independent example render the same `InlineNotice` component. Plugins use the host renderer and React root; independent applications own their own renderer lifecycle.
 
 ## React usage
 
 ```tsx
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer } from "@wincode/tui/core";
 import {
 	createUiHost,
 	InlineNotice,

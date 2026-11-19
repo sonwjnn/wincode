@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { testRender } from "@opentui/react/test-utils";
+import { testRender } from "@wincode/tui/testing";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
 import { StartupDiagnosticsToast } from "@/tui/layouts/startup-diagnostics-toast";

@@ -1,6 +1,6 @@
 import { expect, mock, test } from "bun:test";
-import { ScrollBoxRenderable } from "@opentui/core";
 import { fromPartial } from "@total-typescript/shoehorn";
+import { ScrollBoxRenderable } from "@wincode/tui/core";
 import { act } from "react";
 import type { SessionCompaction } from "@/modules/sessions/compaction";
 import type { SessionMessage } from "@/modules/sessions/message";

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { RGBA } from "@opentui/core";
-import { testRender } from "@opentui/react/test-utils";
 import { InlineNotice, type InlineNoticeVariant } from "@wincode/tui";
+import { RGBA } from "@wincode/tui/core";
+import { testRender } from "@wincode/tui/testing";
 import { act } from "react";
 import { ThemeProvider } from "@/shared/providers/theme/theme-provider";
 import { DEFAULT_THEME } from "@/shared/providers/theme/themes";

@@ -1,5 +1,5 @@
-import type { RGBA } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard } from "@wincode/tui";
+import type { RGBA } from "@wincode/tui/core";
 import { Fragment, type ReactNode, useCallback, useEffect } from "react";
 import { fuzzyMatch } from "../fuzzy";
 import { useSearchableList } from "../hooks/use-searchable-list";

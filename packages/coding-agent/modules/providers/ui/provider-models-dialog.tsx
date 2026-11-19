@@ -1,5 +1,5 @@
-import { useTerminalDimensions } from "@opentui/react";
 import type { ProviderModel } from "@wincode/ai";
+import { useTerminalDimensions } from "@wincode/tui";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {

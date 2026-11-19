@@ -2,17 +2,6 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	CliRenderEvents,
-	MarkdownRenderable,
-	RGBA,
-	type ScrollBoxRenderable,
-	TextareaRenderable,
-} from "@opentui/core";
-import {
-	MockTreeSitterClient,
-	type TestRendererSetup,
-} from "@opentui/core/testing";
-import {
 	createMemoryHistory,
 	createRootRoute,
 	createRouter,
@@ -26,6 +15,17 @@ import type {
 } from "@wincode/agent-core";
 import { toSubmissionId } from "@wincode/agent-core";
 import type { ProviderModel, ThinkingLevel } from "@wincode/ai";
+import {
+	CliRenderEvents,
+	MarkdownRenderable,
+	RGBA,
+	type ScrollBoxRenderable,
+	TextareaRenderable,
+} from "@wincode/tui/core";
+import {
+	MockTreeSitterClient,
+	type TestRendererSetup,
+} from "@wincode/tui/testing";
 import { isUndefined } from "@wincode/utils";
 import { act, type ReactNode, useEffect, useState } from "react";
 import { AgentRegistryProvider } from "@/modules/agents";

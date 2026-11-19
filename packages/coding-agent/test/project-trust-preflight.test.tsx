@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { TestRendererSetup } from "@opentui/core/testing";
-import { createTestRenderer } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
+import type { TestRendererSetup } from "@wincode/tui/testing";
+import { createTestRenderer, testRender } from "@wincode/tui/testing";
 import { act, useEffect } from "react";
 import type { ProjectTrustPromptRequest } from "@/modules/project-trust/project-trust";
 import {

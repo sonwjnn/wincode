@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decodePasteBytes, PasteEvent } from "@opentui/core";
+import { decodePasteBytes, PasteEvent } from "@wincode/tui/core";
 import type { ClipboardImageResult } from "@/modules/sessions/clipboard-image";
 import type { SessionFilePart } from "@/modules/sessions/message";
 import { createComposerDocument } from "@/modules/sessions/ui/composer-document";

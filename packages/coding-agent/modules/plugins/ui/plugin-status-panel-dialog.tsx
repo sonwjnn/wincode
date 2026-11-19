@@ -1,4 +1,4 @@
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes } from "@wincode/tui/core";
 import { isUndefined } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {

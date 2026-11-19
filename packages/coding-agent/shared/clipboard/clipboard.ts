@@ -6,7 +6,7 @@ import {
 	createRendererClipboardAdapter,
 	type HostClipboardService,
 	type RendererClipboardBoundary,
-} from "@opentui/core";
+} from "@wincode/tui/core";
 import { getErrorMessage, logger } from "@wincode/utils";
 
 export type ClipboardContent = Readonly<{

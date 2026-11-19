@@ -1,5 +1,5 @@
-import type { InputRenderable } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard } from "@wincode/tui";
+import type { InputRenderable } from "@wincode/tui/core";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useRef } from "react";
 import type { SessionId } from "@/shared/identifiers";

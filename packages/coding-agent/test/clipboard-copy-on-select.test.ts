@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type Renderable, Selection } from "@opentui/core";
+import { type Renderable, Selection } from "@wincode/tui/core";
 import {
 	ClipboardTooLargeError,
 	handleSelection,

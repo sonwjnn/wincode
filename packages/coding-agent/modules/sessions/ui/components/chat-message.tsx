@@ -1,6 +1,6 @@
-import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/react";
 import type { SessionMessageId, SessionRecordId } from "@wincode/agent-core";
+import { useTerminalDimensions } from "@wincode/tui";
+import { TextAttributes } from "@wincode/tui/core";
 import { isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
 import { buildAgent } from "@/modules/agents";

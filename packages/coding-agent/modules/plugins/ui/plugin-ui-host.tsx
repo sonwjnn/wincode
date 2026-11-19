@@ -1,16 +1,16 @@
-import type {
-	BoxRenderable,
-	InputRenderable,
-	SelectRenderable,
-	TextareaRenderable,
-} from "@opentui/core";
-import { RGBA } from "@opentui/core";
 import {
 	createPortal,
 	useKeyboard,
 	useRenderer,
 	useTerminalDimensions,
-} from "@opentui/react";
+} from "@wincode/tui";
+import type {
+	BoxRenderable,
+	InputRenderable,
+	SelectRenderable,
+	TextareaRenderable,
+} from "@wincode/tui/core";
+import { RGBA } from "@wincode/tui/core";
 import { isUndefined, logger, omitUndefined } from "@wincode/utils";
 import {
 	Component,

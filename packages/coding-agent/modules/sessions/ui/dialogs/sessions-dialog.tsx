@@ -1,5 +1,5 @@
-import { RGBA } from "@opentui/core";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { RGBA } from "@wincode/tui/core";
 import { getErrorMessage } from "@wincode/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@/modules/sessions/session-pagination-types";

@@ -1,4 +1,4 @@
-import type { TextareaOptions } from "@opentui/core";
+import type { TextareaOptions } from "@wincode/tui/core";
 export const CHAT_TEXT_AREA_KEY_BINDINGS: NonNullable<
 	TextareaOptions["keyBindings"]
 > = [

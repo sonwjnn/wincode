@@ -1,5 +1,5 @@
-import { type CliRenderer, createCliRenderer } from "@opentui/core";
 import { createUiHost } from "@wincode/tui";
+import { type CliRenderer, createCliRenderer } from "@wincode/tui/core";
 import type { ReactNode } from "react";
 import {
 	ClipboardProvider,

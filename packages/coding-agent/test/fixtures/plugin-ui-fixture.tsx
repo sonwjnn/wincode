@@ -1,5 +1,3 @@
-import type { InputRenderable } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
 import type {
 	PluginFactory,
 	PluginUICustomBounds,
@@ -10,6 +8,8 @@ import type {
 	PluginUIFooterComponent,
 	PluginUIHeaderComponent,
 } from "@wincode/coding-agent";
+import { useKeyboard } from "@wincode/tui";
+import type { InputRenderable } from "@wincode/tui/core";
 import { useRef, useState } from "react";
 import { z } from "zod";
 

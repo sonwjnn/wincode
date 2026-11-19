@@ -1,4 +1,4 @@
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes } from "@wincode/tui/core";
 import { getContrastingTextColor } from "../providers/theme/color-contrast";
 import { useTheme } from "../providers/theme/theme-provider";
 

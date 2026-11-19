@@ -1,5 +1,5 @@
-import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/react";
+import { useTerminalDimensions } from "@wincode/tui";
+import { TextAttributes } from "@wincode/tui/core";
 import {
 	getErrorMessage,
 	isBoolean,

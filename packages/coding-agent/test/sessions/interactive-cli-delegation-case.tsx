@@ -1,16 +1,16 @@
 // The E2E test entrypoint preloads this setup before evaluating this case.
 
 import { afterAll, expect, mock, test } from "bun:test";
-import type { createCliRenderer } from "@opentui/core";
-import {
-	createTestRenderer,
-	type TestRendererSetup,
-} from "@opentui/core/testing";
 import type { ProviderChatEvent, ProviderChatRequest } from "@wincode/ai";
 import {
 	getSharedSubagentsTaskStore,
 	resolveSubagentsDatabasePath,
 } from "@wincode/subagents/plugin";
+import type { createCliRenderer } from "@wincode/tui/core";
+import {
+	createTestRenderer,
+	type TestRendererSetup,
+} from "@wincode/tui/testing";
 import { act } from "react";
 import { dispatch } from "@/modules/application/dispatch";
 import { createApplicationPluginComposition } from "@/modules/application/plugin-composition";

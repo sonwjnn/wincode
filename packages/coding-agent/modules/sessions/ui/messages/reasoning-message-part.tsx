@@ -1,4 +1,4 @@
-import type { BoxRenderable } from "@opentui/core";
+import type { BoxRenderable } from "@wincode/tui/core";
 import { useMemo, useRef } from "react";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { useTheme } from "@/shared/providers/theme/theme-provider";

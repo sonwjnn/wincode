@@ -1,5 +1,5 @@
-import { type BoxRenderable, TextAttributes } from "@opentui/core";
 import { formatModelTokenCount } from "@wincode/ai";
+import { type BoxRenderable, TextAttributes } from "@wincode/tui/core";
 import { useRef, useState } from "react";
 import { useInteractivePluginRuntime } from "@/modules/plugins/ui/plugin-renderer-boundary";
 import { useTheme } from "@/shared/providers/theme/theme-provider";

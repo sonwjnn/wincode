@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { TestRendererSetup } from "@opentui/core/testing";
 import { fromPartial } from "@total-typescript/shoehorn";
+import type { TestRendererSetup } from "@wincode/tui/testing";
 import { waitForTestFrame } from "../support/opentui";
 
 test("frame assertions survive a transient native OutputBusy lease without accepting an empty frame", async () => {
