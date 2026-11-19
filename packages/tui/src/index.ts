@@ -1,3 +1,4 @@
+export * from "./editor-autocomplete";
 export * from "./inline-notice";
 export * from "./multiline-editor";
 export * from "./react-hooks";

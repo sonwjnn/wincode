@@ -2,6 +2,8 @@
 
 import {
 	createUiHost,
+	EditorAutocomplete,
+	type EditorAutocompleteItem,
 	InlineNotice,
 	LocalStyleProvider,
 	MultilineEditor,
@@ -10,8 +12,30 @@ import {
 	type UiHost,
 	useKeyboard,
 } from "@wincode/tui";
-import { type CliRenderer, createCliRenderer } from "@wincode/tui/core";
-import { useState } from "react";
+import {
+	type CliRenderer,
+	createCliRenderer,
+	type TextareaRenderable,
+} from "@wincode/tui/core";
+import { useRef, useState } from "react";
+
+type NoteCompletion = EditorAutocompleteItem &
+	Readonly<{ replacement: string }>;
+
+const NOTE_COMPLETIONS: readonly NoteCompletion[] = [
+	{
+		description: "Capture decisions and owners",
+		id: "meeting-recap",
+		label: "Write a meeting recap",
+		replacement: "Decisions and owners from the meeting",
+	},
+	{
+		description: "Record the next milestone",
+		id: "launch-plan",
+		label: "Update the launch plan",
+		replacement: "Confirm the launch plan",
+	},
+];
 
 const APP_THEME: TuiTheme = {
 	colors: {
@@ -24,8 +48,21 @@ const APP_THEME: TuiTheme = {
 
 function IndependentApp({ onStop }: { onStop: () => void }) {
 	const [note, setNote] = useState("");
+	const [completionOpen, setCompletionOpen] = useState(false);
+	const [selectedCompletion, setSelectedCompletion] = useState(0);
+	const editorRef = useRef<TextareaRenderable>(null);
 	const savedNote = `Saved note: ${note}`;
 	useKeyboard((key) => {
+		if (completionOpen) {
+			return;
+		}
+		if (key.name === "space" && key.ctrl) {
+			key.preventDefault();
+			key.stopPropagation();
+			setSelectedCompletion(0);
+			setCompletionOpen(true);
+			return;
+		}
 		if (key.name === "escape") {
 			onStop();
 		}
@@ -37,14 +74,36 @@ function IndependentApp({ onStop }: { onStop: () => void }) {
 			<LocalStyleProvider colors={{ info: "#7ee787" }}>
 				<InlineNotice>Shared notice from @wincode/tui</InlineNotice>
 			</LocalStyleProvider>
-			<MultilineEditor
-				focused
-				height={4}
-				onChange={setNote}
-				placeholder="Write a note..."
-			/>
+			<box flexDirection="column" overflow="visible">
+				<EditorAutocomplete
+					active={completionOpen}
+					emptyMessage="No note suggestions"
+					items={NOTE_COMPLETIONS}
+					onApply={(item) => {
+						editorRef.current?.replaceText(item.replacement);
+						setNote(item.replacement);
+						setCompletionOpen(false);
+					}}
+					onCancel={() => {
+						setCompletionOpen(false);
+						setSelectedCompletion(0);
+					}}
+					onSelectedIndexChange={setSelectedCompletion}
+					open={completionOpen}
+					selectedIndex={selectedCompletion}
+				/>
+				<MultilineEditor
+					focused
+					height={4}
+					onChange={setNote}
+					placeholder="Write a note..."
+					ref={editorRef}
+				/>
+			</box>
 			<text height={savedNote.split("\n").length}>{savedNote}</text>
-			<text>Press Escape to quit.</text>
+			<text>
+				Press Ctrl+Space for note suggestions. Escape cancels or quits.
+			</text>
 		</box>
 	);
 }

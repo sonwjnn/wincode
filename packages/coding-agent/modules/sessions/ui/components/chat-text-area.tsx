@@ -1,6 +1,8 @@
 import * as fs from "node:fs/promises";
 import type { ThinkingSelection } from "@wincode/ai";
 import {
+	EditorAutocomplete,
+	type EditorAutocompleteItem,
 	MultilineEditor,
 	useKeyboard,
 	usePaste,
@@ -53,13 +55,13 @@ import { useTheme } from "@/shared/providers/theme/theme-provider";
 import { getThinkingLevelBorderColor } from "@/shared/providers/theme/themes";
 import { useToast } from "@/shared/providers/toast/toast-provider";
 import { BorderedContentBlock } from "@/shared/ui/bordered-content-block";
-import { SelectableList } from "@/shared/ui/selectable-list";
 import {
 	areFileMentionExtmarksCurrent,
 	normalizeFileTokensForTrimmedText,
 } from "../../attachments";
 import { readClipboardImage, readImagePath } from "../../clipboard-image";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
+import type { InputOverlayState } from "../../hooks/input-controller/types";
 import { useChatInputController } from "../../hooks/input-controller/use-chat-input-controller";
 import { expandPastedText, expandPastedTextInRange } from "../../pasted-text";
 import type { ChatPromptComposition, ChatPromptSubmission } from "../../utils";
@@ -94,18 +96,18 @@ const PLUGIN_EDITOR_KEYBINDINGS: readonly PluginEditorKeybinding[] =
 	Object.freeze(
 		CHAT_TEXT_AREA_KEY_BINDINGS.map((binding) => Object.freeze({ ...binding }))
 	);
-const toSelectableCommandItem = (item: CommandSuggestion) => ({
+const toEditorAutocompleteCommandItem = (item: CommandSuggestion) => ({
 	description: item.description,
 	id: item.id,
 	label: item.label,
 });
 
-const toSelectableFileMentionItem = (item: FileMentionOption) => ({
+const toEditorAutocompleteFileMentionItem = (item: FileMentionOption) => ({
 	id: item.path,
 	label: item.label,
 });
 
-const toSelectablePluginItem = (
+const toEditorAutocompletePluginItem = (
 	item: PluginAutocompleteItem,
 	index: number
 ) => ({
@@ -113,6 +115,35 @@ const toSelectablePluginItem = (
 	id: `${index}:${item.value}`,
 	label: item.label,
 });
+
+const getEditorAutocompleteItems = (
+	overlay: InputOverlayState
+): readonly EditorAutocompleteItem[] => {
+	switch (overlay.kind) {
+		case "command":
+			return overlay.items.map(toEditorAutocompleteCommandItem);
+		case "file-mention":
+			return overlay.items.map(toEditorAutocompleteFileMentionItem);
+		case "plugin-argument":
+		case "plugin-autocomplete":
+			return overlay.items.map(toEditorAutocompletePluginItem);
+		default:
+			return [];
+	}
+};
+
+const getEditorAutocompleteEmptyMessage = (
+	overlay: InputOverlayState
+): string => {
+	switch (overlay.kind) {
+		case "command":
+			return "No matching commands";
+		case "file-mention":
+			return "No matching files";
+		default:
+			return "No matching completions";
+	}
+};
 
 type ChatTextAreaProps = {
 	id: string;
@@ -622,26 +653,6 @@ export function ChatTextArea({
 			return;
 		}
 
-		if (!isNull(state.overlay.kind) && isTopLayer("command")) {
-			if (key.name === "escape") {
-				key.preventDefault();
-				actions.onEscape();
-				return;
-			}
-
-			if (key.name === "up") {
-				key.preventDefault();
-				actions.onArrowUp();
-				return;
-			}
-
-			if (key.name === "down") {
-				key.preventDefault();
-				actions.onArrowDown();
-				return;
-			}
-		}
-
 		if (
 			isTopLayer("base") &&
 			key.ctrl === false &&
@@ -743,77 +754,26 @@ export function ChatTextArea({
 			position="relative"
 			width="100%"
 		>
-			{state.overlay.kind === "command" && (
+			{state.overlay.kind !== null && (
 				<box bottom="100%" left={0} position="absolute" right={0} zIndex={10}>
-					<BorderedContentBlock
-						border={["left", "right"]}
-						borderColor={colors.borderActive}
-						colors={colors}
-						contentGap={0}
-						customBorderChars={{ vertical: "┃" }}
-						marginBottom={0}
-						paddingX={0}
-						paddingY={0}
-					>
-						<SelectableList
-							emptyMessage="No matching commands"
-							items={state.overlay.items.map(toSelectableCommandItem)}
-							onConfirm={actions.onItemExecute}
-							onSelect={actions.onItemSelect}
-							selectedIndex={state.overlay.selectedIndex}
-							widthBasis={state.overlay.allItems.map(toSelectableCommandItem)}
-						/>
-					</BorderedContentBlock>
+					<EditorAutocomplete
+						active={!disabled && isTopLayer("command")}
+						backgroundColor={colors.backgroundElement}
+						emptyMessage={getEditorAutocompleteEmptyMessage(state.overlay)}
+						items={getEditorAutocompleteItems(state.overlay)}
+						onApply={(_item, index) => actions.onItemExecute(index)}
+						onCancel={actions.onEscape}
+						onSelectedIndexChange={actions.onItemSelect}
+						open
+						selectedIndex={state.overlay.selectedIndex}
+						widthBasis={
+							state.overlay.kind === "command"
+								? state.overlay.allItems.map(toEditorAutocompleteCommandItem)
+								: undefined
+						}
+					/>
 				</box>
 			)}
-
-			{(state.overlay.kind === "plugin-autocomplete" ||
-				state.overlay.kind === "plugin-argument") && (
-				<box bottom="100%" left={0} position="absolute" right={0} zIndex={10}>
-					<BorderedContentBlock
-						border={["left", "right"]}
-						borderColor={colors.borderActive}
-						colors={colors}
-						contentGap={0}
-						customBorderChars={{ vertical: "┃" }}
-						marginBottom={0}
-						paddingX={0}
-						paddingY={0}
-					>
-						<SelectableList
-							emptyMessage="No matching completions"
-							items={state.overlay.items.map(toSelectablePluginItem)}
-							onConfirm={actions.onItemExecute}
-							onSelect={actions.onItemSelect}
-							selectedIndex={state.overlay.selectedIndex}
-						/>
-					</BorderedContentBlock>
-				</box>
-			)}
-
-			{state.overlay.kind === "file-mention" && (
-				<box bottom="100%" left={0} position="absolute" right={0} zIndex={10}>
-					<BorderedContentBlock
-						border={["left", "right"]}
-						borderColor={colors.borderActive}
-						colors={colors}
-						contentGap={0}
-						customBorderChars={{ vertical: "┃" }}
-						marginBottom={0}
-						paddingX={0}
-						paddingY={0}
-					>
-						<SelectableList
-							emptyMessage="No matching files"
-							items={state.overlay.items.map(toSelectableFileMentionItem)}
-							onConfirm={actions.onItemExecute}
-							onSelect={actions.onItemSelect}
-							selectedIndex={state.overlay.selectedIndex}
-						/>
-					</BorderedContentBlock>
-				</box>
-			)}
-
 			<ComposerTopBorder
 				activityIndicator={activityIndicator}
 				borderColor={borderColor}

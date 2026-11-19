@@ -88,3 +88,80 @@ test("an independent notes app returns multiline edits, pasted text, and selecte
 		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
 	}
 });
+
+test("an independent notes app applies its own completion and cancels without changing the draft", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({
+		height: 12,
+		kittyKeyboard: true,
+		width: 60,
+	});
+	let unmount = (): void => undefined;
+	await act(() => {
+		const host = startIndependentApp(setup.renderer, () => undefined);
+		unmount = () => host.unmount();
+	});
+
+	try {
+		await act(async () => {
+			await setup.mockInput.typeText("Draft note");
+		});
+		await act(async () => {
+			await setup.waitForFrame((frame) =>
+				frame.includes("Saved note: Draft note")
+			);
+		});
+
+		await act(async () => {
+			setup.mockInput.pressKey(" ", { ctrl: true });
+			await setup.flush();
+		});
+		await act(async () => {
+			await setup.waitForFrame((frame) =>
+				frame.includes("Write a meeting recap")
+			);
+		});
+		await act(async () => {
+			setup.mockInput.pressArrow("down");
+			await setup.flush();
+		});
+		await act(async () => {
+			setup.mockInput.pressKey("\u001b[27u");
+			await setup.flush();
+		});
+		await act(async () => {
+			await setup.waitForFrame(
+				(frame) =>
+					frame.includes("Saved note: Draft note") &&
+					!frame.includes("Write a meeting recap")
+			);
+		});
+
+		await act(async () => {
+			setup.mockInput.pressKey(" ", { ctrl: true });
+			await setup.flush();
+		});
+		await act(async () => {
+			await setup.waitForFrame((frame) =>
+				frame.includes("Update the launch plan")
+			);
+		});
+		await act(async () => {
+			setup.mockInput.pressArrow("down");
+			await setup.flush();
+		});
+		await act(async () => {
+			setup.mockInput.pressEnter();
+			await setup.flush();
+		});
+		await act(async () => {
+			await setup.waitForFrame((frame) =>
+				frame.includes("Saved note: Confirm the launch plan")
+			);
+		});
+	} finally {
+		await act(() => unmount());
+		await setup.dispose();
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});

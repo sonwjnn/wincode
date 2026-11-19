@@ -9,6 +9,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
 - `@wincode/tui`
   - `createUiHost`, `UiHost` — create a React root for a caller-owned renderer and manage its render/unmount lifecycle.
   - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
+  - `EditorAutocomplete`, `EditorAutocompleteItem`, `EditorAutocompleteProps` — reusable editor suggestion presentation, keyboard navigation, apply, and dismissal; the host supplies candidates and owns edits.
   - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
   - `createPortal`, `useAppContext`, `useFocus`, `useKeyboard`, `usePaste`, `useRenderer`, `useTerminalDimensions` — access host renderer context, focus, keyboard, paste, and terminal dimensions.
   - `LocalStyleColors`, `LocalStyleProvider`, `ThemeProvider`, `TuiTheme`, `TuiThemeColors`, `TuiThemeColor`, `useTheme` — provide a reactive theme and subtree-local color overrides.
@@ -22,7 +23,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
 - `@wincode/tui/jsx-runtime`: `Fragment`, `jsx`, `jsxs`, and the `JSX` type namespace.
 - `@wincode/tui/jsx-dev-runtime`: `Fragment`, `jsxDEV`, and the `JSX` type namespace.
 
-`@wincode/tui` owns the OpenTUI dependencies. Consumers share the host's React peer and set `compilerOptions.jsxImportSource` to `@wincode/tui`. Coding-Agent's project-trust UI, the reply-editor Plugin, and the independent example render the same `InlineNotice` component. Coding-Agent's Interactive Mode composer and the independent notes app use the same `MultilineEditor` export. Plugins use the host renderer and React root; independent applications own their own renderer lifecycle.
+`@wincode/tui` owns the OpenTUI dependencies. Consumers share the host's React peer and set `compilerOptions.jsxImportSource` to `@wincode/tui`. Coding-Agent's project-trust UI, the reply-editor Plugin, and the independent example render the same `InlineNotice` component. Coding-Agent's Interactive Mode composer and the independent notes app use the same `EditorAutocomplete` and `MultilineEditor` exports. Plugins use the host renderer and React root; independent applications own their own renderer lifecycle.
 
 ## React usage
 
@@ -80,7 +81,27 @@ renderer.destroy();
 
 `TuiTheme.colors` requires string tokens for `error`, `info`, `success`, and `warning`; additional colors may be grouped as string maps. `ThemeProvider` reacts when its `theme` prop changes. `LocalStyleProvider` merges overrides for its descendants only. `MultilineEditor` accepts OpenTUI React `TextareaProps` except its low-level `onContentChange` event, exposes `onChange(text)` for the full current text, and forwards a `TextareaRenderable` ref for host-specific handling. Its optional `onSubmit` is a host callback that owns the meaning of submission. `initialValue` sets the starting text; it is not a controlled `value` prop. Submission, prompt history, autocomplete sources, and editor keybinding policy remain with the host.
 
-The complete runnable independent notes app is [`examples/independent-app.tsx`](./examples/independent-app.tsx); run it with `bun run packages/tui/examples/independent-app.tsx`. Press Escape to unmount the React root and destroy its renderer.
+## Editor completion
+
+Mount `EditorAutocomplete` beside the editor and set `open` when the host has suggestions to show. Place it before `MultilineEditor` to show suggestions above the input. It renders a bounded list, wraps Up/Down navigation, applies the selected item on Enter or mouse click, and calls `onCancel` on Escape without changing editor contents. The host controls `active` so only the top keyboard layer handles input, maps its own candidates to `{ id, label, description? }`, and performs edits in `onApply`. Pass `backgroundColor` when the list overlays existing content so unselected rows cover the text behind them. The item type is generic, so host-owned fields such as a replacement string remain available to the callback.
+
+```tsx
+<EditorAutocomplete
+	active={completionOpen}
+	emptyMessage="No matching notes"
+	items={noteCompletions}
+	onApply={(completion) => {
+		editorRef.current?.replaceText(completion.replacement);
+		setCompletionOpen(false);
+	}}
+	onCancel={() => setCompletionOpen(false)}
+	onSelectedIndexChange={setSelectedIndex}
+	open={completionOpen}
+	selectedIndex={selectedIndex}
+/>
+```
+
+The runnable independent notes app demonstrates this API with note-specific candidates and edits. Run it with `bun run packages/tui/examples/independent-app.tsx`; Ctrl+Space opens suggestions, Enter applies the selected edit, and Escape dismisses suggestions without changing the note. Escape when the list is closed unmounts the React root and destroys the app-owned renderer.
 
 ## Architectural boundary
 

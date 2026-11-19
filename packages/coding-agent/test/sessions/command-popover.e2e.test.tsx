@@ -748,15 +748,17 @@ test("a slash inside prose opens Skill search and Escape keeps the text", async 
 			await activeSetup.mockInput.typeText("please review /mdl");
 		});
 		await waitForSessionFrame(activeSetup, (frame) =>
-			frame.includes("skill:model-4o")
+			frame.includes("Model helper skill")
 		);
 
+		await act(() => activeSetup.mockInput.pressArrow("down"));
 		// A lone ESC byte reaches the key parser only after its
 		// escape-sequence timeout, so give it real time before asserting.
 		await act(() => activeSetup.mockInput.pressEscape());
 		await Bun.sleep(120);
 		await settleSessionUi(activeSetup);
 		expect(activeSetup.captureCharFrame()).toContain("please review /mdl");
+		expect(activeSetup.captureCharFrame()).not.toContain("Model helper skill");
 
 		await act(() => activeSetup.mockInput.pressEnter());
 		await waitForSessionFrame(
