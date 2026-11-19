@@ -1,4 +1,4 @@
-import { useKeyboard, useTerminalDimensions } from "@wincode/tui";
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@wincode/tui";
 import type { BoxRenderable } from "@wincode/tui/core";
 import { RGBA, TextAttributes } from "@wincode/tui/core";
 import { isNull, isUndefined } from "@wincode/utils";
@@ -170,12 +170,32 @@ function resolvePadding(
 
 function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 	const dimensions = useTerminalDimensions();
+	const renderer = useRenderer();
+	const previousFocusedRenderable = useRef(
+		config.restoreFocus ? renderer.currentFocusedRenderable : null
+	);
+	const restoreFocusRef = useRef(config.restoreFocus === true);
+	const isTopRef = useRef(isTop);
+	isTopRef.current = isTop;
 	const { colors } = useTheme();
 	const dialogRef = useRef<BoxRenderable>(null);
 	const initialHeightRef = useRef<number | null>(null);
 	const [anchoredTop, setAnchoredTop] = useState<number | null>(null);
 
 	const layerId = config.layerId ?? "";
+
+	useLayoutEffect(
+		() => () => {
+			if (!(restoreFocusRef.current && isTopRef.current)) {
+				return;
+			}
+			const previous = previousFocusedRenderable.current;
+			if (previous && !previous.isDestroyed) {
+				previous.focus();
+			}
+		},
+		[]
+	);
 
 	const { title, children, padding } = config;
 	const resolvedPadding = resolvePadding(DEFAULT_DIALOG_PADDING, padding);

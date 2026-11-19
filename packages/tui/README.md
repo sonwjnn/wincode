@@ -14,6 +14,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
   - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
   - `EditorAutocomplete`, `EditorAutocompleteItem`, `EditorAutocompleteProps` — reusable editor suggestion presentation, keyboard navigation, apply, and dismissal; the host supplies candidates and owns edits.
   - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
+  - `SearchablePicker`, `SearchablePickerProps`, `SearchablePickerItemState` — render a focused fuzzy-search input and selectable, scrollable results.
   - `StatusFeedback`, `StatusFeedbackProps`, `StatusFeedbackProgress` — present loading, determinate progress, success, or error without owning operation policy.
   - `NotificationToast`, `NotificationToastProps`, `NotificationVariant` — present a themed notification; the caller owns visibility and dismissal.
   - `createPortal`, `useAppContext`, `useFocus`, `useKeyboard`, `usePaste`, `useRenderer`, `useTerminalDimensions` — access host renderer context, focus, keyboard, paste, and terminal dimensions.
@@ -171,6 +172,28 @@ bun run packages/tui/examples/prompt-flow.tsx
 ```
 
 In the example, Enter advances from text entry to confirmation, Escape cancels a prompt, and a second Escape exits after the result is shown. The independent app owns its renderer teardown and imports no Coding-Agent modules.
+
+The UI-host-only consumer remains available at [`examples/independent-app.tsx`](./examples/independent-app.tsx); press Escape to unmount the React root and destroy its renderer.
+
+## Searchable picker
+
+`SearchablePicker` focuses its search input when mounted, fuzzy-matches `getSearchText` values, and keeps the highlighted result in view while navigating. Up/down wrap through selectable results; Enter calls `onSelect`; an empty result state remains searchable so users can edit or clear the query. `onHighlight` supports reversible previews, while `isItemActive` lets the caller mark its original choice. Supply `matchesSearch` when a consumer needs domain-specific matching. The caller owns cancellation, domain state, and keyboard-layer policy; set `isKeyboardActive` when the picker is mounted under an inactive host layer.
+
+```tsx
+<SearchablePicker
+  items={timeZones}
+  getKey={(zone) => zone.id}
+  getSearchText={(zone) => [zone.label, zone.id]}
+  isItemActive={(zone) => zone.id === currentTimeZone}
+  onHighlight={(zone) => preview(zone.id)}
+  onSelect={(zone) => confirm(zone.id)}
+  renderItem={(zone, { isActive }) => (
+    <text>{`${isActive ? "● " : "  "}${zone.label}`}</text>
+  )}
+/>
+```
+
+The component requires `ThemeProvider` and a caller-owned OpenTUI renderer/UI host. For a runnable independent application that owns startup, selection/cancel behavior, and renderer teardown, run `bun run --cwd packages/tui example:time-zone-picker`.
 
 ## Architectural boundary
 

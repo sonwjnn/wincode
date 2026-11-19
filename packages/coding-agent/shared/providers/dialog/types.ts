@@ -20,4 +20,5 @@ export type DialogConfig = {
 	layerId?: string;
 	width?: number;
 	padding?: DialogPadding;
+	restoreFocus?: boolean;
 };

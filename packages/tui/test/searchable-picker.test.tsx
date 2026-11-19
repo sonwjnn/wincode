@@ -1,0 +1,214 @@
+/** @jsxImportSource @wincode/tui */
+
+import { expect, test } from "bun:test";
+import {
+	createUiHost,
+	SearchablePicker,
+	ThemeProvider,
+	type TuiTheme,
+} from "@wincode/tui";
+import { RGBA } from "@wincode/tui/core";
+import { createTestRenderer } from "@wincode/tui/testing";
+import { act } from "react";
+
+const selectionColor = "#112233";
+const theme: TuiTheme = {
+	colors: {
+		error: "#ff7b72",
+		info: "#58a6ff",
+		selection: selectionColor,
+		text: "#ffffff",
+		textMuted: "#aaaaaa",
+		success: "#3fb950",
+		warning: "#d29922",
+	},
+};
+
+const destinations = [
+	{ id: "new-york", label: "New York" },
+	{ id: "london", label: "London" },
+];
+
+test("searchable picker accepts a fuzzy match typed immediately after opening", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({ height: 12, width: 48 });
+	const host = createUiHost(setup.renderer);
+	const selections: string[] = [];
+
+	try {
+		await act(() =>
+			host.render(
+				<ThemeProvider theme={theme}>
+					<SearchablePicker
+						emptyText="No matching time zones"
+						getKey={(item) => item.id}
+						getSearchText={(item) => item.label}
+						items={destinations}
+						onSelect={(item) => selections.push(item.id)}
+						placeholder="Search time zones"
+						renderItem={(item) => <text>{item.label}</text>}
+					/>
+				</ThemeProvider>
+			)
+		);
+		await setup.flush();
+
+		await act(async () => setup.mockInput.typeText("nwy"));
+		await setup.flush();
+		expect(setup.captureCharFrame()).toContain("New York");
+		expect(setup.captureCharFrame()).not.toContain("London");
+
+		await act(async () => setup.mockInput.pressEnter());
+		await setup.flush();
+		expect(selections).toEqual(["new-york"]);
+	} finally {
+		await act(() => host.unmount());
+		await act(async () => setup.dispose());
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});
+
+test("searchable picker recovers from an empty search when the user clears it", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({ height: 12, width: 48 });
+	const host = createUiHost(setup.renderer);
+
+	try {
+		await act(() =>
+			host.render(
+				<ThemeProvider theme={theme}>
+					<SearchablePicker
+						emptyText="No matching time zones"
+						getKey={(item) => item.id}
+						getSearchText={(item) => item.label}
+						items={destinations}
+						onSelect={() => undefined}
+						placeholder="Search time zones"
+						renderItem={(item) => <text>{item.label}</text>}
+					/>
+				</ThemeProvider>
+			)
+		);
+		await setup.flush();
+
+		await act(async () => setup.mockInput.typeText("z"));
+		await setup.flush();
+		expect(setup.captureCharFrame()).toContain("No matching time zones");
+		expect(setup.captureCharFrame()).not.toContain("New York");
+
+		await act(() => setup.mockInput.pressBackspace());
+		await act(async () => {
+			await setup.waitForFrame((frame) => frame.includes("New York"));
+		});
+		expect(setup.captureCharFrame()).toContain("New York");
+		expect(setup.captureCharFrame()).toContain("London");
+	} finally {
+		await act(() => host.unmount());
+		await act(async () => setup.dispose());
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});
+
+test("an existing choice is highlighted and scrolled into view on open", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({ height: 8, width: 24 });
+	const host = createUiHost(setup.renderer);
+	const items = Array.from({ length: 12 }, (_, index) => ({
+		id: `zone-${index}`,
+		label: `Zone ${index}`,
+	}));
+	const highlighted: string[] = [];
+
+	try {
+		await act(() =>
+			host.render(
+				<ThemeProvider theme={theme}>
+					<SearchablePicker
+						getKey={(item) => item.id}
+						getSearchText={(item) => item.label}
+						isItemActive={(item) => item.id === "zone-8"}
+						items={items}
+						maxVisibleItems={3}
+						onHighlight={(item) => highlighted.push(item.id)}
+						onSelect={() => undefined}
+						renderItem={(item, state) => (
+							<text>{`${state.isActive ? "● " : "  "}${item.label}`}</text>
+						)}
+					/>
+				</ThemeProvider>
+			)
+		);
+		await act(async () => {
+			await setup.waitForFrame((frame) => frame.includes("● Zone 8"));
+		});
+		expect(setup.captureCharFrame()).toContain("● Zone 8");
+		expect(setup.captureCharFrame()).not.toContain("Zone 0");
+		expect(highlighted.at(-1)).toBe("zone-8");
+	} finally {
+		await act(() => host.unmount());
+		await act(async () => setup.dispose());
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});
+
+test("navigation keeps the highlighted original choice visible in a small terminal", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({ height: 8, width: 24 });
+	const host = createUiHost(setup.renderer);
+	const items = Array.from({ length: 12 }, (_, index) => ({
+		id: `zone-${index}`,
+		label: `Zone ${index}`,
+	}));
+	const highlighted: string[] = [];
+	const confirmed: string[] = [];
+
+	try {
+		await act(() =>
+			host.render(
+				<ThemeProvider theme={theme}>
+					<SearchablePicker
+						getKey={(item) => item.id}
+						getSearchText={(item) => item.label}
+						initialSelectedIndex={0}
+						isItemActive={(item) => item.id === "zone-0"}
+						items={items}
+						maxVisibleItems={3}
+						onHighlight={(item) => highlighted.push(item.id)}
+						onSelect={(item) => confirmed.push(item.id)}
+						renderItem={(item, state) => (
+							<text>{`${state.isActive ? "● " : "  "}${item.label}`}</text>
+						)}
+					/>
+				</ThemeProvider>
+			)
+		);
+		await setup.flush();
+		expect(setup.captureCharFrame()).toContain("● Zone 0");
+
+		await act(() => {
+			for (let index = 0; index < 8; index += 1) {
+				setup.mockInput.pressArrow("down");
+			}
+		});
+		await setup.flush();
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("Zone 8");
+		expect(frame).not.toContain("Zone 0");
+		expect(highlighted.at(-1)).toBe("zone-8");
+		const selectedSpan = setup
+			.captureSpans()
+			.lines.flatMap((line) => line.spans)
+			.find((span) => span.text.includes("Zone 8"));
+		expect(selectedSpan?.bg.toInts()).toEqual(
+			RGBA.fromHex(selectionColor).toInts()
+		);
+
+		await act(() => setup.mockInput.pressEnter());
+		await setup.flush();
+		expect(confirmed).toEqual(["zone-8"]);
+	} finally {
+		await act(() => host.unmount());
+		await act(async () => setup.dispose());
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});
