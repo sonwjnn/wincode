@@ -1,11 +1,13 @@
 import * as path from "node:path";
-import { isUndefined } from "@wincode/utils";
+import {
+	findSubsequenceMatch as findStringSubsequenceMatch,
+	isUndefined,
+} from "@wincode/utils";
 import {
 	createWorkspaceSandbox,
 	defaultWorkspaceSandbox,
 	type WorkspacePolicy,
 } from "@/modules/tools";
-import { findSubsequenceMatch as findStringSubsequenceMatch } from "@/shared/utils/string-matching";
 import type { FileMentionOption } from "../types";
 import {
 	compareCanonicalRelativePaths,

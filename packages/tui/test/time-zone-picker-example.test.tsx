@@ -24,7 +24,7 @@ function trackRendererTeardown(setup: TestRendererSetup) {
 
 test("the offline time-zone app confirms a choice and destroys its renderer", async () => {
 	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-	const setup = await createTestRenderer({ height: 10, width: 48 });
+	const setup = await createTestRenderer({ height: 12, width: 48 });
 	const destroyCalls = trackRendererTeardown(setup);
 	let currentTimeZone = initialTimeZone;
 	let run: Promise<string | undefined> | undefined;
@@ -42,6 +42,8 @@ test("the offline time-zone app confirms a choice and destroys its renderer", as
 		await setup.waitForFrame((frame) =>
 			frame.includes("Current time zone: America/New_York")
 		);
+		await setup.flush();
+		await setup.waitForFrame((frame) => frame.includes("● New York"));
 		expect(setup.captureCharFrame()).toContain(
 			"Current time zone: America/New_York"
 		);
@@ -64,9 +66,39 @@ test("the offline time-zone app confirms a choice and destroys its renderer", as
 	}
 });
 
+test("a small terminal keeps the active time zone and keyboard cues in view", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({ height: 8, width: 48 });
+	const destroyCalls = trackRendererTeardown(setup);
+	let run: Promise<string | undefined> | undefined;
+
+	try {
+		await act(() => {
+			run = runTimeZonePicker({
+				createRenderer: () => setup.renderer,
+				initialTimeZone,
+			});
+		});
+		await setup.flush();
+		await setup.waitForFrame((frame) => frame.includes("● New York"));
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("● New York");
+		expect(frame).toContain("esc cancel");
+
+		await act(async () => {
+			setup.mockInput.pressEscape();
+			await run;
+		});
+		expect(destroyCalls()).toBe(1);
+	} finally {
+		await act(async () => setup.dispose());
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});
+
 test("cancelling the offline time-zone app preserves the prior choice and tears down", async () => {
 	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-	const setup = await createTestRenderer({ height: 10, width: 48 });
+	const setup = await createTestRenderer({ height: 12, width: 48 });
 	const destroyCalls = trackRendererTeardown(setup);
 	let currentTimeZone = initialTimeZone;
 	let run: Promise<string | undefined> | undefined;

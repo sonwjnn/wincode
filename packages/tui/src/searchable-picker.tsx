@@ -1,4 +1,5 @@
 import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
+import { findSubsequenceMatch } from "@wincode/utils";
 import {
 	Fragment,
 	type ReactNode,
@@ -47,18 +48,6 @@ function normalizeSearchText(value: string): string {
 		.replace(/\s+/g, " ");
 }
 
-function matchesSubsequence(candidate: string, query: string): boolean {
-	let candidateIndex = 0;
-	for (const character of query) {
-		const matchIndex = candidate.indexOf(character, candidateIndex);
-		if (matchIndex < 0) {
-			return false;
-		}
-		candidateIndex = matchIndex + character.length;
-	}
-	return true;
-}
-
 function matchesFuzzySearch(query: string, text: string): boolean {
 	const normalizedQuery = normalizeSearchText(query);
 	if (normalizedQuery.length === 0) {
@@ -72,7 +61,7 @@ function matchesFuzzySearch(query: string, text: string): boolean {
 		return (
 			normalizedText.includes(token) ||
 			compactText.includes(compactToken) ||
-			matchesSubsequence(compactText, compactToken)
+			findSubsequenceMatch(compactText, compactToken) !== null
 		);
 	});
 }
@@ -256,7 +245,7 @@ export function SearchablePicker<T>({
 	return (
 		<box flexDirection="column" gap={1}>
 			<input
-				focused
+				focused={isKeyboardActive}
 				focusedTextColor={textColor}
 				onContentChange={handleContentChange}
 				placeholder={placeholder}

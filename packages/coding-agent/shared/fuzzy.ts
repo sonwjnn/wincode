@@ -1,4 +1,4 @@
-import { scoreSubsequenceMatch } from "@/shared/utils/string-matching";
+import { scoreSubsequenceMatch } from "@wincode/utils";
 
 /**
  * Fuzzy matching utilities.

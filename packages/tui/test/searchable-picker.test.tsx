@@ -151,6 +151,44 @@ test("an existing choice is highlighted and scrolled into view on open", async (
 	}
 });
 
+test("an inactive picker leaves search input with the host layer", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({ height: 12, width: 48 });
+	const host = createUiHost(setup.renderer);
+
+	try {
+		await act(() =>
+			host.render(
+				<ThemeProvider theme={theme}>
+					<box flexDirection="column">
+						<input focused placeholder="Host input" />
+						<SearchablePicker
+							getKey={(item) => item.id}
+							getSearchText={(item) => item.label}
+							isKeyboardActive={false}
+							items={destinations}
+							onSelect={() => undefined}
+							placeholder="Picker search"
+							renderItem={(item) => <text>{item.label}</text>}
+						/>
+					</box>
+				</ThemeProvider>
+			)
+		);
+		await setup.flush();
+
+		await act(async () => setup.mockInput.typeText("host"));
+		await setup.flush();
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("host");
+		expect(frame).toContain("New York");
+	} finally {
+		await act(() => host.unmount());
+		await act(async () => setup.dispose());
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});
+
 test("navigation keeps the highlighted original choice visible in a small terminal", async () => {
 	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 	const setup = await createTestRenderer({ height: 8, width: 24 });

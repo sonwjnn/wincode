@@ -1,4 +1,4 @@
-import { SearchablePicker } from "@wincode/tui";
+import { SearchablePicker, useTerminalDimensions } from "@wincode/tui";
 import { useCallback, useEffect, useRef } from "react";
 import { fuzzyMatch } from "@/shared/fuzzy";
 import {
@@ -13,7 +13,12 @@ import type { Theme } from "@/shared/providers/theme/themes";
 import { THEMES } from "@/shared/providers/theme/themes";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
+// Dialog title/padding and picker input/footer spacing use these rows.
+const THEME_DIALOG_CHROME_ROWS = 8;
+
 export const ThemeDialogContent = () => {
+	const { height } = useTerminalDimensions();
+	const maxVisibleItems = Math.max(1, height - THEME_DIALOG_CHROME_ROWS);
 	const dialog = useDialog();
 	const dialogLayerId = useDialogLayer();
 	const { isTopLayer } = useKeyboardLayer();
@@ -58,6 +63,7 @@ export const ThemeDialogContent = () => {
 			isKeyboardActive={isTopLayer(dialogLayerId)}
 			items={THEMES}
 			matchesSearch={(theme, query) => fuzzyMatch(query, theme.name).matches}
+			maxVisibleItems={maxVisibleItems}
 			onHighlight={handleHighlight}
 			onSelect={handleSelect}
 			placeholder="Search themes"

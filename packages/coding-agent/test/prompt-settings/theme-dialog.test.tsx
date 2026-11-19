@@ -52,7 +52,7 @@ function ThemeDialogHarness() {
 	);
 }
 
-async function renderThemeDialog() {
+async function renderThemeDialog(height = 18) {
 	const setup = await testRender(
 		<ThemeProvider themeName={DEFAULT_THEME.name}>
 			<KeyboardLayerProvider>
@@ -61,11 +61,24 @@ async function renderThemeDialog() {
 				</DialogProvider>
 			</KeyboardLayerProvider>
 		</ThemeProvider>,
-		{ height: 18, width: 54 }
+		{ height, width: 54 }
 	);
 	await flushTestRenderer(setup, 2);
 	return setup;
 }
+
+test("theme picker keeps its result and keyboard cues inside a small dialog", async () => {
+	const setup = await renderThemeDialog(10);
+
+	try {
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("Search themes");
+		expect(frame).toContain("●");
+		expect(frame).toContain("↑↓ navigate · enter select");
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
 
 test("theme search previews fuzzy matches and Escape restores theme and host focus", async () => {
 	const initialTheme = DEFAULT_THEME;

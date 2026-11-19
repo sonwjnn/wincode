@@ -145,6 +145,26 @@ The runnable independent consumer is [`examples/independent-app.tsx`](./examples
 
 These components do not start, retry, recover, time out, or dismiss operations. The host decides what to notify and controls how long a toast stays visible or which input dismisses it. The independent example uses the same components as Coding-Agent, with its own renderer lifecycle and D-key dismissal.
 
+## Searchable picker
+
+`SearchablePicker` focuses its search input when mounted, fuzzy-matches `getSearchText` values, and keeps the highlighted result in view while navigating. Up/down wrap through selectable results; Enter calls `onSelect`; an empty result state remains searchable so users can edit or clear the query. `onHighlight` supports reversible previews, while `isItemActive` lets the caller mark its original choice. `maxVisibleItems` bounds the result viewport; when embedding the picker, set it to the rows remaining after the host's own headings, spacing, and padding. Supply `matchesSearch` when a consumer needs domain-specific matching. The caller owns cancellation and domain state. Set `isKeyboardActive={false}` under an inactive host layer to leave the search input unfocused and disable the picker's keyboard handler.
+
+```tsx
+<SearchablePicker
+	items={timeZones}
+	getKey={(zone) => zone.id}
+	getSearchText={(zone) => [zone.label, zone.id]}
+	isItemActive={(zone) => zone.id === currentTimeZone}
+	onHighlight={(zone) => preview(zone.id)}
+	onSelect={(zone) => confirm(zone.id)}
+	renderItem={(zone, { isActive }) => (
+		<text>{`${isActive ? "● " : "  "}${zone.label}`}</text>
+	)}
+/>
+```
+
+The component requires `ThemeProvider` and a caller-owned OpenTUI renderer/UI host. The offline, independent time-zone app owns startup, selection/cancel behavior, and renderer teardown; run it with `bun run --cwd packages/tui example:time-zone-picker`.
+
 ## Input and confirmation dialogs
 
 `InputDialog` and `ConfirmDialog` are reusable dialog content, not a modal host. The caller supplies the host-owned active layer and wraps the content in its own bounded dialog shell. `active` must be true only for the top layer so an underlying input cannot consume keys. The caller owns Escape dismissal, modal admission, reserved keys, and focus restoration; the components submit text on Enter or return the selected Yes/No answer.
@@ -174,26 +194,6 @@ bun run packages/tui/examples/prompt-flow.tsx
 In the example, Enter advances from text entry to confirmation, Escape cancels a prompt, and a second Escape exits after the result is shown. The independent app owns its renderer teardown and imports no Coding-Agent modules.
 
 The UI-host-only consumer remains available at [`examples/independent-app.tsx`](./examples/independent-app.tsx); press Escape to unmount the React root and destroy its renderer.
-
-## Searchable picker
-
-`SearchablePicker` focuses its search input when mounted, fuzzy-matches `getSearchText` values, and keeps the highlighted result in view while navigating. Up/down wrap through selectable results; Enter calls `onSelect`; an empty result state remains searchable so users can edit or clear the query. `onHighlight` supports reversible previews, while `isItemActive` lets the caller mark its original choice. Supply `matchesSearch` when a consumer needs domain-specific matching. The caller owns cancellation, domain state, and keyboard-layer policy; set `isKeyboardActive` when the picker is mounted under an inactive host layer.
-
-```tsx
-<SearchablePicker
-  items={timeZones}
-  getKey={(zone) => zone.id}
-  getSearchText={(zone) => [zone.label, zone.id]}
-  isItemActive={(zone) => zone.id === currentTimeZone}
-  onHighlight={(zone) => preview(zone.id)}
-  onSelect={(zone) => confirm(zone.id)}
-  renderItem={(zone, { isActive }) => (
-    <text>{`${isActive ? "● " : "  "}${zone.label}`}</text>
-  )}
-/>
-```
-
-The component requires `ThemeProvider` and a caller-owned OpenTUI renderer/UI host. For a runnable independent application that owns startup, selection/cancel behavior, and renderer teardown, run `bun run --cwd packages/tui example:time-zone-picker`.
 
 ## Architectural boundary
 

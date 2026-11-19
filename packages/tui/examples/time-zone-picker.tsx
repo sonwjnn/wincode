@@ -6,6 +6,7 @@ import {
 	ThemeProvider,
 	type TuiTheme,
 	useKeyboard,
+	useTerminalDimensions,
 	useTheme,
 } from "@wincode/tui";
 import { type CliRenderer, createCliRenderer } from "@wincode/tui/core";
@@ -38,16 +39,27 @@ const TIME_ZONES = [
 ] as const;
 
 type TimeZoneOption = (typeof TIME_ZONES)[number];
+// The search input, footer, and two vertical gaps are outside the result viewport.
+const PICKER_CHROME_ROWS = 4;
 type TimeZonePickerProps = Readonly<{
 	initialTimeZone: string;
 	onFinish: (timeZone: string | undefined) => void;
 }>;
 
 function TimeZonePicker({ initialTimeZone, onFinish }: TimeZonePickerProps) {
+	const { height } = useTerminalDimensions();
 	const { colors } = useTheme();
 	const textColor = typeof colors.text === "string" ? colors.text : colors.info;
 	const mutedTextColor =
 		typeof colors.textMuted === "string" ? colors.textMuted : colors.info;
+	const showTitle = height >= 8;
+	const showCurrentTimeZone = height >= 12;
+	const headerRows = Number(showTitle) + Number(showCurrentTimeZone);
+	const outerChromeRows = (showTitle ? 1 : 0) + headerRows * 2;
+	const maxVisibleItems = Math.max(
+		1,
+		height - outerChromeRows - PICKER_CHROME_ROWS
+	);
 	const handleCancel = useCallback(() => onFinish(undefined), [onFinish]);
 
 	useKeyboard((key) => {
@@ -58,9 +70,13 @@ function TimeZonePicker({ initialTimeZone, onFinish }: TimeZonePickerProps) {
 	});
 
 	return (
-		<box flexDirection="column" gap={1} padding={1}>
-			<text>Offline time-zone picker</text>
-			<text fg={mutedTextColor}>{`Current time zone: ${initialTimeZone}`}</text>
+		<box flexDirection="column" gap={1} paddingTop={showTitle ? 1 : 0}>
+			{showTitle ? <text>Offline time-zone picker</text> : null}
+			{showCurrentTimeZone ? (
+				<text
+					fg={mutedTextColor}
+				>{`Current time zone: ${initialTimeZone}`}</text>
+			) : null}
 			<SearchablePicker<TimeZoneOption>
 				emptyText="No matching time zones"
 				footer={
@@ -72,6 +88,7 @@ function TimeZonePicker({ initialTimeZone, onFinish }: TimeZonePickerProps) {
 				getSearchText={(timeZone) => [timeZone.label, timeZone.id]}
 				isItemActive={(timeZone) => timeZone.id === initialTimeZone}
 				items={TIME_ZONES}
+				maxVisibleItems={maxVisibleItems}
 				onSelect={(timeZone) => onFinish(timeZone.id)}
 				placeholder="Search time zones"
 				renderItem={(timeZone, { isActive, isSelected }) => (
