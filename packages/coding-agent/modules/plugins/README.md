@@ -147,7 +147,38 @@ Tool handlers can register background promises with `context.registerBackgroundW
 
 ## Plugin UI
 
-Import shared React components and hooks such as `InlineNotice` and `useKeyboard` from `@wincode/tui`, and renderer types from `@wincode/tui/core`. For TSX, set `compilerOptions.jsxImportSource` to `@wincode/tui`. Resolve the same `@wincode/tui` and React instances as the host; don't bundle private copies. Plugins supply components to the host rather than creating their own renderer or React root.
+### Package dependencies and TSX
+
+Wincode loads Plugin files but does not install dependencies from a Plugin manifest. A distributable Plugin should declare host-provided packages as peers and keep matching packages available in its authoring environment. For a Plugin that imports `PluginFactory`, shared TUI components, and React hooks:
+
+```json
+{
+  "peerDependencies": {
+    "@wincode/coding-agent": "^0.1.0",
+    "@wincode/tui": "^0.1.0",
+    "react": ">=19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.10",
+    "@wincode/coding-agent": "^0.1.0",
+    "@wincode/tui": "^0.1.0",
+    "react": ">=19.2.0"
+  }
+}
+```
+
+Keep these packages external when bundling; at runtime, the Plugin must resolve the same `@wincode/tui` and React instances as Wincode. `@wincode/tui` owns `@opentui/core` and `@opentui/react`; do not declare those implementation dependencies directly. For TSX, configure the automatic JSX runtime:
+
+```json
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "@wincode/tui"
+  }
+}
+```
+
+Import shared React components and hooks such as `InlineNotice` and `useKeyboard` from `@wincode/tui`, and renderer types from `@wincode/tui/core`. Plugins supply components to the host rather than creating their own renderer or React root.
 
 Session-bound Plugin callbacks, Tools, Commands, Provider `connect()` callbacks, and Status Panel `runAction()` handlers receive `ui`. In Interactive Mode, while that Session has a mounted host view, the host renders dialogs and notifications; Plugin code describes the request but does not create terminal components:
 

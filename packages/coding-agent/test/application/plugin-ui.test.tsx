@@ -78,8 +78,8 @@ import {
 	ThemeProvider,
 	useTheme,
 } from "@/shared/providers/theme/theme-provider";
+import { THEMES } from "@/shared/providers/theme/themes";
 import { ToastProvider } from "@/shared/providers/toast/toast-provider";
-import customEditorPlugin from "../../examples/custom-editor-plugin";
 import pluginUIContributionsPlugin from "../../examples/plugin-ui-contributions-plugin";
 import pluginUiFixture from "../fixtures/plugin-ui-fixture";
 import pluginUiOtherFixture from "../fixtures/plugin-ui-other-fixture";
@@ -348,14 +348,15 @@ const pluginUiTestEnvironment = async (
 				factory: pluginUiOtherFixture,
 				id: "plugin_ui_other_fixture",
 			},
-			{ factory: customEditorPlugin, id: "custom_editor" },
 			{
 				factory: pluginUIContributionsPlugin,
 				id: "issue_tracker_ui",
 			},
 			...additionalPlugins,
 		],
-		cliPaths: [],
+		cliPaths: [
+			path.join(import.meta.dir, "../../examples/custom-editor-plugin.tsx"),
+		],
 		config: {
 			configStore,
 			cwd: workspace,
@@ -2860,7 +2861,7 @@ test("Interactive Mode binds the custom editor host for its mounted Session and 
 	}
 });
 
-test("the verified author example opens a React editor and returns its response", async () => {
+test("the file-backed author Plugin loads through the CLI path, renders the shared notice with the host theme, and returns the reply", async () => {
 	const environment = await pluginUiTestEnvironment();
 	try {
 		const { result } = await environment.executeCommand(
@@ -2873,10 +2874,47 @@ test("the verified author example opens a React editor and returns its response"
 		);
 		expect(environment.setup.captureCharFrame()).toContain("Enter:");
 
+		const opencodeTheme = THEMES.find(({ name }) => name === "opencode");
+		if (opencodeTheme === undefined) {
+			throw new Error("The opencode theme is unavailable.");
+		}
+		const noticeSpan = environment.setup
+			.captureSpans()
+			.lines.flatMap(({ spans }) => spans)
+			.find(({ text }) => text.includes("Reply to the current message"));
+		expect(noticeSpan?.fg.toInts()).toEqual(
+			RGBA.fromHex(opencodeTheme.colors.info).toInts()
+		);
+
 		await act(() => environment.setup.mockInput.typeText("Example response"));
 		await act(() => environment.setup.mockInput.pressEnter());
 		await flushTestRenderer(environment.setup, 2);
 		expect(await result).toBe("Example response");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Escape dismisses the file-backed author UI and returns to the host composer", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"custom_editor",
+			"reply-editor"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Reply to the current message"
+		);
+
+		await environment.pressEscape();
+
+		expect(await result).toBe("Reply editor dismissed.");
+		expect(environment.setup.captureCharFrame()).toContain("Fixture composer");
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Reply to the current message"
+		);
 	} finally {
 		await environment.dispose();
 	}

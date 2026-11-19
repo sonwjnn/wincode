@@ -90,7 +90,11 @@
   },
   "overrides": [
     {
-      "includes": ["packages/coding-agent/**", "packages/tui/examples/**"],
+      "includes": [
+        "packages/coding-agent/**",
+        "packages/tui/examples/**",
+        "packages/tui/test/**"
+      ],
       "linter": {
         "rules": {
           "style": {

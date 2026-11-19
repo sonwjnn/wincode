@@ -1,9 +1,4 @@
 import { expect, test } from "bun:test";
-import { RGBA } from "@opentui/core";
-import {
-	createTestRenderer,
-	type TestRendererSetup,
-} from "@opentui/core/testing";
 import {
 	createUiHost,
 	InlineNotice,
@@ -12,6 +7,11 @@ import {
 	type TuiTheme,
 	useTheme,
 } from "@wincode/tui";
+import { RGBA } from "@wincode/tui/core";
+import {
+	createTestRenderer,
+	type TestRendererSetup,
+} from "@wincode/tui/testing";
 import { act } from "react";
 
 const createTheme = (info: string): TuiTheme => ({

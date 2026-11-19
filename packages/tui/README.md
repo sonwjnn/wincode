@@ -4,15 +4,22 @@ Reusable OpenTUI + React UI facilities for Coding-Agent, Plugins, and independen
 
 ## Public exports
 
-| Export | Import surface | Purpose |
-| --- | --- | --- |
-| `createUiHost`, `UiHost` | `@wincode/tui` | Create a React root for a caller-owned OpenTUI renderer; render React nodes and unmount the root. |
-| `ThemeProvider`, `useTheme`, `TuiTheme`, `TuiThemeColors`, `TuiThemeColor` | `@wincode/tui` | Provide a reactive theme and read its colors from React components. |
-| `LocalStyleProvider`, `LocalStyleColors` | `@wincode/tui` | Override color tokens within one React subtree without changing the application theme. |
-| `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` | `@wincode/tui` | Render a wrapped notice using the active theme's `info`, `success`, `warning`, or `error` token. |
-| Renderer hooks and `createPortal` | `@wincode/tui` | Use the host renderer, terminal dimensions, keyboard, focus, or paste. |
-| Renderer primitives and types | `@wincode/tui/core` | Create or interact with a renderer without importing the React entry point. |
-| Test renderer helpers | `@wincode/tui/testing` | Render and exercise terminal UI in tests. |
+The public API is grouped by import path. OpenTUI-backed exports are re-exported through `@wincode/tui`; Coding-Agent and Plugins should not import those names directly from OpenTUI.
+
+- `@wincode/tui`
+  - `createUiHost`, `UiHost` — create a React root for a caller-owned renderer and manage its render/unmount lifecycle.
+  - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
+  - `createPortal`, `useAppContext`, `useFocus`, `useKeyboard`, `usePaste`, `useRenderer`, `useTerminalDimensions` — access host renderer context, focus, keyboard, paste, and terminal dimensions.
+  - `LocalStyleColors`, `LocalStyleProvider`, `ThemeProvider`, `TuiTheme`, `TuiThemeColors`, `TuiThemeColor`, `useTheme` — provide a reactive theme and subtree-local color overrides.
+- `@wincode/tui/core`
+  - Renderer: `CapturedFrame`, `CliRenderEvents`, `CliRenderer`, `createCliRenderer`, `NativeResourceOwner`, `Renderable`, `RendererClipboardBoundary`.
+  - Renderables and selection: `BoxRenderable`, `InputRenderable`, `MarkdownRenderable`, `MouseButton`, `ScrollBoxRenderable`, `SelectRenderable`, `Selection`, `SelectionBehavior`, `TextareaRenderable`.
+  - Clipboard: `ClipboardReadOptions`, `ClipboardReadResult`, `ClipboardService`, `ClipboardWriteOptions`, `ClipboardWriteResult`, `HostClipboardService`, `createClipboard`, `createHostClipboard`, `createRendererClipboardAdapter`.
+  - Events and text: `Extmark`, `KeyEvent`, `MouseEvent`, `PasteEvent`, `RGBA`, `SimpleHighlight`, `StyleDefinitionInput`, `SyntaxStyle`, `TextAttributes`, `TextareaOptions`.
+  - Utilities: `decodePasteBytes`, `getTreeSitterClient`, `pathToFiletype`, `TreeSitterClient`.
+- `@wincode/tui/testing`: `createTestRenderer`, `MockTreeSitterClient`, `MouseButtons`, `TestRecorder`, `TestRendererOptions`, `TestRendererSetup`, `testRender` — render and exercise terminal UI in tests.
+- `@wincode/tui/jsx-runtime`: `Fragment`, `jsx`, `jsxs`, and the `JSX` type namespace.
+- `@wincode/tui/jsx-dev-runtime`: `Fragment`, `jsxDEV`, and the `JSX` type namespace.
 
 `@wincode/tui` owns the OpenTUI dependencies. Consumers share the host's React peer and set `compilerOptions.jsxImportSource` to `@wincode/tui`. Coding-Agent's project-trust UI, the reply-editor Plugin, and the independent example render the same `InlineNotice` component. Plugins use the host renderer and React root; independent applications own their own renderer lifecycle.
 

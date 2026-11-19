@@ -35,7 +35,8 @@ import {
 
 type RpcFrame = Record<string, unknown>;
 
-const reactRuntimeModulePattern = /(^|\/)react(\/|$)|@opentui\/react/;
+const terminalUiModulePattern =
+	/(^|\/)react(\/|$)|@opentui\/(?:core|react)(\/|$)|@wincode\/tui(\/|$)|packages\/tui\/src\//;
 
 type ScheduledRpcUITimer = {
 	callback: () => void;
@@ -132,24 +133,28 @@ const startRpc = async (
 	};
 };
 
-test("RPC runner dependency graph does not load React rendering modules", async () => {
-	const outdir = await fs.mkdtemp(path.join("/tmp", "wincode-rpc-ui-bundle-"));
+test("JSON, Print, and RPC entrypoints stay data-only without React or terminal UI", async () => {
+	const outdir = await fs.mkdtemp(
+		path.join("/tmp", "wincode-noninteractive-ui-bundle-")
+	);
 	try {
 		const result = await Bun.build({
 			entrypoints: [
+				path.join(import.meta.dir, "../modules/application/modes/json.ts"),
+				path.join(import.meta.dir, "../modules/application/modes/print.ts"),
 				path.join(import.meta.dir, "../modules/application/rpc/runner.ts"),
 			],
 			metafile: true,
 			outdir,
 			target: "bun",
 		});
-		const reactModules = Object.keys(result.metafile?.inputs ?? {}).filter(
-			(input) => reactRuntimeModulePattern.test(input)
+		const terminalUiModules = Object.keys(result.metafile?.inputs ?? {}).filter(
+			(input) => terminalUiModulePattern.test(input)
 		);
 
 		expect(result.success).toBe(true);
 		expect(result.metafile).toBeDefined();
-		expect(reactModules).toEqual([]);
+		expect(terminalUiModules).toEqual([]);
 	} finally {
 		await fs.rm(outdir, { force: true, recursive: true });
 	}

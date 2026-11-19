@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { createTestRenderer } from "@opentui/core/testing";
 import { createUiHost } from "@wincode/tui";
+import { createTestRenderer } from "@wincode/tui/testing";
 import { act } from "react";
 
 test("an independent app renders through a UI host without surrendering renderer teardown", async () => {
