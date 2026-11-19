@@ -22,6 +22,7 @@
   "scripts": {
     "check-types": "tsc --noEmit",
     "example:time-zone-picker": "bun run examples/time-zone-picker.tsx",
+    "example:clock-format-settings": "bun run examples/clock-format-settings.tsx",
     "test": "bun ../../scripts/test-portfolio.ts default --package tui"
   },
   "peerDependencies": {

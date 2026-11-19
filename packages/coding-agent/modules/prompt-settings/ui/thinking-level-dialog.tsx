@@ -1,24 +1,16 @@
 import type { ThinkingLevel } from "@wincode/ai";
+import { SettingsList, type SettingsListOption } from "@wincode/tui";
 import { useCallback } from "react";
 import {
 	useDialog,
 	useDialogEscape,
 } from "@/shared/providers/dialog/dialog-provider";
-import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
-import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
-import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
 type ThinkingLevelDialogContentProps = {
 	currentThinkingLevel: ThinkingLevel | undefined;
 	thinkingLevels: readonly ThinkingLevel[];
 	onSelectThinkingLevel: (thinkingLevel: ThinkingLevel) => void;
 };
-
-type ThinkingLevelOption = Readonly<{
-	label: string;
-	value: ThinkingLevel;
-}>;
 
 const thinkingLevelLabel = (level: ThinkingLevel): string => {
 	if (level === "xhigh") {
@@ -33,16 +25,17 @@ export const ThinkingLevelDialogContent = ({
 	onSelectThinkingLevel,
 }: ThinkingLevelDialogContentProps) => {
 	const dialog = useDialog();
-	const { colors } = useTheme();
-	const selectedTextColor = getContrastingTextColor(colors.selection);
-	const options: ThinkingLevelOption[] = thinkingLevels.map((value) => ({
-		label: thinkingLevelLabel(value),
-		value,
-	}));
+	const options: SettingsListOption<ThinkingLevel>[] = thinkingLevels.map(
+		(value) => ({
+			id: `level:${value}`,
+			label: thinkingLevelLabel(value),
+			value,
+		})
+	);
 
 	const handleSelect = useCallback(
-		(option: ThinkingLevelOption) => {
-			onSelectThinkingLevel(option.value);
+		(level: ThinkingLevel) => {
+			onSelectThinkingLevel(level);
 			dialog.close();
 		},
 		[dialog, onSelectThinkingLevel]
@@ -51,33 +44,12 @@ export const ThinkingLevelDialogContent = ({
 	useDialogEscape();
 
 	return (
-		<SearchListDialogWrapper
+		<SettingsList
+			currentValue={currentThinkingLevel}
 			emptyText="No thinking levels available for this model"
-			getKey={(option) => `level:${option.value}`}
-			getSearchText={(option) => option.label}
-			isItemActive={(option) => option.value === currentThinkingLevel}
-			items={options}
 			onSelect={handleSelect}
+			options={options}
 			placeholder="Search thinking levels"
-			renderItem={(option, isSelected, isActive) => {
-				const activeTextColor = isActive ? colors.secondary : colors.text;
-				const labelColor = isSelected ? selectedTextColor : activeTextColor;
-				return (
-					<SelectableDialogItem
-						status={
-							isActive ? (
-								<text fg={labelColor} selectable={false}>
-									{"●"}
-								</text>
-							) : null
-						}
-					>
-						<text fg={labelColor} selectable={false}>
-							{option.label}
-						</text>
-					</SelectableDialogItem>
-				);
-			}}
 		/>
 	);
 };

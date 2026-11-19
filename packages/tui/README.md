@@ -15,6 +15,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
   - `EditorAutocomplete`, `EditorAutocompleteItem`, `EditorAutocompleteProps` — reusable editor suggestion presentation, keyboard navigation, apply, and dismissal; the host supplies candidates and owns edits.
   - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
   - `SearchablePicker`, `SearchablePickerProps`, `SearchablePickerItemState` — render a focused fuzzy-search input and selectable, scrollable results.
+  - `SettingsList`, `SettingsListProps`, `SettingsListOption` — present app-provided setting choices, mark the current value, and report only explicitly selected values.
   - `StatusFeedback`, `StatusFeedbackProps`, `StatusFeedbackProgress` — present loading, determinate progress, success, or error without owning operation policy.
   - `NotificationToast`, `NotificationToastProps`, `NotificationVariant` — present a themed notification; the caller owns visibility and dismissal.
   - `createPortal`, `useAppContext`, `useFocus`, `useKeyboard`, `usePaste`, `useRenderer`, `useTerminalDimensions` — access host renderer context, focus, keyboard, paste, and terminal dimensions.
@@ -164,6 +165,23 @@ These components do not start, retry, recover, time out, or dismiss operations. 
 ```
 
 The component requires `ThemeProvider` and a caller-owned OpenTUI renderer/UI host. The offline, independent time-zone app owns startup, selection/cancel behavior, and renderer teardown; run it with `bun run --cwd packages/tui example:time-zone-picker`.
+
+## Settings lists
+
+`SettingsList` presents typed options, marks the current value, and calls `onSelect` only when the user confirms an option. It reuses `SearchablePicker` navigation and filtering; the caller owns cancellation, persistence, and the setting's schema. The Coding-Agent thinking-level dialog and independent clock-format app use the same component.
+
+```tsx
+<SettingsList
+  currentValue={clockFormat}
+  options={[
+    { id: "12-hour", label: "12-hour clock", value: "12-hour" },
+    { id: "24-hour", label: "24-hour clock", value: "24-hour" },
+  ]}
+  onSelect={setClockFormat}
+/>
+```
+
+The independent clock-format example preserves the current value on Escape; run it with `bun run --cwd packages/tui example:clock-format-settings`.
 
 ## Input and confirmation dialogs
 

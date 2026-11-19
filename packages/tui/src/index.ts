@@ -6,5 +6,6 @@ export * from "./inline-notice";
 export * from "./multiline-editor";
 export * from "./react-hooks";
 export * from "./searchable-picker";
+export * from "./settings-list";
 export * from "./theme";
 export * from "./ui-host";
