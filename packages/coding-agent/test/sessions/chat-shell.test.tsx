@@ -1781,6 +1781,7 @@ describe("ChatShell activity footer", () => {
 			await flushUi(setup);
 			const frame = requireTestFrame(setup);
 			expect(frame).toContain("Retrying (1/3) in 2s...");
+			expect(frame).toContain("[━━━─────]");
 			expect(frame).toContain("esc to cancel");
 			expect(frame).not.toContain("Working...");
 			expect(

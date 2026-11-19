@@ -1,16 +1,14 @@
-import type { AgentId, ModelRetryStatus } from "@wincode/agent-core";
+import type { ModelRetryStatus } from "@wincode/agent-core";
+import { LocalStyleProvider, StatusFeedback } from "@wincode/tui";
 import { useEffect, useState } from "react";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { Spinner } from "@/shared/ui/spinner";
 
 /** One transient status, cleared by the runtime before dispatch or termination. */
 export function ModelRetryIndicator({
 	status,
-	agent,
 	operation = "agent-turn",
 }: {
 	status: ModelRetryStatus;
-	agent: AgentId;
 	operation?: "agent-turn" | "compaction-summary";
 }) {
 	const { colors } = useTheme();
@@ -25,11 +23,12 @@ export function ModelRetryIndicator({
 			? "Retrying compaction summary"
 			: "Retrying";
 	return (
-		<box alignItems="center" flexDirection="row" gap={1}>
-			<Spinner agent={agent} color={colors.warning} />
-			<text
-				fg={colors.textMuted}
-			>{`${label} (${status.attempt}/${status.maxAttempts}) in ${seconds}s... (esc to cancel)`}</text>
-		</box>
+		<LocalStyleProvider colors={{ info: colors.warning }}>
+			<StatusFeedback
+				message={`${label} (${status.attempt}/${status.maxAttempts}) in ${seconds}s... (esc to cancel)`}
+				progress={{ current: status.attempt, total: status.maxAttempts }}
+				status="progress"
+			/>
+		</LocalStyleProvider>
 	);
 }

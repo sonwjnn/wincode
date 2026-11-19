@@ -1,4 +1,4 @@
-import { useTerminalDimensions } from "@wincode/tui";
+import { NotificationToast } from "@wincode/tui";
 import type { ReactNode } from "react";
 import {
 	createContext,
@@ -8,10 +8,8 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { useTheme } from "../theme/theme-provider";
 import type {
 	ToastOptions,
-	ToastVariant,
 	UiNotification,
 	UiNotificationAnchor,
 	UiNotificationLevel,
@@ -238,47 +236,14 @@ export function ToastProvider({ children }: ToastProviderProps) {
 		<ToastContext.Provider value={value}>
 			<SessionNotificationContext.Provider value={sessionNotificationStore}>
 				{children}
-				<Toast currentToast={currentToast} />
+				{currentToast ? (
+					<NotificationToast
+						message={currentToast.message}
+						variant={currentToast.variant}
+						width={currentToast.width}
+					/>
+				) : null}
 			</SessionNotificationContext.Provider>
 		</ToastContext.Provider>
-	);
-}
-
-type ToastProps = {
-	currentToast: ToastOptions | null;
-};
-
-function Toast({ currentToast }: ToastProps) {
-	const { width } = useTerminalDimensions();
-	const { colors } = useTheme();
-
-	if (!currentToast) {
-		return null;
-	}
-
-	const variantColors: Record<ToastVariant, string> = {
-		success: colors.success,
-		warning: colors.warning,
-		error: colors.error,
-		info: colors.info,
-	};
-
-	return (
-		<box
-			position="absolute"
-			right={2}
-			top={2}
-			width={Math.max(1, Math.min(currentToast.width ?? 60, width - 6))}
-		>
-			<box backgroundColor={colors.backgroundMenu} paddingX={2} paddingY={1}>
-				<text
-					fg={variantColors[currentToast.variant ?? "info"]}
-					width="100%"
-					wrapMode="word"
-				>
-					{currentToast.message}
-				</text>
-			</box>
-		</box>
 	);
 }

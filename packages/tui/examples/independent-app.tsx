@@ -7,6 +7,8 @@ import {
 	InlineNotice,
 	LocalStyleProvider,
 	MultilineEditor,
+	NotificationToast,
+	StatusFeedback,
 	ThemeProvider,
 	type TuiTheme,
 	type UiHost,
@@ -52,6 +54,7 @@ function IndependentApp({ onStop }: { onStop: () => void }) {
 	const [selectedCompletion, setSelectedCompletion] = useState(0);
 	const editorRef = useRef<TextareaRenderable>(null);
 	const savedNote = `Saved note: ${note}`;
+	const [showNotification, setShowNotification] = useState(true);
 	useKeyboard((key) => {
 		if (completionOpen) {
 			return;
@@ -65,6 +68,8 @@ function IndependentApp({ onStop }: { onStop: () => void }) {
 		}
 		if (key.name === "escape") {
 			onStop();
+		} else if (key.name === "d") {
+			setShowNotification(false);
 		}
 	});
 
@@ -102,8 +107,29 @@ function IndependentApp({ onStop }: { onStop: () => void }) {
 			</box>
 			<text height={savedNote.split("\n").length}>{savedNote}</text>
 			<text>
-				Press Ctrl+Space for note suggestions. Escape cancels or quits.
+				Press Ctrl+Space for note suggestions. D dismisses the notification; Escape cancels or quits.
 			</text>
+			<box flexDirection="column" gap={1} paddingTop={4}>
+				<LocalStyleProvider colors={{ error: "#ff78c6", info: "#7ee787" }}>
+					<StatusFeedback
+						message="Loading local configuration"
+						status="loading"
+					/>
+					<StatusFeedback
+						message="Indexing files"
+						progress={{ current: 2, total: 4 }}
+						status="progress"
+					/>
+					<StatusFeedback message="Workspace ready" status="success" />
+					<StatusFeedback message="Local operation failed" status="error" />
+					{showNotification ? (
+						<NotificationToast
+							message="Offline example notification"
+							variant="error"
+						/>
+					) : null}
+				</LocalStyleProvider>
+			</box>
 		</box>
 	);
 }

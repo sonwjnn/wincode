@@ -12,6 +12,8 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
   - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
   - `EditorAutocomplete`, `EditorAutocompleteItem`, `EditorAutocompleteProps` — reusable editor suggestion presentation, keyboard navigation, apply, and dismissal; the host supplies candidates and owns edits.
   - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
+  - `StatusFeedback`, `StatusFeedbackProps`, `StatusFeedbackProgress` — present loading, determinate progress, success, or error without owning operation policy.
+  - `NotificationToast`, `NotificationToastProps`, `NotificationVariant` — present a themed notification; the caller owns visibility and dismissal.
   - `createPortal`, `useAppContext`, `useFocus`, `useKeyboard`, `usePaste`, `useRenderer`, `useTerminalDimensions` — access host renderer context, focus, keyboard, paste, and terminal dimensions.
   - `LocalStyleColors`, `LocalStyleProvider`, `ThemeProvider`, `TuiTheme`, `TuiThemeColors`, `TuiThemeColor`, `useTheme` — provide a reactive theme and subtree-local color overrides.
 - `@wincode/tui/bounded-content-panel`
@@ -26,7 +28,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
 - `@wincode/tui/jsx-runtime`: `Fragment`, `jsx`, `jsxs`, and the `JSX` type namespace.
 - `@wincode/tui/jsx-dev-runtime`: `Fragment`, `jsxDEV`, and the `JSX` type namespace.
 
-`@wincode/tui` owns the OpenTUI dependencies. Consumers share the host's React peer and set `compilerOptions.jsxImportSource` to `@wincode/tui`. Coding-Agent's project-trust UI, the reply-editor Plugin, and the independent example render the same `InlineNotice` component. Coding-Agent's Interactive Mode composer and the independent notes app use the same `EditorAutocomplete` and `MultilineEditor` exports. Plugins use the host renderer and React root; independent applications own their own renderer lifecycle.
+`@wincode/tui` owns the OpenTUI dependencies. Consumers share the host's React peer and set `compilerOptions.jsxImportSource` to `@wincode/tui`. Coding-Agent's project-trust UI, the reply-editor Plugin, and the independent example render the same `InlineNotice` component. Coding-Agent's Interactive Mode composer and the independent notes app use the same `EditorAutocomplete` and `MultilineEditor` exports. Coding-Agent and the independent example also use the same public feedback compositions. Plugins use the host renderer and React root; independent applications own their own renderer lifecycle.
 
 ## React usage
 
@@ -121,6 +123,24 @@ import { BoundedContentPanel } from "@wincode/tui";
 ```
 
 The runnable independent consumer is [`examples/independent-app.tsx`](./examples/independent-app.tsx). The offline Markdown viewer is [`examples/offline-markdown-viewer.tsx`](./examples/offline-markdown-viewer.tsx); run it with `bun packages/tui/examples/offline-markdown-viewer.tsx`. It owns its renderer, wraps `BoundedContentPanel` in one `scrollbox`, and exits on Escape.
+
+## Operation feedback
+
+`StatusFeedback` renders an operation state from caller-owned data. `status="loading"` shows an animated indicator; `status="progress"` requires `{ current, total }` and shows a bounded progress bar; `success` and `error` show themed completion markers. `NotificationToast` renders a notification variant in the terminal corner. Both components inherit the active `ThemeProvider` theme and subtree-local `LocalStyleProvider` overrides.
+
+```tsx
+<StatusFeedback message="Connecting..." status="loading" />
+<StatusFeedback
+	message="Retrying (2/4)"
+	progress={{ current: 2, total: 4 }}
+	status="progress"
+/>
+{notificationVisible ? (
+	<NotificationToast message="Connection failed" variant="error" />
+) : null}
+```
+
+These components do not start, retry, recover, time out, or dismiss operations. The host decides what to notify and controls how long a toast stays visible or which input dismisses it. The independent example uses the same components as Coding-Agent, with its own renderer lifecycle and D-key dismissal.
 
 ## Architectural boundary
 

@@ -5,7 +5,7 @@ import { startIndependentApp } from "../examples/independent-app";
 
 test("an independent consumer renders shared UI and keeps renderer teardown application-owned", async () => {
 	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-	const setup = await createTestRenderer({ height: 8, width: 60 });
+	const setup = await createTestRenderer({ height: 16, width: 80 });
 	let destroyCalls = 0;
 	const destroyRenderer = setup.renderer.destroy.bind(setup.renderer);
 	setup.renderer.destroy = () => {
@@ -22,11 +22,18 @@ test("an independent consumer renders shared UI and keeps renderer teardown appl
 
 	try {
 		await setup.flush();
-		expect(setup.captureCharFrame()).toContain(
-			"Independent OpenTUI + React app"
-		);
-		expect(setup.captureCharFrame()).toContain(
-			"Shared notice from @wincode/tui"
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("Independent OpenTUI + React app");
+		expect(frame).toContain("Loading local configuration");
+		expect(frame).toContain("Indexing files");
+		expect(frame).toContain("Workspace ready");
+		expect(frame).toContain("Local operation failed");
+		expect(frame).toContain("Offline example notification");
+
+		await act(() => setup.mockInput.pressKey("d"));
+		await setup.flush();
+		expect(setup.captureCharFrame()).not.toContain(
+			"Offline example notification"
 		);
 
 		await act(() => unmount());
