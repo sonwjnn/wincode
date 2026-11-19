@@ -1,6 +1,11 @@
 import * as fs from "node:fs/promises";
 import type { ThinkingSelection } from "@wincode/ai";
-import { useKeyboard, usePaste, useTerminalDimensions } from "@wincode/tui";
+import {
+	MultilineEditor,
+	useKeyboard,
+	usePaste,
+	useTerminalDimensions,
+} from "@wincode/tui";
 import {
 	decodePasteBytes,
 	type PasteEvent,
@@ -699,13 +704,13 @@ export function ChatTextArea({
 			statusBarThinkingSelection?.thinkingLevel !== undefined);
 	const defaultEditor = (
 		<DefaultComposerEditorSlot onMount={markDefaultEditorMounted}>
-			<textarea
+			<MultilineEditor
 				flexGrow={1}
 				focused={isFocused}
 				focusedTextColor={disabled ? colors.textDisabled : colors.text}
 				id={id}
 				keyBindings={CHAT_TEXT_AREA_KEY_BINDINGS}
-				onContentChange={handleTextareaContentChange}
+				onChange={handleTextareaContentChange}
 				onCursorChange={actions.onCursorChange}
 				placeholder="Ask anything..."
 				placeholderColor={colors.textMuted}

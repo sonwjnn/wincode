@@ -3095,6 +3095,46 @@ test("custom editor exposes real composer submit, history, configured keys, and 
 	}
 });
 
+test("Interactive Mode returns multiline composer edits, paste, and selection through submission", async () => {
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{ kittyKeyboard: true },
+		false,
+		[],
+		undefined,
+		false,
+		true
+	);
+	try {
+		await act(async () => {
+			await environment.setup.mockInput.typeText("first");
+			await flushTestRenderer(environment.setup, 3);
+			environment.setup.mockInput.pressEnter({ shift: true });
+			await flushTestRenderer(environment.setup, 3);
+			await environment.setup.mockInput.pasteBracketedText("second");
+			await flushTestRenderer(environment.setup, 3);
+			environment.setup.mockInput.pressArrow("left", { shift: true });
+			await flushTestRenderer(environment.setup, 2);
+			await environment.setup.mockInput.pasteBracketedText("!");
+			await flushTestRenderer(environment.setup, 3);
+		});
+
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("first");
+		expect(frame).toContain("secon!");
+
+		await act(async () => {
+			environment.setup.mockInput.pressEnter();
+			await flushTestRenderer(environment.setup, 3);
+		});
+		expect(environment.realComposerState.submittedTexts).toEqual([
+			"first\nsecon!",
+		]);
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("replacement Plugin editors keep ordinary Up and Down keys for local navigation", async () => {
 	const environment = await pluginUiTestEnvironment(
 		"interactive",

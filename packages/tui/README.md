@@ -9,6 +9,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
 - `@wincode/tui`
   - `createUiHost`, `UiHost` — create a React root for a caller-owned renderer and manage its render/unmount lifecycle.
   - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
+  - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
   - `createPortal`, `useAppContext`, `useFocus`, `useKeyboard`, `usePaste`, `useRenderer`, `useTerminalDimensions` — access host renderer context, focus, keyboard, paste, and terminal dimensions.
   - `LocalStyleColors`, `LocalStyleProvider`, `ThemeProvider`, `TuiTheme`, `TuiThemeColors`, `TuiThemeColor`, `useTheme` — provide a reactive theme and subtree-local color overrides.
 - `@wincode/tui/core`
@@ -21,7 +22,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
 - `@wincode/tui/jsx-runtime`: `Fragment`, `jsx`, `jsxs`, and the `JSX` type namespace.
 - `@wincode/tui/jsx-dev-runtime`: `Fragment`, `jsxDEV`, and the `JSX` type namespace.
 
-`@wincode/tui` owns the OpenTUI dependencies. Consumers share the host's React peer and set `compilerOptions.jsxImportSource` to `@wincode/tui`. Coding-Agent's project-trust UI, the reply-editor Plugin, and the independent example render the same `InlineNotice` component. Plugins use the host renderer and React root; independent applications own their own renderer lifecycle.
+`@wincode/tui` owns the OpenTUI dependencies. Consumers share the host's React peer and set `compilerOptions.jsxImportSource` to `@wincode/tui`. Coding-Agent's project-trust UI, the reply-editor Plugin, and the independent example render the same `InlineNotice` component. Coding-Agent's Interactive Mode composer and the independent notes app use the same `MultilineEditor` export. Plugins use the host renderer and React root; independent applications own their own renderer lifecycle.
 
 ## React usage
 
@@ -31,9 +32,11 @@ import {
 	createUiHost,
 	InlineNotice,
 	LocalStyleProvider,
+	MultilineEditor,
 	ThemeProvider,
 	type TuiTheme,
 } from "@wincode/tui";
+import { useState } from "react";
 
 const theme: TuiTheme = {
 	colors: {
@@ -44,12 +47,28 @@ const theme: TuiTheme = {
 	},
 };
 
+function Notes() {
+	const [note, setNote] = useState("");
+	return (
+		<box flexDirection="column" gap={1}>
+			<InlineNotice>Ready</InlineNotice>
+			<MultilineEditor
+				focused
+				height={4}
+				onChange={setNote}
+				placeholder="Write a note..."
+			/>
+			<text height={Math.max(1, note.split("\n").length)}>{`Current note: ${note}`}</text>
+		</box>
+	);
+}
+
 const renderer = await createCliRenderer({ exitOnCtrlC: false });
 const host = createUiHost(renderer);
 host.render(
 	<ThemeProvider theme={theme}>
 		<LocalStyleProvider colors={{ info: "#7ee787" }}>
-			<InlineNotice>Ready</InlineNotice>
+			<Notes />
 		</LocalStyleProvider>
 	</ThemeProvider>
 );
@@ -59,7 +78,9 @@ host.unmount();
 renderer.destroy();
 ```
 
-`TuiTheme.colors` requires string tokens for `error`, `info`, `success`, and `warning`; additional colors may be grouped as string maps. `ThemeProvider` reacts when its `theme` prop changes. `LocalStyleProvider` merges overrides for its descendants only. The complete runnable independent consumer is [`examples/independent-app.tsx`](./examples/independent-app.tsx); press Escape to unmount the React root and destroy its renderer.
+`TuiTheme.colors` requires string tokens for `error`, `info`, `success`, and `warning`; additional colors may be grouped as string maps. `ThemeProvider` reacts when its `theme` prop changes. `LocalStyleProvider` merges overrides for its descendants only. `MultilineEditor` accepts OpenTUI React `TextareaProps` except its low-level `onContentChange` event, exposes `onChange(text)` for the full current text, and forwards a `TextareaRenderable` ref for host-specific handling. Its optional `onSubmit` is a host callback that owns the meaning of submission. `initialValue` sets the starting text; it is not a controlled `value` prop. Submission, prompt history, autocomplete sources, and editor keybinding policy remain with the host.
+
+The complete runnable independent notes app is [`examples/independent-app.tsx`](./examples/independent-app.tsx); run it with `bun run packages/tui/examples/independent-app.tsx`. Press Escape to unmount the React root and destroy its renderer.
 
 ## Architectural boundary
 

@@ -37,3 +37,54 @@ test("an independent consumer renders shared UI and keeps renderer teardown appl
 	}
 	expect(destroyCalls).toBe(1);
 });
+
+test("an independent notes app returns multiline edits, pasted text, and selected replacements to its host", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({
+		height: 12,
+		kittyKeyboard: true,
+		width: 60,
+	});
+	let unmount = (): void => undefined;
+	await act(() => {
+		const host = startIndependentApp(setup.renderer, () => undefined);
+		unmount = () => host.unmount();
+	});
+
+	try {
+		await act(async () => {
+			await setup.mockInput.typeText("first");
+			await setup.flush();
+		});
+		await act(async () => {
+			setup.mockInput.pressEnter();
+			await setup.flush();
+		});
+		await act(async () => {
+			await setup.mockInput.pasteBracketedText("second");
+			await setup.flush();
+		});
+		await act(async () => {
+			setup.mockInput.pressArrow("left", { shift: true });
+			await setup.flush();
+		});
+		await act(async () => {
+			await setup.mockInput.pasteBracketedText("!");
+			await setup.flush();
+		});
+		await act(async () => setup.flush());
+
+		const frame = await setup.waitForFrame((candidate) => {
+			const lines = candidate.split("\n").map((line) => line.trim());
+			return lines.includes("Saved note: first") && lines.includes("secon!");
+		});
+		const lines = frame.split("\n").map((line) => line.trim());
+		const savedNoteLine = lines.indexOf("Saved note: first");
+		expect(savedNoteLine).toBeGreaterThanOrEqual(0);
+		expect(lines[savedNoteLine + 1]).toBe("secon!");
+	} finally {
+		await act(() => unmount());
+		await setup.dispose();
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});

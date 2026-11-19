@@ -4,12 +4,14 @@ import {
 	createUiHost,
 	InlineNotice,
 	LocalStyleProvider,
+	MultilineEditor,
 	ThemeProvider,
 	type TuiTheme,
 	type UiHost,
 	useKeyboard,
 } from "@wincode/tui";
 import { type CliRenderer, createCliRenderer } from "@wincode/tui/core";
+import { useState } from "react";
 
 const APP_THEME: TuiTheme = {
 	colors: {
@@ -21,6 +23,8 @@ const APP_THEME: TuiTheme = {
 };
 
 function IndependentApp({ onStop }: { onStop: () => void }) {
+	const [note, setNote] = useState("");
+	const savedNote = `Saved note: ${note}`;
 	useKeyboard((key) => {
 		if (key.name === "escape") {
 			onStop();
@@ -33,6 +37,13 @@ function IndependentApp({ onStop }: { onStop: () => void }) {
 			<LocalStyleProvider colors={{ info: "#7ee787" }}>
 				<InlineNotice>Shared notice from @wincode/tui</InlineNotice>
 			</LocalStyleProvider>
+			<MultilineEditor
+				focused
+				height={4}
+				onChange={setNote}
+				placeholder="Write a note..."
+			/>
+			<text height={savedNote.split("\n").length}>{savedNote}</text>
 			<text>Press Escape to quit.</text>
 		</box>
 	);
