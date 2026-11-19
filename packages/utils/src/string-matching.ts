@@ -9,6 +9,17 @@ export type ScoredSubsequenceMatch = SubsequenceMatch &
 		span: number;
 	}>;
 
+/** Normalizes case and word boundaries while preserving Unicode letters and marks. */
+export function normalizeForSearch(value: string): string {
+	return value
+		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.toLowerCase()
+		.replace(/[^\p{Letter}\p{Mark}\p{Number}]+/gu, " ")
+		.trim()
+		.replace(/\s+/g, " ");
+}
+
 const CONSECUTIVE_MATCH_PENALTY = 5;
 const GAP_PENALTY = 2;
 const POSITION_PENALTY = 0.1;

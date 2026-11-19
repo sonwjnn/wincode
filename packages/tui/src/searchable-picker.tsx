@@ -1,5 +1,5 @@
 import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
-import { findSubsequenceMatch } from "@wincode/utils";
+import { findSubsequenceMatch, normalizeForSearch } from "@wincode/utils";
 import {
 	Fragment,
 	type ReactNode,
@@ -39,22 +39,13 @@ export type SearchablePickerProps<T> = Readonly<{
 const defaultSelectable = (): boolean => true;
 const defaultActive = (): boolean => false;
 
-function normalizeSearchText(value: string): string {
-	return value
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.toLowerCase()
-		.replace(/[^\p{Letter}\p{Mark}\p{Number}]+/gu, " ")
-		.trim()
-		.replace(/\s+/g, " ");
-}
-
 function matchesFuzzySearch(query: string, text: string): boolean {
-	const normalizedQuery = normalizeSearchText(query);
+	const normalizedQuery = normalizeForSearch(query);
 	if (normalizedQuery.length === 0) {
 		return query.length === 0;
 	}
 
-	const normalizedText = normalizeSearchText(text);
+	const normalizedText = normalizeForSearch(text);
 	const compactText = normalizedText.replaceAll(" ", "");
 	return normalizedQuery.split(" ").every((token) => {
 		const compactToken = token.replaceAll(" ", "");

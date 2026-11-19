@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { findSubsequenceMatch, scoreSubsequenceMatch } from "../src/index";
+import {
+	findSubsequenceMatch,
+	normalizeForSearch,
+	scoreSubsequenceMatch,
+} from "../src/index";
+
+test("search normalization splits word boundaries and preserves Unicode marks", () => {
+	expect(normalizeForSearch("HTTPServer/NewYork")).toBe("http server new york");
+	expect(normalizeForSearch("São_Paulo")).toBe("são paulo");
+});
 
 test("subsequence matching reports the starting position and skipped characters", () => {
 	expect(findSubsequenceMatch("abcdef", "bde")).toEqual({

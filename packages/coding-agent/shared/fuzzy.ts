@@ -1,4 +1,4 @@
-import { scoreSubsequenceMatch } from "@wincode/utils";
+import { normalizeForSearch, scoreSubsequenceMatch } from "@wincode/utils";
 
 /**
  * Fuzzy matching utilities.
@@ -49,16 +49,6 @@ const DIGIT_RE = /\d/;
  * search instead of narrowing it. Shadowing only misleads for real phrases.
  */
 const MIN_SHADOW_RESCAN_LENGTH = 3;
-
-function normalizeForSearch(value: string): string {
-	return value
-		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.toLowerCase()
-		.replace(/[^\p{Letter}\p{Mark}\p{Number}]+/gu, " ")
-		.trim()
-		.replace(/\s+/g, " ");
-}
 
 // Module-level memo of the per-text search index. `buildSearchIndex` is a pure
 // function of `text`, but selectors call it once per candidate per keystroke —
