@@ -1,4 +1,5 @@
 export * from "./bounded-content-panel";
+export * from "./dialogs";
 export * from "./editor-autocomplete";
 export * from "./feedback";
 export * from "./inline-notice";

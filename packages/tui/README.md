@@ -9,6 +9,8 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
 - `@wincode/tui`
   - `createUiHost`, `UiHost` — create a React root for a caller-owned renderer and manage its render/unmount lifecycle.
   - `BoundedContentPanel`, `BoundedContentPanelProps` — size content to its host width and preserve its natural height; the host owns any scroll viewport.
+  - `InputDialog`, `InputDialogProps` — render themed text entry and report Enter submission to the caller.
+  - `ConfirmDialog`, `ConfirmDialogProps` — render themed Yes/No confirmation and report the selected answer.
   - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
   - `EditorAutocomplete`, `EditorAutocompleteItem`, `EditorAutocompleteProps` — reusable editor suggestion presentation, keyboard navigation, apply, and dismissal; the host supplies candidates and owns edits.
   - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
@@ -141,6 +143,34 @@ The runnable independent consumer is [`examples/independent-app.tsx`](./examples
 ```
 
 These components do not start, retry, recover, time out, or dismiss operations. The host decides what to notify and controls how long a toast stays visible or which input dismisses it. The independent example uses the same components as Coding-Agent, with its own renderer lifecycle and D-key dismissal.
+
+## Input and confirmation dialogs
+
+`InputDialog` and `ConfirmDialog` are reusable dialog content, not a modal host. The caller supplies the host-owned active layer and wraps the content in its own bounded dialog shell. `active` must be true only for the top layer so an underlying input cannot consume keys. The caller owns Escape dismissal, modal admission, reserved keys, and focus restoration; the components submit text on Enter or return the selected Yes/No answer.
+
+```tsx
+import { ConfirmDialog, InputDialog } from "@wincode/tui";
+
+<InputDialog
+  active={isTopLayer}
+  onSubmit={(value) => finish(value)}
+  prompt="Workspace name"
+/>
+
+<ConfirmDialog
+  active={isTopLayer}
+  message={`Use ${workspaceName}?`}
+  onConfirm={(confirmed) => finish(confirmed ? workspaceName : undefined)}
+/>
+```
+
+The confirmation selection defaults to No. Escape is deliberately not handled by either component: the host dismisses the current layer and maps that dismissal to its own result. An independent app example exercises input, confirmation, cancellation, focus restoration, and a terminal-bounded modal:
+
+```sh
+bun run packages/tui/examples/prompt-flow.tsx
+```
+
+In the example, Enter advances from text entry to confirmation, Escape cancels a prompt, and a second Escape exits after the result is shown. The independent app owns its renderer teardown and imports no Coding-Agent modules.
 
 ## Architectural boundary
 

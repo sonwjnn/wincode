@@ -1,13 +1,10 @@
-import { useKeyboard } from "@wincode/tui";
-import type { InputRenderable } from "@wincode/tui/core";
+import { InputDialog, useKeyboard } from "@wincode/tui";
 import { useCallback, useEffect, useRef } from "react";
 import {
 	useDialog,
 	useDialogLayer,
 } from "@/shared/providers/dialog/dialog-provider";
 import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
-import { useTheme } from "@/shared/providers/theme/theme-provider";
-import { DialogFooterHint } from "@/shared/ui/dialog-footer-hint";
 import { DialogInset } from "@/shared/ui/dialog-inset";
 
 type PluginTextInputDialogProps = Readonly<{
@@ -19,10 +16,8 @@ export const PluginTextInputDialog = ({
 	onResolve,
 	prompt,
 }: PluginTextInputDialogProps) => {
-	const inputRef = useRef<InputRenderable>(null);
 	const settledRef = useRef(false);
 	const { close } = useDialog();
-	const { colors } = useTheme();
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
 
@@ -49,41 +44,25 @@ export const PluginTextInputDialog = ({
 	);
 
 	useKeyboard((key) => {
-		if (!isTopLayer(layerId)) {
+		if (!isTopLayer(layerId) || key.name !== "escape") {
 			return;
 		}
-		if (key.name === "escape") {
-			key.preventDefault();
-			finish(undefined);
-			return;
-		}
-		if (key.name === "return" || key.name === "enter") {
-			const value = (inputRef.current?.value ?? "").trim();
-			if (value.length > 0) {
-				key.preventDefault();
-				finish(value);
-			}
-		}
+		key.preventDefault();
+		finish(undefined);
 	});
 
 	return (
 		<DialogInset>
-			<box flexDirection="column" gap={1}>
-				<text fg={colors.text} selectable={false} wrapMode="word">
-					{prompt}
-				</text>
-				<input
-					focused
-					focusedTextColor={colors.text}
-					onContentChange={() => undefined}
-					ref={inputRef}
-					textColor={colors.text}
-				/>
-				<box flexDirection="row" gap={2} height={1} marginTop={2}>
-					<DialogFooterHint label="submit" shortcut="enter" />
-					<DialogFooterHint label="cancel" shortcut="escape" />
-				</box>
-			</box>
+			<InputDialog
+				active={isTopLayer(layerId)}
+				onSubmit={(value) => {
+					const trimmed = value.trim();
+					if (trimmed.length > 0) {
+						finish(trimmed);
+					}
+				}}
+				prompt={prompt}
+			/>
 		</DialogInset>
 	);
 };

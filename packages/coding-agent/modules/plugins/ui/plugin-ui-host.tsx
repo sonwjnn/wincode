@@ -1,12 +1,13 @@
 import {
+	ConfirmDialog,
 	createPortal,
+	InputDialog,
 	useKeyboard,
 	useRenderer,
 	useTerminalDimensions,
 } from "@wincode/tui";
 import type {
 	BoxRenderable,
-	InputRenderable,
 	SelectRenderable,
 	TextareaRenderable,
 } from "@wincode/tui/core";
@@ -356,41 +357,16 @@ const PluginConfirmDialog = ({
 	message,
 	onResolve,
 }: PluginConfirmDialogProps) => {
-	const selectRef = useRef<SelectRenderable>(null);
-	const { colors } = useTheme();
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
-	const isActiveLayer = isTopLayer(layerId);
-
-	useEffect(() => {
-		if (isActiveLayer) {
-			selectRef.current?.focus();
-		}
-	}, [isActiveLayer]);
 
 	return (
 		<DialogInset>
-			<box flexDirection="column" gap={1}>
-				{message === undefined ? null : (
-					<text fg={colors.text} selectable={false} wrapMode="word">
-						{message}
-					</text>
-				)}
-				<select
-					focused
-					onSelect={(index) => onResolve(index === 0)}
-					options={[
-						{ description: "", name: "Yes" },
-						{ description: "", name: "No" },
-					]}
-					ref={selectRef}
-					selectedIndex={1}
-				/>
-				<box flexDirection="row" gap={2} height={1} marginTop={1}>
-					<DialogFooterHint label="confirm" shortcut="enter" />
-					<DialogFooterHint label="cancel" shortcut="escape" />
-				</box>
-			</box>
+			<ConfirmDialog
+				active={isTopLayer(layerId)}
+				message={message}
+				onConfirm={onResolve}
+			/>
 		</DialogInset>
 	);
 };
@@ -404,44 +380,16 @@ const PluginInputDialog = ({
 	onResolve,
 	placeholder,
 }: PluginInputDialogProps) => {
-	const inputRef = useRef<InputRenderable>(null);
-	const { colors } = useTheme();
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
-	const isActiveLayer = isTopLayer(layerId);
-
-	useEffect(() => {
-		if (isActiveLayer) {
-			inputRef.current?.focus();
-		}
-	}, [isActiveLayer]);
-
-	useKeyboard((key) => {
-		if (!isTopLayer(layerId)) {
-			return;
-		}
-		if (key.name === "return" || key.name === "enter") {
-			key.preventDefault();
-			onResolve(inputRef.current?.value ?? "");
-		}
-	});
 
 	return (
 		<DialogInset>
-			<box flexDirection="column" gap={1}>
-				<input
-					focused
-					focusedTextColor={colors.text}
-					onContentChange={() => undefined}
-					placeholder={placeholder}
-					ref={inputRef}
-					textColor={colors.text}
-				/>
-				<box flexDirection="row" gap={2} height={1} marginTop={1}>
-					<DialogFooterHint label="submit" shortcut="enter" />
-					<DialogFooterHint label="cancel" shortcut="escape" />
-				</box>
-			</box>
+			<InputDialog
+				active={isTopLayer(layerId)}
+				onSubmit={onResolve}
+				placeholder={placeholder}
+			/>
 		</DialogInset>
 	);
 };
