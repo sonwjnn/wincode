@@ -80,6 +80,19 @@ test("theme picker keeps its result and keyboard cues inside a small dialog", as
 	}
 });
 
+test("theme picker retains keyboard cues at an eight-row terminal height", async () => {
+	const setup = await renderThemeDialog(8);
+
+	try {
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("Search themes");
+		expect(frame).toContain("●");
+		expect(frame).toContain("↑↓ navigate · enter select");
+	} finally {
+		await act(() => setup.renderer.destroy());
+	}
+});
+
 test("theme search previews fuzzy matches and Escape restores theme and host focus", async () => {
 	const initialTheme = DEFAULT_THEME;
 	const previewTheme = THEMES.find(({ name }) => name === "opencode");
