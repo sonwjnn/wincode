@@ -74,7 +74,7 @@ function IndependentApp({ onStop }: { onStop: () => void }) {
 	});
 
 	return (
-		<box flexDirection="column" gap={1} padding={1}>
+		<box flexDirection="column" gap={1}>
 			<text>Independent OpenTUI + React app</text>
 			<LocalStyleProvider colors={{ info: "#7ee787" }}>
 				<InlineNotice>Shared notice from @wincode/tui</InlineNotice>
@@ -106,10 +106,7 @@ function IndependentApp({ onStop }: { onStop: () => void }) {
 				/>
 			</box>
 			<text height={savedNote.split("\n").length}>{savedNote}</text>
-			<text>
-				Press Ctrl+Space for note suggestions. D dismisses the notification; Escape cancels or quits.
-			</text>
-			<box flexDirection="column" gap={1} paddingTop={4}>
+			<box flexDirection="column" gap={1}>
 				<LocalStyleProvider colors={{ error: "#ff78c6", info: "#7ee787" }}>
 					<StatusFeedback
 						message="Loading local configuration"

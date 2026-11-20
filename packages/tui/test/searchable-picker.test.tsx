@@ -9,7 +9,7 @@ import {
 } from "@wincode/tui";
 import { RGBA } from "@wincode/tui/core";
 import { createTestRenderer } from "@wincode/tui/testing";
-import { act } from "react";
+import { act, useState } from "react";
 
 const selectionColor = "#112233";
 const theme: TuiTheme = {
@@ -28,6 +28,7 @@ const destinations = [
 	{ id: "new-york", label: "New York" },
 	{ id: "london", label: "London" },
 ];
+type PickerDestination = Readonly<{ id: string; label: string }>;
 
 test("searchable picker accepts a fuzzy match typed immediately after opening", async () => {
 	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -61,6 +62,57 @@ test("searchable picker accepts a fuzzy match typed immediately after opening", 
 		await act(async () => setup.mockInput.pressEnter());
 		await setup.flush();
 		expect(selections).toEqual(["new-york"]);
+	} finally {
+		await act(() => host.unmount());
+		await act(async () => setup.dispose());
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});
+
+test("shrinking a picker list keeps Enter on the last remaining selectable item", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({ height: 12, width: 48 });
+	const host = createUiHost(setup.renderer);
+	const initialItems: readonly PickerDestination[] = [
+		{ id: "new-york", label: "New York" },
+		{ id: "london", label: "London" },
+		{ id: "tokyo", label: "Tokyo" },
+	];
+	let updateItems: ((items: readonly PickerDestination[]) => void) | undefined;
+	const selections: string[] = [];
+	function PickerHarness() {
+		const [items, setItems] = useState(initialItems);
+		updateItems = (nextItems) => setItems(nextItems);
+		return (
+			<ThemeProvider theme={theme}>
+				<SearchablePicker
+					getKey={(item) => item.id}
+					getSearchText={(item) => item.label}
+					initialSelectedIndex={2}
+					items={items}
+					onSelect={(item) => selections.push(item.id)}
+					renderItem={(item, state) => (
+						<text>{`${state.isSelected ? "● " : "  "}${item.label}`}</text>
+					)}
+				/>
+			</ThemeProvider>
+		);
+	}
+
+	try {
+		await act(() => host.render(<PickerHarness />));
+		await act(() => setup.flush());
+		expect(setup.captureCharFrame()).toContain("● Tokyo");
+		expect(selections).toEqual([]);
+
+		await act(() => updateItems?.(initialItems.slice(0, 2)));
+		await act(() => setup.flush());
+		expect(setup.captureCharFrame()).toContain("● London");
+		expect(selections).toEqual([]);
+
+		await act(async () => setup.mockInput.pressEnter());
+		await act(() => setup.flush());
+		expect(selections).toEqual(["london"]);
 	} finally {
 		await act(() => host.unmount());
 		await act(async () => setup.dispose());
@@ -240,6 +292,52 @@ test("navigation keeps the highlighted original choice visible in a small termin
 		expect(selectedSpan?.bg.toInts()).toEqual(
 			RGBA.fromHex(selectionColor).toInts()
 		);
+
+		await act(() => setup.mockInput.pressEnter());
+		await setup.flush();
+		expect(confirmed).toEqual(["zone-8"]);
+	} finally {
+		await act(() => host.unmount());
+		await act(async () => setup.dispose());
+		Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+	}
+});
+
+test("a selected item stays visible when the terminal shrinks", async () => {
+	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+	const setup = await createTestRenderer({ height: 18, width: 24 });
+	const host = createUiHost(setup.renderer);
+	const items = Array.from({ length: 12 }, (_, index) => ({
+		id: `zone-${index}`,
+		label: `Zone ${index}`,
+	}));
+	const confirmed: string[] = [];
+
+	try {
+		await act(() =>
+			host.render(
+				<ThemeProvider theme={theme}>
+					<SearchablePicker
+						getKey={(item) => item.id}
+						getSearchText={(item) => item.label}
+						initialSelectedIndex={8}
+						items={items}
+						onSelect={(item) => confirmed.push(item.id)}
+						renderItem={(item, state) => (
+							<text>{`${state.isSelected ? "● " : "  "}${item.label}`}</text>
+						)}
+					/>
+				</ThemeProvider>
+			)
+		);
+		await setup.flush();
+		expect(setup.captureCharFrame()).toContain("● Zone 8");
+
+		await act(async () => {
+			setup.renderer.resize(24, 8);
+			await setup.waitForFrame((frame) => frame.includes("● Zone 8"));
+		});
+		expect(setup.captureCharFrame()).toContain("● Zone 8");
 
 		await act(() => setup.mockInput.pressEnter());
 		await setup.flush();

@@ -9,12 +9,14 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
 - `@wincode/tui`
   - `createUiHost`, `UiHost` — create a React root for a caller-owned renderer and manage its render/unmount lifecycle.
   - `BoundedContentPanel`, `BoundedContentPanelProps` — size content to its host width and preserve its natural height; the host owns any scroll viewport.
-  - `InputDialog`, `InputDialogProps` — render themed text entry and report Enter submission to the caller.
-  - `ConfirmDialog`, `ConfirmDialogProps` — render themed Yes/No confirmation and report the selected answer.
+  - `DialogFrame`, `DialogFramePadding`, `DialogFrameProps` — center and bound host-provided dialog content without owning modal policy.
+  - `InputDialog`, `InputDialogProps` — render themed text entry and report submit/cancel events to the caller.
+  - `ConfirmDialog`, `ConfirmDialogProps` — render themed Yes/No confirmation and report confirm/cancel events to the caller.
   - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
   - `EditorAutocomplete`, `EditorAutocompleteItem`, `EditorAutocompleteProps` — reusable editor suggestion presentation, keyboard navigation, apply, and dismissal; the host supplies candidates and owns edits.
   - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
   - `SearchablePicker`, `SearchablePickerProps`, `SearchablePickerItemState` — render a focused fuzzy-search input and selectable, scrollable results.
+  - `useSearchableList`, `SearchableListOptions` — share query, filtering, selection, keyboard navigation, and scroll-to-highlight mechanics when the host needs custom list layout.
   - `SettingsList`, `SettingsListProps`, `SettingsListOption` — present app-provided setting choices, mark the current value, and report only explicitly selected values.
   - `StatusFeedback`, `StatusFeedbackProps`, `StatusFeedbackProgress` — present loading, determinate progress, success, or error without owning operation policy.
   - `NotificationToast`, `NotificationToastProps`, `NotificationVariant` — present a themed notification; the caller owns visibility and dismissal.
@@ -166,6 +168,23 @@ These components do not start, retry, recover, time out, or dismiss operations. 
 
 The component requires `ThemeProvider` and a caller-owned OpenTUI renderer/UI host. The offline, independent time-zone app owns startup, selection/cancel behavior, and renderer teardown; run it with `bun run --cwd packages/tui example:time-zone-picker`.
 
+When a host needs its own row layout, `useSearchableList` supplies the same list state and scroll behavior without rendering the input or rows. The caller supplies the matcher and owns rendering, result policy, and the `ScrollBox` viewport:
+
+```tsx
+const list = useSearchableList({
+	items,
+	filterFn: (item, query) => matches(item, query),
+	isItemSelectable: (item) => item.enabled,
+});
+
+<input ref={list.inputRef} onContentChange={list.handleContentChange} />
+<scrollbox height={visibleRows} ref={list.scrollRef}>
+	{list.filteredItems.map((item, index) => renderRow(item, index === list.selectedIndex))}
+</scrollbox>
+```
+
+Use `list.moveUp()`, `list.moveDown()`, and `list.handleEnter(onSelect)` for the shared keyboard mechanics. The hook requires a caller-owned renderer/UI host and does not own a dialog, dismissal, or result mapping.
+
 ## Settings lists
 
 `SettingsList` presents typed options, marks the current value, and calls `onSelect` only when the user confirms an option. It reuses `SearchablePicker` navigation and filtering; the caller owns cancellation, persistence, and the setting's schema. The Coding-Agent thinking-level dialog and independent clock-format app use the same component.
@@ -185,25 +204,35 @@ The independent clock-format example preserves the current value on Escape; run 
 
 ## Input and confirmation dialogs
 
-`InputDialog` and `ConfirmDialog` are reusable dialog content, not a modal host. The caller supplies the host-owned active layer and wraps the content in its own bounded dialog shell. `active` must be true only for the top layer so an underlying input cannot consume keys. The caller owns Escape dismissal, modal admission, reserved keys, and focus restoration; the components submit text on Enter or return the selected Yes/No answer.
+`DialogFrame` supplies the centered, terminal-bounded shell for dialog content. It requires a `backgroundColor`, defaults to 56 columns, the full terminal height, and one cell of padding, and clamps its bounds after resize. Content beyond the frame's height is clipped: the frame is not a scroll viewport. Hosts must put long or dynamic content in an appropriate scrollable control and keep fixed actions or keyboard hints in the visible area. Set `active` only for the top layer; an inactive frame remains visible beneath it but does not draw a backdrop or route backdrop clicks. `backdropColor` and `onBackdropClick` are optional presentation/callback inputs. The frame does not manage modal admission, stacking, reserved keys, or focus restoration. `InputDialog` and `ConfirmDialog` handle Escape only while active and call the required `onCancel` callback; the host decides whether to close and maps that event to its own result.
 
 ```tsx
-import { ConfirmDialog, InputDialog } from "@wincode/tui";
+import { ConfirmDialog, DialogFrame, InputDialog } from "@wincode/tui";
 
-<InputDialog
+<DialogFrame
   active={isTopLayer}
-  onSubmit={(value) => finish(value)}
-  prompt="Workspace name"
-/>
-
-<ConfirmDialog
-  active={isTopLayer}
-  message={`Use ${workspaceName}?`}
-  onConfirm={(confirmed) => finish(confirmed ? workspaceName : undefined)}
-/>
+  backgroundColor={colors.backgroundElement}
+  onBackdropClick={dismiss}
+>
+  {phase === "input" ? (
+    <InputDialog
+      active={isTopLayer}
+      onCancel={() => finish(undefined)}
+      onSubmit={(value) => finish(value)}
+      prompt="Workspace name"
+    />
+  ) : (
+    <ConfirmDialog
+      active={isTopLayer}
+      message={`Use ${workspaceName}?`}
+      onCancel={() => finish(undefined)}
+      onConfirm={(confirmed) => finish(confirmed ? workspaceName : undefined)}
+    />
+  )}
+</DialogFrame>
 ```
 
-The confirmation selection defaults to No. Escape is deliberately not handled by either component: the host dismisses the current layer and maps that dismissal to its own result. An independent app example exercises input, confirmation, cancellation, focus restoration, and a terminal-bounded modal:
+The confirmation selection defaults to No. Escape is sent to `onCancel` only for the active component; an inactive layer leaves it available to the host. The component does not close the dialog or choose a result. The independent prompt example uses `DialogFrame` with the shared input/confirmation content and exercises cancellation, focus restoration, and narrow-terminal bounds:
 
 ```sh
 bun run packages/tui/examples/prompt-flow.tsx

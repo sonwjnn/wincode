@@ -290,16 +290,21 @@ type PluginUIHostDependencies = Readonly<{
 	toast: () => ToastContextValue;
 }>;
 
+const isEscapeHandledByDialogContent = (kind: PluginUIPromptKind): boolean =>
+	kind === "confirm" || kind === "input";
+
 type PluginDialogRequestProps = Readonly<{
 	children?: ReactNode;
+	escapeHandledByContent?: boolean;
 	onDismiss: () => void;
 }>;
 
 const PluginDialogRequest = ({
 	children,
+	escapeHandledByContent = false,
 	onDismiss,
 }: PluginDialogRequestProps) => {
-	useDialogEscape();
+	useDialogEscape(undefined, !escapeHandledByContent);
 	useEffect(() => () => onDismiss(), [onDismiss]);
 	return children;
 };
@@ -365,6 +370,7 @@ const PluginConfirmDialog = ({
 			<ConfirmDialog
 				active={isTopLayer(layerId)}
 				message={message}
+				onCancel={() => onResolve(false)}
 				onConfirm={onResolve}
 			/>
 		</DialogInset>
@@ -387,6 +393,7 @@ const PluginInputDialog = ({
 		<DialogInset>
 			<InputDialog
 				active={isTopLayer(layerId)}
+				onCancel={() => onResolve(undefined)}
 				onSubmit={onResolve}
 				placeholder={placeholder}
 			/>
@@ -1367,7 +1374,10 @@ const createPluginUIHost = ({
 					dialog.open({
 						children: createElement(
 							PluginDialogRequest,
-							{ onDismiss },
+							{
+								escapeHandledByContent: isEscapeHandledByDialogContent(kind),
+								onDismiss,
+							},
 							createContent((value) => finish(value))
 						),
 						layerId,

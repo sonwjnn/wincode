@@ -1,15 +1,7 @@
-import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { findSubsequenceMatch, normalizeForSearch } from "@wincode/utils";
-import {
-	Fragment,
-	type ReactNode,
-	useCallback,
-	useEffect,
-	useLayoutEffect,
-	useRef,
-	useState,
-} from "react";
+import { Fragment, type ReactNode, useCallback, useEffect } from "react";
 import { useKeyboard, useTerminalDimensions } from "./react-hooks";
+import { useSearchableList } from "./searchable-list";
 import { useTheme } from "./theme";
 
 export type SearchablePickerItemState = Readonly<{
@@ -36,9 +28,6 @@ export type SearchablePickerProps<T> = Readonly<{
 	renderItem: (item: T, state: SearchablePickerItemState) => ReactNode;
 }>;
 
-const defaultSelectable = (): boolean => true;
-const defaultActive = (): boolean => false;
-
 function matchesFuzzySearch(query: string, text: string): boolean {
 	const normalizedQuery = normalizeForSearch(query);
 	if (normalizedQuery.length === 0) {
@@ -57,34 +46,14 @@ function matchesFuzzySearch(query: string, text: string): boolean {
 	});
 }
 
-function getInitialIndex<T>(
-	items: readonly T[],
-	isItemActive: (item: T) => boolean,
-	isItemSelectable: (item: T) => boolean,
-	initialSelectedIndex: number | undefined
-): number {
-	if (initialSelectedIndex !== undefined) {
-		return Math.max(
-			0,
-			Math.min(initialSelectedIndex, Math.max(0, items.length - 1))
-		);
-	}
-	const activeIndex = items.findIndex(isItemActive);
-	if (activeIndex >= 0) {
-		return activeIndex;
-	}
-	const selectableIndex = items.findIndex(isItemSelectable);
-	return Math.max(0, selectableIndex);
-}
-
 export function SearchablePicker<T>({
 	emptyText = "No results",
 	footer,
 	getKey,
 	getSearchText,
 	initialSelectedIndex,
-	isItemActive = defaultActive,
-	isItemSelectable = defaultSelectable,
+	isItemActive,
+	isItemSelectable,
 	isKeyboardActive = true,
 	items,
 	maxVisibleItems,
@@ -96,34 +65,37 @@ export function SearchablePicker<T>({
 }: SearchablePickerProps<T>) {
 	const { height } = useTerminalDimensions();
 	const { colors } = useTheme();
-	const initialIndex = getInitialIndex(
-		items,
+	const filterFn = useCallback(
+		(item: T, query: string) => {
+			if (matchesSearch) {
+				return matchesSearch(item, query);
+			}
+			const searchText = getSearchText(item);
+			return typeof searchText === "string"
+				? matchesFuzzySearch(query, searchText)
+				: searchText.some((text) => matchesFuzzySearch(query, text));
+		},
+		[matchesSearch, getSearchText]
+	);
+	const {
+		filteredItems,
+		handleContentChange,
+		handleEnter,
+		inputRef,
+		isItemActive: isActive,
+		isItemSelectable: isSelectable,
+		moveDown,
+		moveUp,
+		query,
+		scrollRef,
+		selectedIndex,
+	} = useSearchableList({
+		filterFn,
+		initialSelectedIndex,
 		isItemActive,
 		isItemSelectable,
-		initialSelectedIndex
-	);
-	const [query, setQuery] = useState("");
-	const [selectedIndex, setSelectedIndex] = useState(initialIndex);
-	const inputRef = useRef<InputRenderable>(null);
-	const scrollRef = useRef<ScrollBoxRenderable>(null);
-	const filterItems = useCallback(
-		(searchQuery: string) =>
-			searchQuery.length === 0
-				? items
-				: items.filter((item) => {
-						if (matchesSearch) {
-							return matchesSearch(item, searchQuery);
-						}
-						const searchText = getSearchText(item);
-						return typeof searchText === "string"
-							? matchesFuzzySearch(searchQuery, searchText)
-							: searchText.some((text) =>
-									matchesFuzzySearch(searchQuery, text)
-								);
-					}),
-		[items, matchesSearch, getSearchText]
-	);
-	const filteredItems = filterItems(query);
+		items,
+	});
 	const highlightedItem = filteredItems[selectedIndex];
 	const visibleHeight = Math.max(
 		1,
@@ -138,63 +110,11 @@ export function SearchablePicker<T>({
 	const mutedTextColor =
 		typeof colors.textMuted === "string" ? colors.textMuted : colors.info;
 
-	const handleContentChange = useCallback(() => {
-		const nextQuery = inputRef.current?.value ?? "";
-		setQuery(nextQuery);
-		const nextItems = filterItems(nextQuery);
-		setSelectedIndex(
-			nextQuery.length === 0
-				? getInitialIndex(
-						items,
-						isItemActive,
-						isItemSelectable,
-						initialSelectedIndex
-					)
-				: Math.max(0, nextItems.findIndex(isItemSelectable))
-		);
-	}, [
-		filterItems,
-		initialSelectedIndex,
-		isItemActive,
-		isItemSelectable,
-		items,
-	]);
-
 	useEffect(() => {
 		if (highlightedItem !== undefined) {
 			onHighlight?.(highlightedItem);
 		}
 	}, [highlightedItem, onHighlight]);
-
-	const scrollToHighlight = useCallback(() => {
-		const scrollbox = scrollRef.current;
-		if (!scrollbox || scrollbox.viewport.height <= 0) {
-			return false;
-		}
-		const maxScrollTop = Math.max(
-			0,
-			filteredItems.length - scrollbox.viewport.height
-		);
-		scrollbox.scrollTo(
-			Math.min(
-				maxScrollTop,
-				Math.max(0, selectedIndex - Math.floor(scrollbox.viewport.height / 2))
-			)
-		);
-		return true;
-	}, [filteredItems.length, selectedIndex]);
-
-	useLayoutEffect(() => {
-		scrollToHighlight();
-	}, [scrollToHighlight]);
-
-	useEffect(() => {
-		if (scrollToHighlight()) {
-			return;
-		}
-		const timeout = setTimeout(scrollToHighlight, 0);
-		return () => clearTimeout(timeout);
-	}, [scrollToHighlight]);
 
 	useKeyboard((key) => {
 		if (!isKeyboardActive) {
@@ -202,34 +122,13 @@ export function SearchablePicker<T>({
 		}
 		if (key.name === "return" || key.name === "enter") {
 			key.preventDefault();
-			if (highlightedItem !== undefined && isItemSelectable(highlightedItem)) {
-				onSelect(highlightedItem);
-			}
-		} else if (key.name === "up" || key.name === "down") {
+			handleEnter(onSelect);
+		} else if (key.name === "up") {
 			key.preventDefault();
-			const selectableIndices = filteredItems.flatMap((item, index) =>
-				isItemSelectable(item) ? [index] : []
-			);
-			if (selectableIndices.length === 0) {
-				return;
-			}
-			setSelectedIndex((currentIndex) => {
-				const currentPosition = selectableIndices.indexOf(currentIndex);
-				let nextPosition: number;
-				if (key.name === "down") {
-					nextPosition =
-						currentPosition < 0 ||
-						currentPosition === selectableIndices.length - 1
-							? 0
-							: currentPosition + 1;
-				} else {
-					nextPosition =
-						currentPosition <= 0
-							? selectableIndices.length - 1
-							: currentPosition - 1;
-				}
-				return selectableIndices[nextPosition] ?? currentIndex;
-			});
+			moveUp();
+		} else if (key.name === "down") {
+			key.preventDefault();
+			moveDown();
 		}
 	});
 
@@ -264,14 +163,14 @@ export function SearchablePicker<T>({
 									flexDirection="row"
 									height={1}
 									onMouseDown={() => {
-										if (isItemSelectable(item)) {
+										if (isSelectable(item)) {
 											onSelect(item);
 										}
 									}}
 									overflow="hidden"
 								>
 									{renderItem(item, {
-										isActive: isItemActive(item),
+										isActive: isActive(item),
 										isSearching: query.length > 0,
 										isSelected,
 									})}

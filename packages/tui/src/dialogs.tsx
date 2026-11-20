@@ -10,15 +10,27 @@ const resolveColorToken = (
 export type InputDialogProps = Readonly<{
 	active: boolean;
 	initialValue?: string;
+	onCancel: () => void;
 	onSubmit: (value: string) => void;
 	placeholder?: string;
 	prompt?: string;
 }>;
 
+function useEscapeCancel(active: boolean, onCancel: () => void): void {
+	useKeyboard((key) => {
+		if (!active || key.name !== "escape") {
+			return;
+		}
+		key.preventDefault();
+		onCancel();
+	});
+}
+
 /** Renders an input field for a host-owned dialog layer. */
 export function InputDialog({
 	active,
 	initialValue,
+	onCancel,
 	onSubmit,
 	placeholder,
 	prompt,
@@ -36,6 +48,7 @@ export function InputDialog({
 		}
 	}, [active]);
 
+	useEscapeCancel(active, onCancel);
 	useKeyboard((key) => {
 		if (!active || (key.name !== "return" && key.name !== "enter")) {
 			return;
@@ -70,6 +83,7 @@ export function InputDialog({
 export type ConfirmDialogProps = Readonly<{
 	active: boolean;
 	message?: string;
+	onCancel: () => void;
 	onConfirm: (confirmed: boolean) => void;
 }>;
 
@@ -77,6 +91,7 @@ export type ConfirmDialogProps = Readonly<{
 export function ConfirmDialog({
 	active,
 	message,
+	onCancel,
 	onConfirm,
 }: ConfirmDialogProps) {
 	const selectRef = useRef<SelectRenderable>(null);
@@ -91,6 +106,7 @@ export function ConfirmDialog({
 			selectRef.current?.focus();
 		}
 	}, [active]);
+	useEscapeCancel(active, onCancel);
 
 	return (
 		<box flexDirection="column" gap={compact ? 0 : 1}>

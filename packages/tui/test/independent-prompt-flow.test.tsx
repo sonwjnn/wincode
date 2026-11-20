@@ -20,22 +20,22 @@ test("an independent prompt flow returns a confirmed value and restores its comp
 				(value) => (result = value)
 			);
 		});
-		await setup.flush();
+		await act(() => setup.flush());
 		expect(setup.captureCharFrame()).toContain("What should we call");
 
 		await act(() => setup.mockInput.typeText("north-star"));
 		await act(() => setup.mockInput.pressEnter());
-		await setup.flush();
+		await act(() => setup.flush());
 		expect(setup.captureCharFrame()).toContain("Use north-star?");
 
 		await act(() => setup.mockInput.pressArrow("up"));
 		await act(() => setup.mockInput.pressEnter());
-		await setup.flush();
+		await act(() => setup.flush());
 		expect(result).toBe("north-star");
 		expect(setup.captureCharFrame()).toContain("Confirmed: north-star");
 
 		await act(() => setup.mockInput.typeText("composer-restored"));
-		await setup.flush();
+		await act(() => setup.flush());
 		expect(setup.captureCharFrame()).toContain("Composer: composer-restored");
 	} finally {
 		if (host !== undefined) {
@@ -62,7 +62,7 @@ test("an independent prompt cancels on Escape and stays within a narrow terminal
 				(value) => (result = value)
 			);
 		});
-		await setup.flush();
+		await act(() => setup.flush());
 		const initialFrame = setup.captureCharFrame();
 		expect(initialFrame).toContain("What should");
 		const lines = initialFrame.split("\n").slice(0, -1);
@@ -71,12 +71,12 @@ test("an independent prompt cancels on Escape and stays within a narrow terminal
 
 		await act(() => setup.mockInput.typeText("not-a-composer-value"));
 		await act(() => setup.mockInput.pressEscape());
-		await setup.flush();
+		await act(() => setup.flush());
 		expect(result).toBeUndefined();
 		expect(setup.captureCharFrame()).toContain("Prompt cancelled.");
 
 		await act(() => setup.mockInput.typeText("restored"));
-		await setup.flush();
+		await act(() => setup.flush());
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("Composer: restored");
 		expect(frame).not.toContain("not-a-composer-value");

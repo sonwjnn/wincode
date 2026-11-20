@@ -1,4 +1,4 @@
-import { InputDialog, useKeyboard } from "@wincode/tui";
+import { InputDialog } from "@wincode/tui";
 import { useCallback, useEffect, useRef } from "react";
 import {
 	useDialog,
@@ -43,18 +43,11 @@ export const PluginTextInputDialog = ({
 		[onResolve]
 	);
 
-	useKeyboard((key) => {
-		if (!isTopLayer(layerId) || key.name !== "escape") {
-			return;
-		}
-		key.preventDefault();
-		finish(undefined);
-	});
-
 	return (
 		<DialogInset>
 			<InputDialog
 				active={isTopLayer(layerId)}
+				onCancel={() => finish(undefined)}
 				onSubmit={(value) => {
 					const trimmed = value.trim();
 					if (trimmed.length > 0) {

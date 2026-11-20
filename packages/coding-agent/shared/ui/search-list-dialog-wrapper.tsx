@@ -1,8 +1,7 @@
-import { useKeyboard } from "@wincode/tui";
+import { useKeyboard, useSearchableList } from "@wincode/tui";
 import type { RGBA } from "@wincode/tui/core";
 import { Fragment, type ReactNode, useCallback, useEffect } from "react";
 import { fuzzyMatch } from "../fuzzy";
-import { useSearchableList } from "../hooks/use-searchable-list";
 import {
 	DEFAULT_DIALOG_CONTENT_MARGIN,
 	DEFAULT_DIALOG_LIST_ITEM_MARGIN,
@@ -18,18 +17,6 @@ const MAX_VISIBLE_ITEMS = 6;
 const DIALOG_SECTION_SPACING = 1;
 type KeyboardKey = Parameters<Parameters<typeof useKeyboard>[0]>[0];
 type SearchText = string | readonly string[];
-
-const getInitialSelectedIndex = <T,>(
-	items: readonly T[],
-	isItemActive: ((item: T) => boolean) | undefined,
-	isItemSelectable: (item: T) => boolean
-): number => {
-	const activeIndex = isItemActive ? items.findIndex(isItemActive) : -1;
-	return Math.max(
-		0,
-		activeIndex >= 0 ? activeIndex : items.findIndex(isItemSelectable)
-	);
-};
 
 type SearchListDialogWrapperProps<T> = {
 	items: readonly T[];
@@ -78,16 +65,12 @@ export function SearchListDialogWrapper<T>({
 	renderItem,
 	getKey,
 	isItemActive,
-	isItemSelectable = () => true,
+	isItemSelectable,
 	placeholder = "Search",
 	error,
 	emptyText = "No results",
 	showSearch = true,
-	initialSelectedIndex = getInitialSelectedIndex(
-		items,
-		isItemActive,
-		isItemSelectable
-	),
+	initialSelectedIndex,
 	maxVisibleItems = MAX_VISIBLE_ITEMS,
 	minVisibleItems = 0,
 	footer,
@@ -132,23 +115,26 @@ export function SearchListDialogWrapper<T>({
 	);
 	const {
 		contentHeight,
-		filtered,
-		isScrollReady,
-		searchValue,
-		selectedIndex,
-		inputRef,
-		scrollRef,
+		filteredItems: filtered,
 		handleContentChange,
-		moveUp,
-		moveDown,
 		handleEnter,
-	} = useSearchableList(
-		items,
+		inputRef,
+		isItemActive: isActive,
+		isItemSelectable: isSelectable,
+		isScrollReady,
+		moveDown,
+		moveUp,
+		query: searchValue,
+		scrollRef,
+		selectedIndex,
+	} = useSearchableList({
 		filterFn,
+		getItemHeight,
 		initialSelectedIndex,
+		isItemActive,
 		isItemSelectable,
-		getItemHeight
-	);
+		items,
+	});
 	const { isTopLayer } = useKeyboardLayer();
 	const layerId = useDialogLayer();
 	const { colors } = useTheme();
@@ -223,7 +209,7 @@ export function SearchListDialogWrapper<T>({
 				>
 					{filtered.map((item, i) => {
 						const isSelected = i === selectedIndex;
-						const selectable = isItemSelectable(item);
+						const selectable = isSelectable(item);
 						const sectionSpacing = getItemHeight(item, i, filtered) - 1;
 						return (
 							<Fragment key={getKey(item)}>
@@ -252,7 +238,7 @@ export function SearchListDialogWrapper<T>({
 									{renderItem(
 										item,
 										isSelected,
-										isItemActive?.(item) ?? false,
+										isActive(item),
 										searchValue.length > 0
 									)}
 								</box>

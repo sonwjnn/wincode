@@ -80,12 +80,18 @@ test("theme picker keeps its result and keyboard cues inside a small dialog", as
 	}
 });
 
-test("theme picker retains keyboard cues at an eight-row terminal height", async () => {
-	const setup = await renderThemeDialog(8);
+test("theme picker keeps its active result and keyboard cues after terminal shrinks", async () => {
+	const setup = await renderThemeDialog();
 
 	try {
+		await act(async () => setup.mockInput.typeText("open"));
+		await flushTestRenderer(setup, 2);
+		await act(() => setup.renderer.resize(54, 8));
+		await flushTestRenderer(setup, 2);
+
 		const frame = setup.captureCharFrame();
-		expect(frame).toContain("Search themes");
+		expect(frame).toContain("open");
+		expect(frame).toContain("opencode");
 		expect(frame).toContain("●");
 		expect(frame).toContain("↑↓ navigate · enter select");
 	} finally {
