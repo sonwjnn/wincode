@@ -13,6 +13,7 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./bounded-content-panel": "./src/bounded-content-panel.tsx",
     "./core": "./src/core.ts",
     "./testing": "./src/testing.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
@@ -20,6 +21,8 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
+    "example:time-zone-picker": "bun run examples/time-zone-picker.tsx",
+    "example:clock-format-settings": "bun run examples/clock-format-settings.tsx",
     "test": "bun ../../scripts/test-portfolio.ts default --package tui"
   },
   "peerDependencies": {
@@ -27,7 +30,8 @@
   },
   "dependencies": {
     "@opentui/core": "0.6.6",
-    "@opentui/react": "0.6.6"
+    "@opentui/react": "0.6.6",
+    "@wincode/utils": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "catalog:",

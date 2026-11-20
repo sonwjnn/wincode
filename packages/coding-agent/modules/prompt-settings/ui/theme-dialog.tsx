@@ -1,19 +1,27 @@
-import { useTerminalDimensions } from "@wincode/tui";
+import { SearchablePicker, useTerminalDimensions } from "@wincode/tui";
 import { useCallback, useEffect, useRef } from "react";
+import { fuzzyMatch } from "@/shared/fuzzy";
 import {
 	useDialog,
 	useDialogEscape,
+	useDialogLayer,
 } from "@/shared/providers/dialog/dialog-provider";
+import { useKeyboardLayer } from "@/shared/providers/keyboard-layer/keyboard-layer-provider";
 import { getContrastingTextColor } from "@/shared/providers/theme/color-contrast";
 import { useTheme } from "@/shared/providers/theme/theme-provider";
 import type { Theme } from "@/shared/providers/theme/themes";
 import { THEMES } from "@/shared/providers/theme/themes";
-import { SearchListDialogWrapper } from "@/shared/ui/search-list-dialog-wrapper";
 import { SelectableDialogItem } from "@/shared/ui/selectable-dialog-item";
 
+// Dialog title/padding and picker input/footer spacing use these rows.
+const THEME_DIALOG_CHROME_ROWS = 8;
+
 export const ThemeDialogContent = () => {
-	const dialog = useDialog();
 	const { height } = useTerminalDimensions();
+	const maxVisibleItems = Math.max(1, height - THEME_DIALOG_CHROME_ROWS);
+	const dialog = useDialog();
+	const dialogLayerId = useDialogLayer();
+	const { isTopLayer } = useKeyboardLayer();
 	const { colors, setTheme, currentTheme } = useTheme();
 	const originalThemeRef = useRef(currentTheme);
 	const confirmedRef = useRef(false);
@@ -47,17 +55,19 @@ export const ThemeDialogContent = () => {
 	useDialogEscape();
 
 	return (
-		<SearchListDialogWrapper
+		<SearchablePicker
 			emptyText="No matching themes"
-			getKey={(t) => t.name}
+			getKey={(theme) => theme.name}
 			getSearchText={(theme) => theme.name}
 			isItemActive={(theme) => theme.name === originalThemeRef.current.name}
+			isKeyboardActive={isTopLayer(dialogLayerId)}
 			items={THEMES}
-			maxVisibleItems={Math.max(1, Math.floor(height * 0.5))}
+			matchesSearch={(theme, query) => fuzzyMatch(query, theme.name).matches}
+			maxVisibleItems={maxVisibleItems}
 			onHighlight={handleHighlight}
 			onSelect={handleSelect}
 			placeholder="Search themes"
-			renderItem={(theme, isSelected, isActive) => (
+			renderItem={(theme, { isActive, isSelected }) => (
 				<SelectableDialogItem
 					status={
 						isActive ? (

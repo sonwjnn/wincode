@@ -17,6 +17,17 @@ import { flushTestRenderer } from "../support/opentui";
  * Grows the rendered text once after mount, matching a live `useAgentSession`
  * part while the Markdown renderable remains in incremental mode.
  */
+const LONG_MARKDOWN = [
+	"# BEGIN",
+	"A long opening paragraph reflows as the terminal width changes.",
+	...Array.from(
+		{ length: 20 },
+		(_, index) =>
+			`Paragraph ${index + 1} remains selectable in the content view.`
+	),
+	"# END",
+].join("\n\n");
+
 function GrowingMarkdown() {
 	const [content, setContent] = useState("# One");
 	useEffect(() => {
@@ -520,6 +531,53 @@ describe("MarkdownMessagePart", () => {
 			setTreeSitterClientOverride(
 				new MockTreeSitterClient({ autoResolveTimeout: 0 })
 			);
+		}
+	});
+
+	test("long Markdown scrolls, reflows on resize, and remains selectable in its host viewport", async () => {
+		const setup = await testRender(
+			<ThemeProvider themeName="opencode">
+				<scrollbox height="100%" width="100%">
+					<MarkdownMessagePart text={LONG_MARKDOWN} />
+				</scrollbox>
+			</ThemeProvider>,
+			{ height: 7, width: 40 }
+		);
+
+		try {
+			await settleRenders(setup);
+			const initialFrame = setup.captureCharFrame();
+			expect(initialFrame).toContain("BEGIN");
+			expect(initialFrame).not.toContain("END");
+
+			await act(async () => {
+				setup.resize(20, 7);
+				await settleRenders(setup);
+			});
+			const resizedFrame = setup.captureCharFrame();
+			expect(resizedFrame).toContain("BEGIN");
+			expect(resizedFrame).not.toEqual(initialFrame);
+
+			await act(async () => {
+				for (let step = 0; step < 240; step++) {
+					await setup.mockMouse.scroll(1, 2, "down");
+				}
+				await settleRenders(setup);
+			});
+			const scrolledFrame = setup.captureCharFrame();
+			expect(scrolledFrame).toContain("END");
+			expect(scrolledFrame).not.toContain("BEGIN");
+
+			await act(async () => {
+				await setup.mockMouse.drag(1, 1, 19, 5);
+				await settleRenders(setup);
+			});
+			const selectedText =
+				setup.renderer.getSelection()?.getSelectedText() ?? "";
+			expect(selectedText).toContain("Paragraph");
+			expect(selectedText.length).toBeGreaterThan(20);
+		} finally {
+			act(() => setup.renderer.destroy());
 		}
 	});
 

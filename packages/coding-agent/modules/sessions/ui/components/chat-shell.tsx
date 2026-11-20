@@ -1,11 +1,10 @@
 import type {
-	AgentId,
 	ModelRetryStatus,
 	SessionMessageId,
 	SessionRecordId,
 } from "@wincode/agent-core";
 import type { ProviderModel } from "@wincode/ai";
-import { useKeyboard } from "@wincode/tui";
+import { LocalStyleProvider, StatusFeedback, useKeyboard } from "@wincode/tui";
 import { type ScrollBoxRenderable, TextAttributes } from "@wincode/tui/core";
 import { isUndefined } from "@wincode/utils";
 import {
@@ -49,7 +48,6 @@ import type {
 	UiNotification,
 	UiNotificationAnchor,
 } from "@/shared/providers/toast/types";
-import { Spinner } from "@/shared/ui/spinner";
 import { useUiComponentFocus } from "@/shared/ui/ui-component-registry";
 import type { SessionQueuedSubmission } from "../../agent-session/types";
 import type { PromptHistoryEntry } from "../../hooks/input-controller/history";
@@ -123,7 +121,6 @@ type ChatShellProps = {
 };
 function ActivityFooter({
 	accentColor,
-	agent,
 	autoCompact,
 	isCompacting,
 	retryStatus,
@@ -131,7 +128,6 @@ function ActivityFooter({
 	sessionId,
 }: {
 	accentColor: string;
-	agent: AgentId;
 	autoCompact: boolean;
 	isCompacting: boolean;
 	retryStatus?: ModelRetryStatus;
@@ -163,29 +159,25 @@ function ActivityFooter({
 	}
 	if (retryStatus !== undefined) {
 		return (
-			<ModelRetryIndicator
-				agent={agent}
-				operation={retryOperation}
-				status={retryStatus}
-			/>
+			<ModelRetryIndicator operation={retryOperation} status={retryStatus} />
 		);
 	}
 	const compactionLabel = autoCompact ? "Auto-compacting..." : "Compacting...";
-	let workingIndicator: ReactNode = (
-		<Spinner agent={agent} color={accentColor} />
-	);
-	if (indicator !== undefined) {
-		const frame = indicator.frames[frameIndex % indicator.frames.length];
-		workingIndicator =
-			frame === undefined ? null : <text fg={accentColor}>{frame}</text>;
+	const message =
+		contributions.workingMessage ??
+		(isCompacting ? compactionLabel : "Working...");
+	if (indicator === undefined) {
+		return (
+			<LocalStyleProvider colors={{ info: accentColor }}>
+				<StatusFeedback message={message} status="loading" />
+			</LocalStyleProvider>
+		);
 	}
+	const frame = indicator.frames[frameIndex % indicator.frames.length];
 	return (
 		<box alignItems="center" flexDirection="row" gap={1}>
-			{workingIndicator}
-			<text fg={accentColor}>
-				{contributions.workingMessage ??
-					(isCompacting ? compactionLabel : "Working...")}
-			</text>
+			{frame === undefined ? null : <text fg={accentColor}>{frame}</text>}
+			<text fg={accentColor}>{message}</text>
 		</box>
 	);
 }
@@ -668,7 +660,6 @@ export function ChatShell({
 								isBusy ? (
 									<ActivityFooter
 										accentColor={activityAccentColor}
-										agent={agent}
 										autoCompact={autoCompact}
 										isCompacting={isCompacting}
 										retryOperation={retryOperation}

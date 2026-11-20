@@ -1,7 +1,10 @@
 import type { DialogContextValue } from "@/shared/providers/dialog/dialog-provider";
 import type { DialogConfig } from "@/shared/providers/dialog/types";
 
-type CommandDialogMetadata = Pick<DialogConfig, "children" | "title">;
+type CommandDialogMetadata = Pick<
+	DialogConfig,
+	"children" | "restoreFocus" | "title"
+>;
 
 const COMMAND_DIALOG_WIDTH = 60;
 

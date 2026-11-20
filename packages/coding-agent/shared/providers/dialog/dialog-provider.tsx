@@ -1,13 +1,16 @@
-import { useKeyboard, useTerminalDimensions } from "@wincode/tui";
-import type { BoxRenderable } from "@wincode/tui/core";
+import {
+	DialogFrame,
+	useKeyboard,
+	useRenderer,
+	useTerminalDimensions,
+} from "@wincode/tui";
 import { RGBA, TextAttributes } from "@wincode/tui/core";
-import { isNull, isUndefined } from "@wincode/utils";
+import { isUndefined } from "@wincode/utils";
 import type { ReactNode } from "react";
 import {
 	createContext,
 	useCallback,
 	useContext,
-	useEffect,
 	useId,
 	useLayoutEffect,
 	useRef,
@@ -42,14 +45,14 @@ export function useDialogLayer(): string {
 	return useContext(DialogLayerContext);
 }
 
-export function useDialogEscape(layerId?: string): void {
+export function useDialogEscape(layerId?: string, enabled = true): void {
 	const dialog = useDialog();
 	const { isTopLayer } = useKeyboardLayer();
 	const dialogLayerId = useDialogLayer();
 	const resolvedLayerId = layerId ?? dialogLayerId;
 
 	useKeyboard((key) => {
-		if (!isTopLayer(resolvedLayerId)) {
+		if (!(enabled && isTopLayer(resolvedLayerId))) {
 			return;
 		}
 		if (key.name === "escape") {
@@ -170,17 +173,32 @@ function resolvePadding(
 
 function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 	const dimensions = useTerminalDimensions();
+	const renderer = useRenderer();
+	const previousFocusedRenderable = useRef(
+		config.restoreFocus ? renderer.currentFocusedRenderable : null
+	);
+	const restoreFocusRef = useRef(config.restoreFocus === true);
+	const isTopRef = useRef(isTop);
+	isTopRef.current = isTop;
 	const { colors } = useTheme();
-	const dialogRef = useRef<BoxRenderable>(null);
-	const initialHeightRef = useRef<number | null>(null);
-	const [anchoredTop, setAnchoredTop] = useState<number | null>(null);
 
 	const layerId = config.layerId ?? "";
 
+	useLayoutEffect(
+		() => () => {
+			if (!(restoreFocusRef.current && isTopRef.current)) {
+				return;
+			}
+			const previous = previousFocusedRenderable.current;
+			if (previous && !previous.isDestroyed) {
+				previous.focus();
+			}
+		},
+		[]
+	);
+
 	const { title, children, padding } = config;
 	const resolvedPadding = resolvePadding(DEFAULT_DIALOG_PADDING, padding);
-	const backdropColor = isTop ? RGBA.fromInts(0, 0, 0, 150) : undefined;
-
 	const defaultWidth =
 		dimensions.width >= 120
 			? Math.floor(dimensions.width * 0.67)
@@ -190,73 +208,17 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 		? defaultWidth
 		: Math.max(1, Math.min(config.width, maxWidth));
 
-	useLayoutEffect(() => {
-		const dialogHeight = initialHeightRef.current ?? dialogRef.current?.height;
-		if (!(dialogHeight && dialogHeight > 0)) {
-			return;
-		}
-
-		initialHeightRef.current = dialogHeight;
-		setAnchoredTop(
-			Math.max(0, Math.floor((dimensions.height - dialogHeight) / 2))
-		);
-	}, [dimensions.height]);
-
-	useEffect(() => {
-		if (!isNull(anchoredTop)) {
-			return;
-		}
-		const dialogHeight = dialogRef.current?.height;
-		if (!(dialogHeight && dialogHeight > 0)) {
-			return;
-		}
-
-		initialHeightRef.current = dialogHeight;
-		setAnchoredTop(
-			Math.max(0, Math.floor((dimensions.height - dialogHeight) / 2))
-		);
-	}, [anchoredTop, dimensions.height]);
-
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events.
-		<box
-			alignItems="center"
-			backgroundColor={backdropColor}
-			height={dimensions.height}
-			justifyContent="center"
-			left={0}
-			onMouseDown={isTop ? () => close() : undefined}
-			position="absolute"
-			top={0}
-			width={dimensions.width}
+		<DialogFrame
+			active={isTop}
+			backdropColor={isTop ? RGBA.fromInts(0, 0, 0, 150) : undefined}
+			backgroundColor={colors.backgroundElement}
+			onBackdropClick={isTop ? () => close() : undefined}
+			padding={resolvedPadding}
+			width={width}
 			zIndex={zIndex}
 		>
-			{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI boxes handle terminal mouse events. */}
-			<box
-				backgroundColor={colors.backgroundElement}
-				flexDirection="column"
-				gap={1}
-				height="auto"
-				onMouseDown={(e) => e.stopPropagation()}
-				onSizeChange={() => {
-					const dialogHeight = dialogRef.current?.height;
-					if (!(dialogHeight && dialogHeight > 0)) {
-						return;
-					}
-					initialHeightRef.current = dialogHeight;
-					setAnchoredTop(
-						Math.max(0, Math.floor((dimensions.height - dialogHeight) / 2))
-					);
-				}}
-				paddingBottom={resolvedPadding.bottom}
-				paddingLeft={resolvedPadding.left}
-				paddingRight={resolvedPadding.right}
-				paddingTop={resolvedPadding.top}
-				position={isNull(anchoredTop) ? "relative" : "absolute"}
-				ref={dialogRef}
-				top={anchoredTop ?? undefined}
-				width={width}
-			>
+			<box flexDirection="column" gap={1}>
 				<box
 					alignItems="center"
 					flexDirection="row"
@@ -275,6 +237,6 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 					<box flexGrow={1}>{children}</box>
 				</DialogLayerContext.Provider>
 			</box>
-		</box>
+		</DialogFrame>
 	);
 }

@@ -3095,6 +3095,46 @@ test("custom editor exposes real composer submit, history, configured keys, and 
 	}
 });
 
+test("Interactive Mode returns multiline composer edits, paste, and selection through submission", async () => {
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{ kittyKeyboard: true },
+		false,
+		[],
+		undefined,
+		false,
+		true
+	);
+	try {
+		await act(async () => {
+			await environment.setup.mockInput.typeText("first");
+			await flushTestRenderer(environment.setup, 3);
+			environment.setup.mockInput.pressEnter({ shift: true });
+			await flushTestRenderer(environment.setup, 3);
+			await environment.setup.mockInput.pasteBracketedText("second");
+			await flushTestRenderer(environment.setup, 3);
+			environment.setup.mockInput.pressArrow("left", { shift: true });
+			await flushTestRenderer(environment.setup, 2);
+			await environment.setup.mockInput.pasteBracketedText("!");
+			await flushTestRenderer(environment.setup, 3);
+		});
+
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("first");
+		expect(frame).toContain("secon!");
+
+		await act(async () => {
+			environment.setup.mockInput.pressEnter();
+			await flushTestRenderer(environment.setup, 3);
+		});
+		expect(environment.realComposerState.submittedTexts).toEqual([
+			"first\nsecon!",
+		]);
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("replacement Plugin editors keep ordinary Up and Down keys for local navigation", async () => {
 	const environment = await pluginUiTestEnvironment(
 		"interactive",
@@ -4207,6 +4247,47 @@ test("Plugin UI dismissal and timeout use each dialog's documented default", asy
 		await flushTestRenderer(environment.setup, 2);
 		await environment.pressEscape();
 		expect(await editor).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("shared prompt dialogs keep keyboard focus in the active layer and restore the composer", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		kittyKeyboard: true,
+	});
+	try {
+		const { result: declined } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"confirm"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => environment.setup.mockInput.pressEnter());
+		expect(await declined).toBe("cancelled");
+
+		const { result: confirmed } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"confirm"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => environment.setup.mockInput.pressArrow("up"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		expect(await confirmed).toBe("confirmed");
+
+		const { result: input } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"input"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		await act(() => environment.setup.mockInput.typeText("dialog-only"));
+		await environment.pressEscape();
+		expect(await input).toBe("undefined");
+
+		await act(() => environment.setup.mockInput.typeText("restored"));
+		await flushTestRenderer(environment.setup, 2);
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("restored");
+		expect(frame).not.toContain("dialog-only");
 	} finally {
 		await environment.dispose();
 	}

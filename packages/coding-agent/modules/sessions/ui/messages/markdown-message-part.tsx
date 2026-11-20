@@ -1,3 +1,4 @@
+import { BoundedContentPanel } from "@wincode/tui/bounded-content-panel";
 import type { BoxRenderable, Renderable } from "@wincode/tui/core";
 import {
 	memo,
@@ -235,24 +236,26 @@ export const MarkdownMessagePart = memo(function MarkdownMessagePart({
 	}
 
 	return (
-		<box
-			flexShrink={0}
-			onSizeChange={onSizeChange}
-			paddingLeft={1}
-			ref={widthRef}
-			width="100%"
-		>
-			<markdown
-				conceal
-				content={content}
-				fg={variant === "thinking" ? colors.thinkingText : colors.text}
-				internalBlockMode="top-level"
-				streaming={streaming}
-				syntaxStyle={syntaxStyle}
-				tableOptions={{ style: "grid", cellPaddingX: 1 }}
-				treeSitterClient={getMarkdownTreeSitterClient()}
+		<BoundedContentPanel>
+			<box
+				flexShrink={0}
+				onSizeChange={onSizeChange}
+				paddingLeft={1}
+				ref={widthRef}
 				width="100%"
-			/>
-		</box>
+			>
+				<markdown
+					conceal
+					content={content}
+					fg={variant === "thinking" ? colors.thinkingText : colors.text}
+					internalBlockMode="top-level"
+					streaming={streaming}
+					syntaxStyle={syntaxStyle}
+					tableOptions={{ style: "grid", cellPaddingX: 1 }}
+					treeSitterClient={getMarkdownTreeSitterClient()}
+					width="100%"
+				/>
+			</box>
+		</BoundedContentPanel>
 	);
 });

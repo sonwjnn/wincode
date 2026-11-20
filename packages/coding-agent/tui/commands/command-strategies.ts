@@ -60,6 +60,7 @@ type CommandStrategy<Action extends CommandActionId> =
 	| {
 			kind: "dialog";
 			title: string;
+			restoreFocus?: boolean;
 			content: (
 				context: CommandStrategyContext,
 				...args: StrategyArguments<Action>
@@ -85,6 +86,7 @@ type RuntimeStrategy =
 	| {
 			kind: "dialog";
 			title: string;
+			restoreFocus?: boolean;
 			content: (
 				context: CommandStrategyContext,
 				argument?: string
@@ -263,6 +265,7 @@ const STRATEGIES = {
 	"dialog.theme": {
 		kind: "dialog",
 		title: "Select Theme",
+		restoreFocus: true,
 		content: () => createElement(ThemeDialogContent),
 	},
 	"connection.open": {
@@ -308,6 +311,7 @@ export function createCommandHandlers(
 			if (strategy.kind === "dialog") {
 				return openCommandDialog(context.dialog, {
 					children: strategy.content(context, argument),
+					restoreFocus: strategy.restoreFocus === true,
 					title: strategy.title,
 				});
 			}

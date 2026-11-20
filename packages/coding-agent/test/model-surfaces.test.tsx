@@ -425,6 +425,29 @@ test("Off remains an explicit selectable ThinkingLevel", async () => {
 	expect(selectedLevel).toBe("off");
 });
 
+test("dismissing a thinking-level choice does not commit the highlighted setting", async () => {
+	let currentLevel: ThinkingLevel = "low";
+	const setup = await renderDialogSurface(
+		<ThinkingLevelDialogContent
+			currentThinkingLevel={currentLevel}
+			onSelectThinkingLevel={(level) => {
+				currentLevel = level;
+			}}
+			thinkingLevels={["low", "medium"]}
+		/>
+	);
+	await setup.waitForFrame((frame) => frame.includes("● Low"));
+
+	await act(() => setup.mockInput.pressArrow("down"));
+	await flushUi(setup);
+	expect(currentLevel).toBe("low");
+	expect(setup.captureCharFrame()).toContain("● Low");
+
+	await act(() => setup.mockInput.pressEscape());
+	await flushUi(setup);
+	expect(currentLevel).toBe("low");
+});
+
 test("an unsupported Provider Model exposes no synthetic default level", async () => {
 	const setup = await renderThinkingLevels(undefined, []);
 	await setup.waitForFrame((frame) =>

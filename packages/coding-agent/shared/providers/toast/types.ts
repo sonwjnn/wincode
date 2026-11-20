@@ -1,4 +1,6 @@
-export type ToastVariant = "success" | "warning" | "error" | "info";
+import type { NotificationVariant } from "@wincode/tui";
+
+export type ToastVariant = NotificationVariant;
 
 export type UiNotificationLevel = ToastVariant;
 
