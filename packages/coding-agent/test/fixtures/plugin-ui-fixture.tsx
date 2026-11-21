@@ -389,6 +389,16 @@ const pluginUiFixture: PluginFactory = (api) => {
 			),
 	});
 	plugin.registerCommand({
+		description: "Open a confirmation whose deadline exceeds one timer.",
+		name: "long-timeout-confirm",
+		handler: async ({ ui }) =>
+			String(
+				await ui.confirm("Long timeout confirmation", undefined, {
+					timeout: 2_147_483_648,
+				})
+			),
+	});
+	plugin.registerCommand({
 		description: "Return the input timeout default.",
 		name: "timeout-input",
 		handler: async ({ ui }) =>

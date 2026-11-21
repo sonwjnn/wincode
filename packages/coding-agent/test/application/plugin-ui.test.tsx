@@ -4832,6 +4832,54 @@ test("Plugin UI timeouts resolve select, confirm, input, and editor defaults", a
 	}
 });
 
+test("a Plugin confirmation with a timeout above the timer limit stays open for a response", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"long-timeout-confirm"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Long timeout confirmation"
+		);
+		await act(() => environment.setup.mockInput.pressArrow("up"));
+		await act(() => environment.setup.mockInput.pressEnter());
+		expect(await result).toBe("true");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Escape dismisses a long-timeout Plugin confirmation without affecting the next prompt", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"long-timeout-confirm"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Long timeout confirmation"
+		);
+		await environment.pressEscape();
+		expect(await result).toBe("false");
+
+		const { result: next } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"select"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Long timeout confirmation"
+		);
+		await environment.pressEscape();
+		expect(await next).toBe("dismissed");
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("caller abort resolves its Plugin UI request and removes its dialog", async () => {
 	const environment = await pluginUiTestEnvironment();
 	try {

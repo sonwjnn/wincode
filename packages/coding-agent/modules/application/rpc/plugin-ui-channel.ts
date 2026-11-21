@@ -1,4 +1,5 @@
 import { logger } from "@wincode/utils";
+import { schedulePluginUITimeout } from "../../plugins/ui/plugin-ui-timeout";
 import {
 	isRpcPluginUINotification,
 	isRpcPluginUIRequest,
@@ -18,7 +19,7 @@ type PendingPluginUIRequest = {
 	choices?: readonly string[];
 	resolve: (value: RpcPluginUIWireResult) => void;
 	signal?: AbortSignal;
-	timeout?: NodeJS.Timeout;
+	cancelTimeout?: () => void;
 	onAbort: () => void;
 };
 
@@ -42,25 +43,6 @@ export type RpcPluginUIChannelOptions = Readonly<{
 	) => void;
 	sendRequest: (id: string, params: RpcPluginUIRequest) => void;
 }>;
-
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
-const MAX_TIMER_DELAY_BIGINT = BigInt(MAX_TIMER_DELAY_MS);
-
-export type RpcPluginUITimeoutChunk = Readonly<{
-	delayMs: number;
-	remainingMs: bigint;
-}>;
-
-export const nextRpcPluginUITimeoutChunk = (
-	remainingMs: bigint
-): RpcPluginUITimeoutChunk => {
-	const delay =
-		remainingMs > MAX_TIMER_DELAY_BIGINT ? MAX_TIMER_DELAY_BIGINT : remainingMs;
-	return {
-		delayMs: Number(delay),
-		remainingMs: remainingMs - delay,
-	};
-};
 
 const defaultValueFor = (
 	kind: RpcPluginUIRequest["kind"]
@@ -102,9 +84,7 @@ export const createRpcPluginUIChannel = (
 			return;
 		}
 		pending.delete(id);
-		if (request.timeout !== undefined) {
-			clearTimeout(request.timeout);
-		}
+		request.cancelTimeout?.();
 		request.signal?.removeEventListener("abort", request.onAbort);
 		if (sendCancellation) {
 			try {
@@ -161,22 +141,10 @@ export const createRpcPluginUIChannel = (
 			return deferred.promise;
 		}
 		if (requestValue.timeoutMs !== undefined) {
-			let remainingMs = BigInt(Math.ceil(requestValue.timeoutMs));
-			const scheduleTimeout = (): void => {
-				const chunk = nextRpcPluginUITimeoutChunk(remainingMs);
-				active.timeout = setTimeout(() => {
-					if (pending.get(id) !== active) {
-						return;
-					}
-					remainingMs = chunk.remainingMs;
-					if (remainingMs > 0n) {
-						scheduleTimeout();
-						return;
-					}
-					finish(id, active, defaultValue, true);
-				}, chunk.delayMs);
-			};
-			scheduleTimeout();
+			active.cancelTimeout = schedulePluginUITimeout(
+				Math.ceil(requestValue.timeoutMs),
+				() => finish(id, active, defaultValue, true)
+			);
 		}
 		try {
 			options.sendRequest(id, requestValue);

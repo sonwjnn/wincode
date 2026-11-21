@@ -13,10 +13,7 @@ import {
 	isRpcPluginUIUpdate,
 	type RpcPluginUIRequest,
 } from "../modules/application/rpc/plugin-ui";
-import {
-	createRpcPluginUIChannel,
-	nextRpcPluginUITimeoutChunk,
-} from "../modules/application/rpc/plugin-ui-channel";
+import { createRpcPluginUIChannel } from "../modules/application/rpc/plugin-ui-channel";
 import { runRpc } from "../modules/application/rpc/runner";
 import type { RpcAssembly } from "../modules/application/rpc/types";
 import type { PluginUICustomFactory } from "../modules/plugins/public";
@@ -26,6 +23,7 @@ import {
 } from "../modules/plugins/runtime";
 import { unsupportedPluginUI } from "../modules/plugins/ui/plugin-ui-default";
 import type { PluginUIUpdate } from "../modules/plugins/ui/plugin-ui-host-contract";
+import { nextPluginUITimeoutChunk } from "../modules/plugins/ui/plugin-ui-timeout";
 import { openSessionServices } from "../modules/sessions/host/session-services";
 import {
 	createFakeProviderCollection,
@@ -613,8 +611,8 @@ test("RPC UI timeout chunks progress exactly beyond Number precision", () => {
 	const maximumTimerDelayMs = 2_147_483_647;
 	const timeoutMs = 2 ** 85;
 	const timeout = BigInt(timeoutMs);
-	const firstChunk = nextRpcPluginUITimeoutChunk(timeout);
-	const secondChunk = nextRpcPluginUITimeoutChunk(firstChunk.remainingMs);
+	const firstChunk = nextPluginUITimeoutChunk(timeout);
+	const secondChunk = nextPluginUITimeoutChunk(firstChunk.remainingMs);
 
 	// Number subtraction cannot represent this decrement, so a numeric countdown
 	// would schedule the same chunk forever.
@@ -627,11 +625,11 @@ test("RPC UI timeout chunks progress exactly beyond Number precision", () => {
 		timeout - 2n * BigInt(maximumTimerDelayMs)
 	);
 	expect(secondChunk.remainingMs).toBeLessThan(firstChunk.remainingMs);
-	expect(nextRpcPluginUITimeoutChunk(BigInt(maximumTimerDelayMs))).toEqual({
+	expect(nextPluginUITimeoutChunk(BigInt(maximumTimerDelayMs))).toEqual({
 		delayMs: maximumTimerDelayMs,
 		remainingMs: 0n,
 	});
-	expect(nextRpcPluginUITimeoutChunk(BigInt(maximumTimerDelayMs + 1))).toEqual({
+	expect(nextPluginUITimeoutChunk(BigInt(maximumTimerDelayMs + 1))).toEqual({
 		delayMs: maximumTimerDelayMs,
 		remainingMs: 1n,
 	});

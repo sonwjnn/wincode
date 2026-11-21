@@ -91,6 +91,7 @@ import type {
 	PluginUIHostBinding,
 	PluginUIOwner as PluginUIOwnerType,
 } from "./plugin-ui-host-contract";
+import { schedulePluginUITimeout } from "./plugin-ui-timeout";
 
 export type { PluginUIHandle, PluginUIOwner } from "./plugin-ui-host-contract";
 
@@ -1648,15 +1649,13 @@ const createPluginUIHost = ({
 				const layerId = `plugin-ui-${owner.pluginId}-${crypto.randomUUID()}`;
 				let endPrompt = (): void => undefined;
 				let settled = false;
-				let timeoutHandle: NodeJS.Timeout | undefined;
+				let cancelTimeout: (() => void) | undefined;
 				const finish = (value: Value, closeDialog = true): void => {
 					if (settled) {
 						return;
 					}
 					settled = true;
-					if (timeoutHandle !== undefined) {
-						clearTimeout(timeoutHandle);
-					}
+					cancelTimeout?.();
 					signal?.removeEventListener("abort", onAbort);
 					activeRequests.delete(cancel);
 					endPrompt();
@@ -1693,7 +1692,7 @@ const createPluginUIHost = ({
 					return Promise.reject(error);
 				}
 				if (timeout !== undefined && !settled) {
-					timeoutHandle = setTimeout(cancel, timeout);
+					cancelTimeout = schedulePluginUITimeout(timeout, cancel);
 				}
 				return result.promise;
 			};
