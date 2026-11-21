@@ -4980,6 +4980,79 @@ test("Plugin UI timeouts resolve select, confirm, input, and editor defaults", a
 	}
 });
 
+test("timed Plugin select, confirm, and input dialogs show a countdown while untimed titles stay unchanged", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		for (const [command, title, expected] of [
+			["timed-dialog-title", "Plugin Selection (5s)", "undefined"],
+			["timed-confirm-title", "Timed confirmation title (2s)", "false"],
+			["timed-input-title", "Timed input title (5s)", "undefined"],
+		] as const) {
+			const { result } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				command
+			);
+			await flushTestRenderer(environment.setup, 2);
+			expect(environment.setup.captureCharFrame()).toContain(title);
+			await environment.pressEscape();
+			expect(await result).toBe(expected);
+		}
+
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"input"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Fixture input");
+		expect(frame).not.toContain("Fixture input (");
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("a timed Plugin editor shows the remaining seconds without losing its draft or observer title", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		kittyKeyboard: true,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"timed-editor-response"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Timed editor title (5s)"
+		);
+		await act(() => environment.setup.mockInput.typeText("edited "));
+		await act(async () => Bun.sleep(1100));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Timed editor title (4s)"
+		);
+		expect(environment.setup.captureCharFrame()).toContain("edited Draft");
+		await act(() => environment.setup.mockInput.pressEnter({ ctrl: true }));
+		await flushTestRenderer(environment.setup, 2);
+		expect(await result).toBe("edited Draft");
+
+		const promptEvents = environment.runtime.getResource<string[]>(
+			"plugin_ui_fixture",
+			"prompt_events"
+		);
+		if (promptEvents === undefined) {
+			throw new Error(
+				"The Plugin prompt lifecycle events were not registered."
+			);
+		}
+		expect(promptEvents).toContain("start:editor:Timed editor title");
+		expect(promptEvents).toContain("end:editor:Timed editor title");
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("a Plugin confirmation with a timeout above the timer limit stays open for a response", async () => {
 	const environment = await pluginUiTestEnvironment();
 	try {
@@ -4989,7 +5062,7 @@ test("a Plugin confirmation with a timeout above the timer limit stays open for 
 		);
 		await flushTestRenderer(environment.setup, 2);
 		expect(environment.setup.captureCharFrame()).toContain(
-			"Long timeout confirmation"
+			"Long timeout confirmation (2147484s)"
 		);
 		await act(() => environment.setup.mockInput.pressArrow("up"));
 		await act(() => environment.setup.mockInput.pressEnter());

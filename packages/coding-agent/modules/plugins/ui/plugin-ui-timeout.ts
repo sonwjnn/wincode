@@ -43,3 +43,41 @@ export const schedulePluginUITimeout = (
 	let timer = scheduleChunk();
 	return () => clearTimeout(timer);
 };
+
+/** Updates a visible countdown from its deadline without owning request settlement. */
+export const schedulePluginUITitleCountdown = (
+	deadline: number,
+	onTick: (remainingSeconds: number) => void,
+	isActive: () => boolean
+): (() => void) => {
+	let cancelCurrent: (() => void) | undefined;
+	let cancelled = false;
+	const schedule = (): void => {
+		if (cancelled || !isActive()) {
+			return;
+		}
+		const now = performance.now();
+		const remainingMs = Math.max(0, deadline - now);
+		const remainingSeconds = Math.ceil(remainingMs / 1000);
+		if (remainingSeconds <= 1 || remainingSeconds - 1 === remainingSeconds) {
+			return;
+		}
+		const nextChangeAt = deadline - (remainingSeconds - 1) * 1000;
+		cancelCurrent = schedulePluginUITimeout(
+			Math.max(1, nextChangeAt - now),
+			() => {
+				cancelCurrent = undefined;
+				if (cancelled || !isActive()) {
+					return;
+				}
+				onTick(Math.ceil(Math.max(0, deadline - performance.now()) / 1000));
+				schedule();
+			}
+		);
+	};
+	schedule();
+	return () => {
+		cancelled = true;
+		cancelCurrent?.();
+	};
+};
