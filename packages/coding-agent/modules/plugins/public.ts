@@ -200,17 +200,22 @@ export type PluginUIPromptKind =
 
 export type PluginUICustomErrorCode =
 	| "plugin_ui_custom_busy"
-	| "plugin_ui_custom_failed";
+	| "plugin_ui_custom_failed"
+	| "plugin_ui_custom_invalid_options";
 
 /** A stable coded failure from a Plugin custom UI interaction. */
 export class PluginUICustomError extends Error {
 	readonly code: PluginUICustomErrorCode;
 
 	constructor(code: PluginUICustomErrorCode, cause?: unknown) {
-		const message =
-			code === "plugin_ui_custom_busy"
-				? "Another custom Plugin UI interaction is already active."
-				: "The custom Plugin UI failed to execute.";
+		let message: string;
+		if (code === "plugin_ui_custom_busy") {
+			message = "Another custom Plugin UI interaction is already active.";
+		} else if (code === "plugin_ui_custom_invalid_options") {
+			message = "Custom Plugin UI options are invalid.";
+		} else {
+			message = "The custom Plugin UI failed to execute.";
+		}
 		super(message, cause === undefined ? undefined : { cause });
 		this.name = "PluginUICustomError";
 		this.code = code;
@@ -282,11 +287,28 @@ export type PluginUICustomFactory<Value> = (
 	context: PluginUICustomContext<Value>
 ) => PluginUICustomComponent<Value> | Promise<PluginUICustomComponent<Value>>;
 
+export type PluginUICustomOverlayAnchor =
+	| "center"
+	| "top-left"
+	| "top-right"
+	| "bottom-left"
+	| "bottom-right";
+
+export type PluginUICustomOverlayWidth = number | `${number}%`;
+
 export type PluginUICustomOptions = Readonly<{
+	/** Overlay-only position. Defaults to `center`. */
+	anchor?: PluginUICustomOverlayAnchor;
+	/** Overlay-only width in terminal cells or as a percentage. */
+	width?: PluginUICustomOverlayWidth;
+	/** Overlay-only height cap in terminal cells. Defaults to the host cap. */
+	maxHeight?: number;
+	/** Overlay-only uniform margin in terminal cells. Defaults to the host margin. */
+	margin?: number;
 	/**
 	 * Selects where the host presents custom UI: `editor` replaces the composer,
-	 * `overlay` uses a centered bounded layer, and `full-screen` covers the app.
-	 * All modes use the host's renderer and root. Defaults to `editor`.
+	 * `overlay` uses a bounded layer, and `full-screen` covers the app. All modes
+	 * use the host's renderer and root. Defaults to `editor`.
 	 */
 	presentation?: PluginUICustomPresentationMode;
 	title?: string;
@@ -455,6 +477,10 @@ export type PluginAutocompleteProviderFactory = (
 	current: PluginAutocompleteProvider
 ) => PluginAutocompleteProvider;
 
+export type PluginAutocompleteProviderOptions = Readonly<{
+	triggerCharacters?: readonly string[];
+}>;
+
 export type PluginEditorKeybinding = Readonly<{
 	action: string;
 	ctrl?: boolean;
@@ -551,7 +577,8 @@ export type PluginUI = Readonly<{
 	setEditorText: (text: string) => boolean;
 	pasteToEditor: (text: string) => boolean;
 	addAutocompleteProvider: (
-		provider: PluginAutocompleteProviderFactory
+		provider: PluginAutocompleteProviderFactory,
+		options?: PluginAutocompleteProviderOptions
 	) => () => void;
 	getEditorComponent: () => PluginEditorComponent | undefined;
 	setEditorComponent: (

@@ -6,6 +6,7 @@ import { agentIdSchema, toModelId } from "@wincode/agent-core";
 import type { ProviderChatEvent } from "@wincode/ai";
 import type {
 	PluginAutocompleteProviderFactory,
+	PluginAutocompleteResult,
 	PluginEditorComponent,
 	PluginEditorContext,
 	PluginFactory,
@@ -305,6 +306,7 @@ type RealComposerState = {
 };
 
 const completionPrefixPattern = /\S*$/u;
+const dollarCompletionPrefixPattern = /\$[^\s]*$/u;
 
 const realComposerCommandControllerFactory: CommandControllerFactory = {
 	create: () =>
@@ -2091,6 +2093,32 @@ test("view presentation contributions render their hidden-thinking label and exp
 	}
 });
 
+test("autocomplete registrations reject invalid trigger characters but accept an omitted list", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const provider: PluginAutocompleteProviderFactory = (current) => current;
+		for (const triggerCharacters of [[], ["/"], ["@"], ["ab"], [" "]]) {
+			expect(() =>
+				ui.addAutocompleteProvider(provider, { triggerCharacters })
+			).toThrow(TypeError);
+		}
+		expect(
+			environment.pluginUIHost.getAutocompleteProviders(environment.sessionId)
+		).toEqual([]);
+		const unregister = ui.addAutocompleteProvider(provider, {});
+		expect(
+			environment.pluginUIHost.getAutocompleteProviders(environment.sessionId)
+		).toEqual([provider]);
+		unregister();
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("Plugin autocomplete providers unregister and release with their owner", async () => {
 	const environment = await pluginUiTestEnvironment();
 	try {
@@ -2949,6 +2977,226 @@ test("the author example returns responses from its overlay and full-screen comm
 	}
 });
 
+test("declared autocomplete triggers match the token at the cursor and preserve surrounding text", async () => {
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{},
+		true,
+		[],
+		undefined,
+		false,
+		true
+	);
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const calls: string[] = [];
+		await act(() => {
+			ui.addAutocompleteProvider(
+				(current) => ({
+					...current,
+					getSuggestions(context) {
+						calls.push(context.text.slice(0, context.cursorOffset));
+						const beforeCursor = context.text.slice(0, context.cursorOffset);
+						const prefix =
+							beforeCursor.match(dollarCompletionPrefixPattern)?.[0] ?? "";
+						return {
+							items: [{ label: `Complete ${prefix}`, value: "DONE" }],
+							prefix,
+						};
+					},
+					applyCompletion(context, item, prefix) {
+						const start = context.cursorOffset - prefix.length;
+						const text = `${context.text.slice(0, start)}${item.value}${context.text.slice(context.cursorOffset)}`;
+						return { cursorOffset: start + item.value.length, text };
+					},
+				}),
+				{ triggerCharacters: ["$", "$"] }
+			);
+		});
+
+		await act(async () => {
+			environment.setup.mockInput.typeText("$");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(calls).toEqual(["$"]);
+		await act(async () => {
+			environment.setup.mockInput.typeText("name");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(calls).toEqual(["$", "$name"]);
+		await act(async () => {
+			ui.setEditorText("price$5");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(calls).toEqual(["$", "$name"]);
+
+		await act(async () => {
+			ui.setEditorText("first line\nbefore $name after");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		for (let index = 0; index < 6; index += 1) {
+			await act(() => environment.setup.mockInput.pressArrow("left"));
+		}
+		await act(async () => flushTestRenderer(environment.setup, 3));
+		expect(calls.at(-1)).toBe("first line\nbefore $name");
+		expect(environment.setup.captureCharFrame()).toContain("Complete $name");
+
+		await act(() => environment.setup.mockInput.pressEnter());
+		await act(async () => flushTestRenderer(environment.setup, 2));
+		expect(ui.getEditorText()).toBe("first line\nbefore DONE after");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("matching autocomplete registrations delegate and apply in registration order", async () => {
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{},
+		true,
+		[],
+		undefined,
+		false,
+		true
+	);
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const calls: string[] = [];
+		await act(() => {
+			ui.addAutocompleteProvider(
+				(current) => ({
+					...current,
+					getSuggestions(context) {
+						calls.push("first:suggest");
+						return current.getSuggestions(context);
+					},
+					applyCompletion(context, item, prefix) {
+						calls.push("first:apply");
+						return current.applyCompletion(context, item, prefix);
+					},
+				}),
+				{ triggerCharacters: ["$"] }
+			);
+			ui.addAutocompleteProvider(
+				(current) => ({
+					...current,
+					getSuggestions(_context) {
+						calls.push("second:suggest");
+						return {
+							items: [{ label: "Complete token", value: "completed" }],
+							prefix: "$name",
+						};
+					},
+					applyCompletion(context) {
+						calls.push("second:apply");
+						return {
+							cursorOffset: context.cursorOffset,
+							text: "accepted",
+						};
+					},
+				}),
+				{ triggerCharacters: ["$"] }
+			);
+		});
+
+		await act(() => environment.setup.mockInput.typeText("$name"));
+		await act(async () => flushTestRenderer(environment.setup, 3));
+		expect(calls).toEqual(["first:suggest", "second:suggest"]);
+		expect(environment.setup.captureCharFrame()).toContain("Complete token");
+
+		await act(() => environment.setup.mockInput.pressEnter());
+		await act(async () => flushTestRenderer(environment.setup, 2));
+		expect(calls).toEqual([
+			"first:suggest",
+			"second:suggest",
+			"first:apply",
+			"second:apply",
+		]);
+		expect(ui.getEditorText()).toBe("accepted");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("pending triggered completions cannot reappear after edits or provider removal", async () => {
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{},
+		true,
+		[],
+		undefined,
+		false,
+		true
+	);
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const deferredResults = [
+			Promise.withResolvers<PluginAutocompleteResult | null>(),
+			Promise.withResolvers<PluginAutocompleteResult | null>(),
+		];
+		let requestIndex = 0;
+		const unregister = ui.addAutocompleteProvider(
+			(current) => ({
+				...current,
+				getSuggestions(context) {
+					if (context.text !== "$pending") {
+						return current.getSuggestions(context);
+					}
+					const deferred = deferredResults[requestIndex];
+					requestIndex += 1;
+					return deferred?.promise ?? null;
+				},
+			}),
+			{ triggerCharacters: ["$"] }
+		);
+
+		await act(async () => {
+			ui.setEditorText("$pending");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		await act(async () => {
+			ui.setEditorText("ordinary text");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		deferredResults[0]?.resolve({
+			items: [{ label: "Stale suggestion", value: "stale" }],
+			prefix: "$pending",
+		});
+		await act(async () => flushTestRenderer(environment.setup, 2));
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Stale suggestion"
+		);
+
+		await act(async () => {
+			ui.setEditorText("$pending");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		await act(async () => {
+			unregister();
+			await flushTestRenderer(environment.setup, 2);
+		});
+		deferredResults[1]?.resolve({
+			items: [{ label: "Removed provider", value: "removed" }],
+			prefix: "$pending",
+		});
+		await act(async () => flushTestRenderer(environment.setup, 2));
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Removed provider"
+		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("moving the composer caret refreshes completion before accepting a suggestion", async () => {
 	const environment = await pluginUiTestEnvironment(
 		"interactive",
@@ -3640,6 +3888,112 @@ test("overlay is painted at its terminal-cell bounds and resizes with the termin
 				panelBackground
 			)
 		).toEqual({ cellCount: 108, height: 6, left: 2, top: 2, width: 18 });
+
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("invalid overlay options fail before factory invocation and release admission", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const initialFactoryCalls = environment.customUIState.factoryCalls;
+		const { result: invalidResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay-invalid"
+		);
+		expect(await invalidResult).toBe(
+			"plugin_ui_custom_invalid_options,plugin_ui_custom_invalid_options,plugin_ui_custom_invalid_options"
+		);
+		expect(environment.customUIState.factoryCalls).toBe(initialFactoryCalls);
+
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("positioned overlay dimensions and presentation bounds remain aligned after resize", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 16,
+		width: 64,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay-positioned"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const presentationHandle =
+			environment.customUIState.lastContext?.presentationHandle;
+		if (presentationHandle === undefined) {
+			throw new Error("The positioned overlay did not receive its handle.");
+		}
+		const context = environment.customUIState.lastContext;
+		if (context === undefined) {
+			throw new Error("The positioned overlay did not receive its context.");
+		}
+		const panelBackground = RGBA.fromHex(
+			context.theme.colors.backgroundElement
+		);
+		expect(presentationHandle.getBounds()).toEqual({
+			left: 32,
+			top: 1,
+			width: 31,
+			height: 6,
+		});
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			width: 31,
+			height: 6,
+		});
+		expect(
+			getRenderedBackgroundBounds(
+				environment.setup.captureSpans(),
+				panelBackground
+			)
+		).toEqual({ cellCount: 186, height: 6, left: 32, top: 1, width: 31 });
+
+		await act(() => environment.setup.resize(40, 12));
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.getBounds()).toEqual({
+			left: 20,
+			top: 1,
+			width: 19,
+			height: 6,
+		});
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			width: 19,
+			height: 6,
+		});
+		expect(
+			getRenderedBackgroundBounds(
+				environment.setup.captureSpans(),
+				panelBackground
+			)
+		).toEqual({ cellCount: 114, height: 6, left: 20, top: 1, width: 19 });
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+
+		await act(() => environment.setup.resize(2, 2));
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.getBounds()).toEqual({
+			left: 1,
+			top: 0,
+			width: 1,
+			height: 2,
+		});
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			width: 1,
+			height: 2,
+		});
 
 		await environment.pressEscape();
 		expect(await result).toBe("undefined");
