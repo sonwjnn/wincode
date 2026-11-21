@@ -16,6 +16,7 @@ import type {
 	PluginUICustomContext,
 	PluginUICustomPresentationMode,
 	PluginUIUpdate,
+	PluginUIWidgetContext,
 	SessionSdk,
 	SessionSdkEvent,
 	SessionSdkHandle,
@@ -1651,6 +1652,153 @@ test("header and footer have host-wide first-owner conflicts and restore default
 		expect(frame).toContain("Host default footer");
 	} finally {
 		unbindOtherSession?.();
+		await environment.dispose();
+	}
+});
+
+test("React widgets receive live dimensions and theme while preserving composer focus", async () => {
+	let receivedContext: PluginUIWidgetContext | undefined;
+	let liveWidgetUnmounts = 0;
+	const liveWidget = (context: PluginUIWidgetContext) => {
+		receivedContext = context;
+		const [status] = useState("Ready");
+		useEffect(
+			() => () => {
+				liveWidgetUnmounts += 1;
+			},
+			[]
+		);
+		return (
+			<box flexDirection="column" height={20}>
+				<text>{`${status} ${context.theme.name}`}</text>
+				<text>Widget content still fits</text>
+				<text>Clipped widget overflow</text>
+			</box>
+		);
+	};
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 12,
+		width: 36,
+	});
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const otherUi = environment.runtime.getPluginUI(
+			"plugin_ui_other_fixture",
+			environment.sessionId
+		);
+		let belowWidgetUnmounts = 0;
+		const belowWidget = () => {
+			useEffect(
+				() => () => {
+					belowWidgetUnmounts += 1;
+				},
+				[]
+			);
+			return <text>Bottom</text>;
+		};
+		await act(async () => {
+			ui.setWidget("live", liveWidget, { placement: "aboveEditor" });
+			otherUi.setWidget("live", belowWidget, {
+				placement: "belowEditor",
+			});
+			await flushTestRenderer(environment.setup, 4);
+		});
+		let frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Ready opencode");
+		expect(frame).not.toContain("Clipped widget overflow");
+		expect(frame).toContain("Fixture composer");
+		expect(frame).toContain("Bottom");
+		expect(frame.indexOf("Bottom")).toBeGreaterThan(
+			frame.indexOf("Fixture composer")
+		);
+		expect(receivedContext).toMatchObject({
+			height: 2,
+			theme: { name: "opencode" },
+			width: 34,
+		});
+		expect(environment.uiUpdates).not.toContainEqual(
+			expect.objectContaining({ key: "live" })
+		);
+
+		await act(() => environment.setup.resize(20, 8));
+		await flushTestRenderer(environment.setup, 2);
+		frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Ready opencode");
+		expect(frame).toContain("Fixture composer");
+		expect(receivedContext).toMatchObject({ height: 1, width: 18 });
+		await act(() =>
+			environment.setup.mockInput.typeText("composer keeps focus")
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"composer keeps focus"
+		);
+
+		await act(async () => {
+			ui.setWidget("live", ["Replaced"]);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Replaced");
+		expect(frame).not.toContain("Ready opencode");
+		expect(liveWidgetUnmounts).toBe(1);
+
+		await act(async () => {
+			ui.setWidget("live", undefined);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		frame = environment.setup.captureCharFrame();
+		expect(frame).not.toContain("Replaced");
+		expect(frame).toContain("Bottom");
+		await act(async () => {
+			otherUi.setWidget("live", undefined);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(environment.setup.captureCharFrame()).not.toContain("Bottom");
+		expect(belowWidgetUnmounts).toBe(1);
+		await act(async () => {
+			otherUi.setWidget("live", belowWidget, {
+				placement: "belowEditor",
+			});
+			await flushTestRenderer(environment.setup, 2);
+		});
+		await act(async () => {
+			environment.runtime.disablePlugin(
+				"plugin_ui_other_fixture",
+				"Widget owner unloaded."
+			);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(environment.setup.captureCharFrame()).not.toContain("Bottom");
+		expect(belowWidgetUnmounts).toBe(2);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("a failed React widget is omitted without disrupting other widgets or the composer", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const brokenWidget = () => {
+			throw new Error("Widget rendering failed.");
+		};
+		await act(async () => {
+			ui.setWidget("broken", brokenWidget);
+			ui.setWidget("text", ["Text widget remains visible"]);
+			await flushTestRenderer(environment.setup, 3);
+		});
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Text widget remains visible");
+		expect(frame).toContain("Fixture composer");
+		expect(frame).not.toContain("Widget rendering failed");
+	} finally {
 		await environment.dispose();
 	}
 });

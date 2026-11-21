@@ -69,9 +69,12 @@ import type {
 	PluginUICustomPresentationHandle,
 	PluginUICustomPresentationMode,
 	PluginUIDialogOptions,
+	PluginUIFooterComponent,
 	PluginUIFooterContext,
+	PluginUIHeaderComponent,
 	PluginUIPromptKind,
 	PluginUIUpdate,
+	PluginUIWidgetComponent,
 	PluginUIWidgetPlacement,
 } from "../public";
 import { PluginUICustomError } from "../public";
@@ -566,9 +569,13 @@ class PluginUICustomErrorBoundary extends Component<
 
 type PluginUIChromeErrorBoundaryProps = Readonly<{
 	children: ReactNode;
+	component:
+		| PluginUIFooterComponent
+		| PluginUIHeaderComponent
+		| PluginUIWidgetComponent;
 	fallback: ReactNode;
 	pluginId: string;
-	surface: "header" | "footer";
+	surface: "header" | "footer" | "widget";
 }>;
 
 class PluginUIChromeErrorBoundary extends Component<
@@ -583,12 +590,20 @@ class PluginUIChromeErrorBoundary extends Component<
 
 	override componentDidCatch(error: Error): void {
 		void logger
-			.error("Plugin UI chrome failed to render", {
+			.error("Plugin UI contribution failed to render", {
 				cause: error.message,
 				operation: `plugin.ui.${this.props.surface}`,
 				pluginId: this.props.pluginId,
 			})
 			.catch(() => undefined);
+	}
+
+	override componentDidUpdate(
+		previousProps: PluginUIChromeErrorBoundaryProps
+	): void {
+		if (this.state.failed && previousProps.component !== this.props.component) {
+			this.setState({ failed: false });
+		}
 	}
 
 	override render(): ReactNode {
@@ -1189,20 +1204,58 @@ export function PluginUICustomPresentation({
 		if (widgets.length === 0) {
 			return null;
 		}
+		const componentCount = widgets.filter(
+			(widget) => "component" in widget
+		).length;
+		const maxWidgetHeight =
+			componentCount === 0
+				? 0
+				: Math.max(
+						0,
+						Math.floor((dimensions.height - 4) / (3 * componentCount))
+					);
 		return (
 			<box flexDirection="column" flexShrink={0} width="100%">
-				{widgets.map(({ key, lines, pluginId }) => (
-					<box
-						flexDirection="column"
-						key={`${pluginId}:${key}`}
-						paddingX={1}
-						width="100%"
-					>
-						<text fg={currentTheme.colors.textMuted} wrapMode="word">
-							{lines.join("\n")}
-						</text>
-					</box>
-				))}
+				{widgets.map((widget) => {
+					let widgetContent: ReactNode;
+					if (widget.lines !== undefined) {
+						widgetContent = (
+							<text fg={currentTheme.colors.textMuted} wrapMode="word">
+								{widget.lines.join("\n")}
+							</text>
+						);
+					} else if (maxWidgetHeight === 0) {
+						widgetContent = null;
+					} else {
+						widgetContent = (
+							<box height={maxWidgetHeight} overflow="hidden" width="100%">
+								<PluginUIChromeErrorBoundary
+									component={widget.component}
+									fallback={null}
+									key={`${widget.pluginId}:${widget.key}:component`}
+									pluginId={widget.pluginId}
+									surface="widget"
+								>
+									{createElement(widget.component, {
+										height: maxWidgetHeight,
+										theme: currentTheme,
+										width: Math.max(0, dimensions.width - 2),
+									})}
+								</PluginUIChromeErrorBoundary>
+							</box>
+						);
+					}
+					return (
+						<box
+							flexDirection="column"
+							key={`${widget.pluginId}:${widget.key}`}
+							paddingX={1}
+							width="100%"
+						>
+							{widgetContent}
+						</box>
+					);
+				})}
 			</box>
 		);
 	};
@@ -1346,12 +1399,36 @@ const createPluginUIHost = ({
 	let hostClosed = false;
 	const shortcutSubscriptions = new Set<() => void>();
 	const terminalInputSubscriptions = new Set<() => void>();
+	const textWidgetKeysByOwner = new Map<
+		string,
+		Map<string | undefined, Set<string>>
+	>();
 	const composers = new Map<
 		string,
 		Readonly<{ composer: PluginComposerHost }>
 	>();
 	const editorContributions = new Map<string, PluginEditorContribution>();
 	const editorListeners = new Map<string, Set<() => void>>();
+	const getTextWidgetKeys = (owner: PluginUIOwnerType): Set<string> => {
+		let sessionKeys = textWidgetKeysByOwner.get(owner.pluginId);
+		if (sessionKeys === undefined) {
+			sessionKeys = new Map();
+			textWidgetKeysByOwner.set(owner.pluginId, sessionKeys);
+		}
+		let widgetKeys = sessionKeys.get(owner.sessionId);
+		if (widgetKeys === undefined) {
+			widgetKeys = new Set();
+			sessionKeys.set(owner.sessionId, widgetKeys);
+		}
+		return widgetKeys;
+	};
+	const clearTextWidgetKeys = (owner: PluginUIOwnerType): void => {
+		const sessionKeys = textWidgetKeysByOwner.get(owner.pluginId);
+		sessionKeys?.delete(owner.sessionId);
+		if (sessionKeys?.size === 0) {
+			textWidgetKeysByOwner.delete(owner.pluginId);
+		}
+	};
 	const autocompleteProviders = new Map<
 		string,
 		PluginAutocompleteRegistration[]
@@ -1426,6 +1503,7 @@ const createPluginUIHost = ({
 				).setTitle(undefined);
 			}
 			composers.clear();
+			textWidgetKeysByOwner.clear();
 			editorContributions.clear();
 			autocompleteProviders.clear();
 			autocompleteProviderSnapshots.clear();
@@ -1454,6 +1532,7 @@ const createPluginUIHost = ({
 			return unsubscribe;
 		},
 		clearPlugin(pluginId) {
+			textWidgetKeysByOwner.delete(pluginId);
 			for (const update of contributions.clearPlugin(pluginId)) {
 				onUpdate?.(update);
 			}
@@ -1550,7 +1629,8 @@ const createPluginUIHost = ({
 			let closed = false;
 			const updateControls = createPluginUIUpdateControls(
 				owner.pluginId,
-				(update) => onUpdate?.(update)
+				(update) => onUpdate?.(update),
+				getTextWidgetKeys(owner)
 			);
 			const getEditorComponent = (): PluginEditorComponent | undefined => {
 				if (closed || hostClosed || owner.sessionId === undefined) {
@@ -1919,7 +1999,7 @@ const createPluginUIHost = ({
 					contributions.setStatus(owner.sessionId, owner.pluginId, key, value);
 					updateControls.setStatus(key, value);
 				},
-				setWidget: (key, lines, options) => {
+				setWidget: (key, content, options) => {
 					if (closed || hostClosed || owner.sessionId === undefined) {
 						return;
 					}
@@ -1928,10 +2008,10 @@ const createPluginUIHost = ({
 						owner.sessionId,
 						owner.pluginId,
 						key,
-						lines,
+						content,
 						placement
 					);
-					updateControls.setWidget(key, lines, { placement });
+					updateControls.setWidget(key, content, { placement });
 				},
 				setHeader: (component) => {
 					if (closed || hostClosed) {
@@ -2104,6 +2184,7 @@ const createPluginUIHost = ({
 						unsubscribe();
 					}
 					if (owner.sessionId !== undefined) {
+						clearTextWidgetKeys(owner);
 						for (const update of contributions.clearView(
 							owner.sessionId,
 							owner.pluginId
@@ -2194,6 +2275,7 @@ export function PluginUIHeader({
 	});
 	return (
 		<PluginUIChromeErrorBoundary
+			component={chrome.header.component}
 			fallback={children ?? null}
 			key={chrome.header.revision}
 			pluginId={chrome.header.pluginId}
@@ -2229,6 +2311,7 @@ export function PluginUIFooter({
 	});
 	return (
 		<PluginUIChromeErrorBoundary
+			component={chrome.footer.component}
 			fallback={children ?? null}
 			key={chrome.footer.revision}
 			pluginId={chrome.footer.pluginId}

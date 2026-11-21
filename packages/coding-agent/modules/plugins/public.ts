@@ -348,12 +348,21 @@ export type PluginUIStatusContribution = Readonly<{
 	value: string;
 }>;
 
-export type PluginUIWidgetContribution = Readonly<{
-	key: string;
-	lines: readonly string[];
-	placement: PluginUIWidgetPlacement;
-	pluginId: string;
-}>;
+export type PluginUIWidgetContribution =
+	| Readonly<{
+			component?: never;
+			key: string;
+			lines: readonly string[];
+			placement: PluginUIWidgetPlacement;
+			pluginId: string;
+	  }>
+	| Readonly<{
+			component: PluginUIWidgetComponent;
+			key: string;
+			lines?: never;
+			placement: PluginUIWidgetPlacement;
+			pluginId: string;
+	  }>;
 
 /** Data-only status, widget, and title payloads for RPC UI update mapping. */
 export type PluginUIUpdate =
@@ -383,6 +392,8 @@ export type PluginUIChromeContext = Readonly<{
 }>;
 
 export type PluginUIHeaderComponent = ComponentType<PluginUIChromeContext>;
+export type PluginUIWidgetContext = PluginUIChromeContext;
+export type PluginUIWidgetComponent = ComponentType<PluginUIWidgetContext>;
 
 export type PluginUIFooterContext = PluginUIChromeContext &
 	Readonly<{
@@ -548,7 +559,7 @@ export type PluginUI = Readonly<{
 	/** Sets or clears one Plugin-owned widget above or below the composer. */
 	setWidget: (
 		key: string,
-		lines: readonly string[] | undefined,
+		content: readonly string[] | PluginUIWidgetComponent | undefined,
 		options?: PluginUIWidgetOptions
 	) => void;
 	/** Registers or clears the Plugin-owned React header replacement. */
