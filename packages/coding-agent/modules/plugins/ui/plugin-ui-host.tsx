@@ -91,7 +91,10 @@ import type {
 	PluginUIHostBinding,
 	PluginUIOwner as PluginUIOwnerType,
 } from "./plugin-ui-host-contract";
-import { schedulePluginUITimeout } from "./plugin-ui-timeout";
+import {
+	schedulePluginUITimeout,
+	schedulePluginUITitleCountdown,
+} from "./plugin-ui-timeout";
 
 export type { PluginUIHandle, PluginUIOwner } from "./plugin-ui-host-contract";
 
@@ -1286,6 +1289,9 @@ const unsupportedThemeChange = (error: string): PluginThemeChangeResult => ({
 	success: false,
 });
 
+const getPluginUIDialogTitle = (title: string, seconds?: number): string =>
+	seconds === undefined ? title : `${title} (${seconds}s)`;
+
 const getPluginUIDialogTimeoutError = (
 	options: PluginUIDialogOptions | undefined
 ): RangeError | undefined => {
@@ -1293,6 +1299,187 @@ const getPluginUIDialogTimeoutError = (
 	return timeout !== undefined && (!Number.isFinite(timeout) || timeout < 0)
 		? new RangeError("Plugin UI timeout must be a finite non-negative number.")
 		: undefined;
+};
+
+const schedulePluginUIDialogTimers = (
+	deadline: number | undefined,
+	onExpire: () => void,
+	onTick: (remainingSeconds: number) => void,
+	isActive: () => boolean
+): (() => void) => {
+	if (deadline === undefined || !isActive()) {
+		return () => undefined;
+	}
+	const cancelTimeout = schedulePluginUITimeout(
+		Math.max(0, deadline - performance.now()),
+		onExpire
+	);
+	const cancelTitleCountdown = schedulePluginUITitleCountdown(
+		deadline,
+		onTick,
+		isActive
+	);
+	return () => {
+		cancelTimeout();
+		cancelTitleCountdown();
+	};
+};
+
+type PluginUIDialogSettlement<Value> = Readonly<{
+	cancel: () => void;
+	finish: (value: Value, closeDialog?: boolean) => void;
+	isSettled: () => boolean;
+	onAbort: () => void;
+	onDismiss: () => void;
+	setCancelTimers: (cancel: () => void) => void;
+	setEndPrompt: (end: () => void) => void;
+}>;
+
+const createPluginUIDialogSettlement = <Value,>(
+	defaultValue: Value,
+	activeRequests: Set<() => void>,
+	dialog: DialogContextValue,
+	layerId: string,
+	signal: AbortSignal | undefined,
+	resolve: (value: Value) => void
+): PluginUIDialogSettlement<Value> => {
+	let settled = false;
+	let endPrompt = (): void => undefined;
+	let cancelTimers = (): void => undefined;
+	let cancel = (): void => undefined;
+	const finish = (value: Value, closeDialog = true): void => {
+		if (settled) {
+			return;
+		}
+		settled = true;
+		cancelTimers();
+		signal?.removeEventListener("abort", onAbort);
+		activeRequests.delete(cancel);
+		endPrompt();
+		if (closeDialog) {
+			dialog.close(layerId);
+		}
+		resolve(value);
+	};
+	cancel = () => finish(defaultValue);
+	const onAbort = (): void => cancel();
+	const onDismiss = (): void => finish(defaultValue, false);
+	activeRequests.add(cancel);
+	return Object.freeze({
+		cancel,
+		finish,
+		isSettled: () => settled,
+		onAbort,
+		onDismiss,
+		setCancelTimers: (nextCancel) => {
+			cancelTimers = nextCancel;
+		},
+		setEndPrompt: (end) => {
+			endPrompt = end;
+		},
+	});
+};
+
+const updatePluginUIDialogCountdownTitle = (
+	dialog: DialogContextValue,
+	layerId: string,
+	dialogTitle: string,
+	displayedSeconds: { value: number | undefined },
+	nextSeconds: number
+): void => {
+	if (nextSeconds === displayedSeconds.value) {
+		return;
+	}
+	displayedSeconds.value = nextSeconds;
+	dialog.updateTitle(layerId, getPluginUIDialogTitle(dialogTitle, nextSeconds));
+};
+
+type PluginUIDialogRequestParameters<Value> = Readonly<{
+	activeRequests: Set<() => void>;
+	beginPrompt: (kind: PluginUIPromptKind, title: string) => () => void;
+	createContent: (resolve: (value: Value) => void) => ReactNode;
+	defaultValue: Value;
+	dialogTitle: string;
+	getDialog: () => DialogContextValue;
+	kind: PluginUIPromptKind;
+	options: PluginUIDialogOptions | undefined;
+	pluginId: string;
+	promptTitle: string;
+}>;
+
+const openPluginUIDialogRequest = <Value,>(
+	parameters: PluginUIDialogRequestParameters<Value>
+): Promise<Value> => {
+	const {
+		activeRequests,
+		beginPrompt,
+		createContent,
+		defaultValue,
+		dialogTitle,
+		getDialog,
+		kind,
+		options,
+		pluginId,
+		promptTitle,
+	} = parameters;
+	const signal = options?.signal;
+	const timeout = options?.timeout;
+	const result = Promise.withResolvers<Value>();
+	const dialog = getDialog();
+	const layerId = `plugin-ui-${pluginId}-${crypto.randomUUID()}`;
+	const displayedSeconds = {
+		value: timeout === undefined ? undefined : Math.ceil(timeout / 1000),
+	};
+	const settlement = createPluginUIDialogSettlement(
+		defaultValue,
+		activeRequests,
+		dialog,
+		layerId,
+		signal,
+		result.resolve
+	);
+	const { cancel, finish, onAbort, onDismiss } = settlement;
+	signal?.addEventListener("abort", onAbort, { once: true });
+	if (signal?.aborted) {
+		cancel();
+		return result.promise;
+	}
+	settlement.setEndPrompt(beginPrompt(kind, promptTitle));
+	try {
+		dialog.open({
+			children: createElement(
+				PluginDialogRequest,
+				{
+					escapeHandledByContent: isEscapeHandledByDialogContent(kind),
+					onDismiss,
+				},
+				createContent((value) => finish(value))
+			),
+			layerId,
+			title: getPluginUIDialogTitle(dialogTitle, displayedSeconds.value),
+		});
+	} catch (error) {
+		finish(defaultValue, false);
+		return Promise.reject(error);
+	}
+	const timeoutDeadline =
+		timeout === undefined ? undefined : performance.now() + timeout;
+	settlement.setCancelTimers(
+		schedulePluginUIDialogTimers(
+			timeoutDeadline,
+			cancel,
+			(nextSeconds) =>
+				updatePluginUIDialogCountdownTitle(
+					dialog,
+					layerId,
+					dialogTitle,
+					displayedSeconds,
+					nextSeconds
+				),
+			() => !settlement.isSettled()
+		)
+	);
+	return result.promise;
 };
 
 const isValidTheme = (candidate: unknown): candidate is Theme => {
@@ -1644,57 +1831,18 @@ const createPluginUIHost = ({
 					return Promise.resolve(defaultValue);
 				}
 
-				const result = Promise.withResolvers<Value>();
-				const dialog = getDialog();
-				const layerId = `plugin-ui-${owner.pluginId}-${crypto.randomUUID()}`;
-				let endPrompt = (): void => undefined;
-				let settled = false;
-				let cancelTimeout: (() => void) | undefined;
-				const finish = (value: Value, closeDialog = true): void => {
-					if (settled) {
-						return;
-					}
-					settled = true;
-					cancelTimeout?.();
-					signal?.removeEventListener("abort", onAbort);
-					activeRequests.delete(cancel);
-					endPrompt();
-					if (closeDialog) {
-						dialog.close(layerId);
-					}
-					result.resolve(value);
-				};
-				const cancel = (): void => finish(defaultValue);
-				const onAbort = (): void => cancel();
-				const onDismiss = (): void => finish(defaultValue, false);
-				activeRequests.add(cancel);
-				signal?.addEventListener("abort", onAbort, { once: true });
-				if (signal?.aborted) {
-					cancel();
-					return result.promise;
-				}
-				endPrompt = beginPrompt(kind, promptTitle);
-				try {
-					dialog.open({
-						children: createElement(
-							PluginDialogRequest,
-							{
-								escapeHandledByContent: isEscapeHandledByDialogContent(kind),
-								onDismiss,
-							},
-							createContent((value) => finish(value))
-						),
-						layerId,
-						title: dialogTitle,
-					});
-				} catch (error) {
-					finish(defaultValue, false);
-					return Promise.reject(error);
-				}
-				if (timeout !== undefined && !settled) {
-					cancelTimeout = schedulePluginUITimeout(timeout, cancel);
-				}
-				return result.promise;
+				return openPluginUIDialogRequest({
+					activeRequests,
+					beginPrompt,
+					createContent,
+					defaultValue,
+					dialogTitle,
+					getDialog,
+					kind,
+					options,
+					pluginId: owner.pluginId,
+					promptTitle,
+				});
 			};
 
 			const requestCustom = <Value,>(

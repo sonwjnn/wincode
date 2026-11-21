@@ -411,6 +411,38 @@ const pluginUiFixture: PluginFactory = (api) => {
 			String(await ui.editor("Timed editor", "Draft", { timeout: 20 })),
 	});
 	plugin.registerCommand({
+		description: "Edit text before a timed Plugin editor expires.",
+		name: "timed-editor-response",
+		handler: async ({ ui }) =>
+			(await ui.editor("Timed editor title", "Draft", { timeout: 5000 })) ??
+			"undefined",
+	});
+	plugin.registerCommand({
+		description:
+			"Open each timed Plugin dialog with a visible countdown title.",
+		name: "timed-dialog-title",
+		handler: async ({ ui }) =>
+			String(
+				await ui.select("Timed select title", ["Wait"], { timeout: 5000 })
+			),
+	});
+	plugin.registerCommand({
+		description: "Open a timed confirmation title for countdown coverage.",
+		name: "timed-confirm-title",
+		handler: async ({ ui }) =>
+			String(
+				await ui.confirm("Timed confirmation title", undefined, {
+					timeout: 1500,
+				})
+			),
+	});
+	plugin.registerCommand({
+		description: "Open a timed input title for countdown coverage.",
+		name: "timed-input-title",
+		handler: async ({ ui }) =>
+			String(await ui.input("Timed input title", undefined, { timeout: 5000 })),
+	});
+	plugin.registerCommand({
 		description: "Request input that the fixture can abort.",
 		name: "input-abort",
 		handler: async ({ ui }) =>
