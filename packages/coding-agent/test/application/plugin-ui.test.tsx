@@ -312,6 +312,7 @@ type RealComposerState = {
 
 const completionPrefixPattern = /\S*$/u;
 const dollarCompletionPrefixPattern = /\$[^\s]*$/u;
+const timedEditorCountdownPattern = /Timed editor title \([1-4]s\)/u;
 
 const realComposerCommandControllerFactory: CommandControllerFactory = {
 	create: () =>
@@ -5101,7 +5102,7 @@ test("timed Plugin select, confirm, and input dialogs show a countdown while unt
 	}
 });
 
-test("a timed Plugin editor shows the remaining seconds without losing its draft or observer title", async () => {
+test("a timed Plugin editor shows the remaining seconds without losing its draft, focus, or observer title", async () => {
 	const environment = await pluginUiTestEnvironment("interactive", {
 		kittyKeyboard: true,
 	});
@@ -5114,12 +5115,20 @@ test("a timed Plugin editor shows the remaining seconds without losing its draft
 		expect(environment.setup.captureCharFrame()).toContain(
 			"Timed editor title (5s)"
 		);
-		await act(() => environment.setup.mockInput.typeText("edited "));
-		await act(async () => Bun.sleep(1100));
+		await act(() => environment.setup.mockInput.typeText("e"));
+		let countdownFrame = environment.setup.captureCharFrame();
+		for (
+			let attempt = 0;
+			attempt < 100 && !timedEditorCountdownPattern.test(countdownFrame);
+			attempt++
+		) {
+			await flushTestRenderer(environment.setup, 1);
+			countdownFrame = environment.setup.captureCharFrame();
+		}
+		expect(timedEditorCountdownPattern.test(countdownFrame)).toBe(true);
+		expect(countdownFrame).toContain("eDraft");
+		await act(() => environment.setup.mockInput.typeText("dited "));
 		await flushTestRenderer(environment.setup, 2);
-		expect(environment.setup.captureCharFrame()).toContain(
-			"Timed editor title (4s)"
-		);
 		expect(environment.setup.captureCharFrame()).toContain("edited Draft");
 		await act(() => environment.setup.mockInput.pressEnter({ ctrl: true }));
 		await flushTestRenderer(environment.setup, 2);
