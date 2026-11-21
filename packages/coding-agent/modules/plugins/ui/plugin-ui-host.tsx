@@ -693,9 +693,9 @@ const createTriggeredAutocompleteProvider =
 					: current.applyCompletion(context, item, prefix);
 			},
 			shouldTriggerFileCompletion(context) {
-				return shouldTrigger(context)
-					? (provider.shouldTriggerFileCompletion?.(context) ?? false)
-					: (current.shouldTriggerFileCompletion?.(context) ?? false);
+				const activeProvider = shouldTrigger(context) ? provider : current;
+				// The composer treats an absent hook as permission to complete files.
+				return activeProvider.shouldTriggerFileCompletion?.(context) !== false;
 			},
 		};
 	};

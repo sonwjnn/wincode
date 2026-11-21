@@ -39,6 +39,7 @@ import {
 	createCommandController,
 } from "@/modules/commands/command-controller";
 import { CommandControllerFactoryProvider } from "@/modules/commands/command-controller-context";
+import { getFileMentionOptions } from "@/modules/file-mentions";
 import { loadPlugins } from "@/modules/plugins/loader";
 import type { PluginRuntime } from "@/modules/plugins/runtime";
 import { createPluginTools } from "@/modules/plugins/tools";
@@ -514,7 +515,10 @@ const pluginUiTestEnvironment = async (
 			</box>
 		);
 	}
+	const realComposerSession = { set: (_id: string): void => undefined };
 	function RealComposer() {
+		const [activeSessionId, setActiveSessionId] = useState(sessionId);
+		realComposerSession.set = setActiveSessionId;
 		return (
 			<ConfigProvider value={{ configStore, homeRoot: root, workspace }}>
 				<SettingsRegistryProvider>
@@ -529,7 +533,7 @@ const pluginUiTestEnvironment = async (
 										realComposerState.submittedTexts.push(text);
 										return true;
 									}}
-									sessionId={sessionId}
+									sessionId={activeSessionId}
 									sessionPromptHistory={[
 										{ files: [], text: "real composer history" },
 									]}
@@ -839,6 +843,7 @@ const pluginUiTestEnvironment = async (
 		openSharedAgentSession,
 		configStore,
 		realComposerEditor,
+		realComposerSession,
 		realComposerState,
 		setCustomEditorMounted: customEditorState.setMounted,
 	};
@@ -3052,6 +3057,52 @@ test("declared autocomplete triggers match the token at the cursor and preserve 
 	}
 });
 
+test("an unmatched trigger does not suppress delegated file suggestions when the next provider omits the file hook", async () => {
+	// The composer loads these options asynchronously from the workspace cache.
+	await getFileMentionOptions();
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{},
+		true,
+		[],
+		undefined,
+		false,
+		true
+	);
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		await act(async () => {
+			ui.addAutocompleteProvider((current) => current, {
+				triggerCharacters: ["$"],
+			});
+			ui.addAutocompleteProvider((current) => ({
+				applyCompletion: current.applyCompletion,
+				async getSuggestions(context) {
+					const result = await current.getSuggestions(context);
+					return result === null
+						? null
+						: {
+								...result,
+								items: result.items.map((item) => ({
+									...item,
+									label: "Delegated file suggestion",
+								})),
+							};
+				},
+			}));
+			ui.setEditorText("@README.md");
+		});
+		await environment.setup.waitForFrame((frame) =>
+			frame.includes("Delegated file suggestion")
+		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("matching autocomplete registrations delegate and apply in registration order", async () => {
 	const environment = await pluginUiTestEnvironment(
 		"interactive",
@@ -3191,6 +3242,59 @@ test("pending triggered completions cannot reappear after edits or provider remo
 		await act(async () => flushTestRenderer(environment.setup, 2));
 		expect(environment.setup.captureCharFrame()).not.toContain(
 			"Removed provider"
+		);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("pending triggered completions do not cross a Session switch with the same draft", async () => {
+	const environment = await pluginUiTestEnvironment(
+		"interactive",
+		{},
+		true,
+		[],
+		undefined,
+		false,
+		true
+	);
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const nextSessionId = `${environment.sessionId}-next`;
+		const pending = Promise.withResolvers<PluginAutocompleteResult | null>();
+		const requested = Promise.withResolvers<void>();
+		await act(async () => {
+			ui.addAutocompleteProvider(
+				(current) => ({
+					...current,
+					getSuggestions() {
+						requested.resolve();
+						return pending.promise;
+					},
+				}),
+				{ triggerCharacters: ["$"] }
+			);
+			ui.setEditorText("$pending");
+			await flushTestRenderer(environment.setup, 2);
+		});
+		await requested.promise;
+		await act(async () => {
+			environment.realComposerSession.set(nextSessionId);
+		});
+		await act(async () => {
+			const composer = environment.pluginUIHost.getComposer(nextSessionId);
+			expect(composer?.setText("$pending")).toBe(true);
+			pending.resolve({
+				items: [{ label: "Previous Session suggestion", value: "stale" }],
+				prefix: "$pending",
+			});
+			await flushTestRenderer(environment.setup, 3);
+		});
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Previous Session suggestion"
 		);
 	} finally {
 		await environment.dispose();
