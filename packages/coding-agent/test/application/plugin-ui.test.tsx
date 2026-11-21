@@ -4293,7 +4293,36 @@ test("shared prompt dialogs keep keyboard focus in the active layer and restore 
 	}
 });
 
-test("Plugin editor saves the edited text with Ctrl+Enter", async () => {
+test("Plugin editor preserves prefilled text and submits multiline paste and selection edits with Ctrl+Enter", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		kittyKeyboard: true,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"editor"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Original text");
+		await act(() => environment.setup.mockInput.pressKey("e", { ctrl: true }));
+		await act(() => environment.setup.mockInput.pressEnter());
+		await act(() => environment.setup.mockInput.pasteBracketedText("second"));
+		await act(() =>
+			environment.setup.mockInput.pressArrow("left", { shift: true })
+		);
+		await act(() => environment.setup.mockInput.pasteBracketedText("!"));
+		await act(() => environment.setup.mockInput.pressEnter({ ctrl: true }));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).not.toContain(
+			"Fixture editor"
+		);
+		expect(await result).toBe("Original text\nsecon!");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("Escape discards Plugin editor text and restores composer focus", async () => {
 	const environment = await pluginUiTestEnvironment("interactive", {
 		kittyKeyboard: true,
 	});
@@ -4303,17 +4332,17 @@ test("Plugin editor saves the edited text with Ctrl+Enter", async () => {
 			"editor-save"
 		);
 		await flushTestRenderer(environment.setup, 2);
-		expect(environment.setup.captureCharFrame()).toContain("Fixture editor");
-		await act(() => environment.setup.mockInput.typeText("Saved draft"));
+		await act(() => environment.setup.mockInput.typeText("dialog-only"));
 		await flushTestRenderer(environment.setup, 2);
-		expect(environment.setup.captureCharFrame()).toContain("Saved draft");
-		await act(() => environment.setup.mockInput.pressEnter({ ctrl: true }));
-		await flushTestRenderer(environment.setup, 2);
-		expect(environment.setup.captureCharFrame()).not.toContain(
-			"Fixture editor"
-		);
+		expect(environment.setup.captureCharFrame()).toContain("dialog-only");
 
-		expect(await result).toBe("Saved draft");
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+		await act(() => environment.setup.mockInput.typeText("restored"));
+		await flushTestRenderer(environment.setup, 2);
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("restored");
+		expect(frame).not.toContain("dialog-only");
 	} finally {
 		await environment.dispose();
 	}

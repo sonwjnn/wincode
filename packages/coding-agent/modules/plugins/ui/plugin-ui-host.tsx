@@ -2,6 +2,7 @@ import {
 	ConfirmDialog,
 	createPortal,
 	InputDialog,
+	MultilineEditor,
 	useKeyboard,
 	useRenderer,
 	useTerminalDimensions,
@@ -435,12 +436,11 @@ const PluginEditorDialog = ({
 	return (
 		<DialogInset>
 			<box flexDirection="column" gap={1}>
-				<textarea
+				<MultilineEditor
 					focused
 					focusedTextColor={colors.text}
 					height={10}
 					initialValue={initialValue}
-					onContentChange={() => undefined}
 					ref={textareaRef}
 					textColor={colors.text}
 					wrapMode="word"
