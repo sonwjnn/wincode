@@ -297,6 +297,7 @@ export const createRpcPluginUIHost = (
 	let closed = false;
 	const handles = new Set<PluginUIHandle>();
 	const contributions = new Map<string, RpcPluginUIContributionState>();
+	const textWidgetKeysByPlugin = new Map<string, Set<string>>();
 	let titleOwner: string | undefined;
 	const sendUpdate = (update: PluginUIUpdate): void => {
 		if (closed || !isRpcPluginUIUpdate(update)) {
@@ -353,6 +354,7 @@ export const createRpcPluginUIHost = (
 		transport.update(update);
 	};
 	const clearPluginContributions = (pluginId: string): void => {
+		textWidgetKeysByPlugin.delete(pluginId);
 		const state = contributions.get(pluginId);
 		const ownsTitle = titleOwner === pluginId;
 		if (state === undefined && !ownsTitle) {
@@ -397,17 +399,24 @@ export const createRpcPluginUIHost = (
 			for (const handle of [...handles]) {
 				handle.close();
 			}
+			textWidgetKeysByPlugin.clear();
 		},
 		create(owner, beginPrompt, _invocation) {
 			const controller = new AbortController();
 			let handleClosed = false;
+			let textWidgetKeys = textWidgetKeysByPlugin.get(owner.pluginId);
+			if (textWidgetKeys === undefined) {
+				textWidgetKeys = new Set();
+				textWidgetKeysByPlugin.set(owner.pluginId, textWidgetKeys);
+			}
 			const updateControls = createPluginUIUpdateControls(
 				owner.pluginId,
 				(update) => {
 					if (!handleClosed) {
 						publishUpdate(update);
 					}
-				}
+				},
+				textWidgetKeys
 			);
 			const request = <Value extends string | boolean | undefined>(
 				kind: Exclude<PluginUIPromptKind, "custom">,

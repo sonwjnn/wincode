@@ -2841,7 +2841,7 @@ ctx.ui.notify("Done!", "info");  // "info" | "warning" | "error"
 
 #### Timed Dialogs with Countdown
 
-Dialogs support a `timeout` option that auto-dismisses with a live countdown display:
+Dialogs support a `timeout` option that auto-dismisses. In Interactive Mode, the host-owned dialog title shows a live countdown using ceiling seconds (for example, 1.5 seconds initially displays as `2s`); the Plugin prompt title and lifecycle notifications stay unchanged. Other execution modes keep their existing timeout result without rendering a countdown:
 
 ```typescript
 // Dialog shows "Title (5s)" → "Title (4s)" → ... → auto-dismisses at 0
@@ -2862,6 +2862,7 @@ if (confirmed) {
 - `select()` returns `undefined`
 - `confirm()` returns `false`
 - `input()` returns `undefined`
+- `editor()` returns `undefined`
 
 #### Manual Dismissal with AbortSignal
 

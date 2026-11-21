@@ -16,6 +16,7 @@ import type {
 	PluginUICustomContext,
 	PluginUICustomPresentationMode,
 	PluginUIUpdate,
+	PluginUIWidgetContext,
 	SessionSdk,
 	SessionSdkEvent,
 	SessionSdkHandle,
@@ -228,6 +229,9 @@ type CustomUIState = {
 		| undefined;
 	resolveAsyncFactory: (component: PluginUICustomComponent<string>) => void;
 	throwComponent: boolean;
+	componentMounts: number;
+	placementSizes: Readonly<{ height: number; width: number }>[];
+	placementDimensionsFrozen: boolean[];
 };
 
 type PluginKeyboardState = {
@@ -308,6 +312,7 @@ type RealComposerState = {
 
 const completionPrefixPattern = /\S*$/u;
 const dollarCompletionPrefixPattern = /\$[^\s]*$/u;
+const timedEditorCountdownPattern = /Timed editor title \([1-4]s\)/u;
 
 const realComposerCommandControllerFactory: CommandControllerFactory = {
 	create: () =>
@@ -390,6 +395,7 @@ const pluginUiTestEnvironment = async (
 		context: undefined,
 		submittedTexts: [],
 	};
+
 	const realComposerEditor: PluginEditorComponent = (context) => {
 		realComposerState.context = context;
 		return (
@@ -1651,6 +1657,153 @@ test("header and footer have host-wide first-owner conflicts and restore default
 		expect(frame).toContain("Host default footer");
 	} finally {
 		unbindOtherSession?.();
+		await environment.dispose();
+	}
+});
+
+test("React widgets receive live dimensions and theme while preserving composer focus", async () => {
+	let receivedContext: PluginUIWidgetContext | undefined;
+	let liveWidgetUnmounts = 0;
+	const liveWidget = (context: PluginUIWidgetContext) => {
+		receivedContext = context;
+		const [status] = useState("Ready");
+		useEffect(
+			() => () => {
+				liveWidgetUnmounts += 1;
+			},
+			[]
+		);
+		return (
+			<box flexDirection="column" height={20}>
+				<text>{`${status} ${context.theme.name}`}</text>
+				<text>Widget content still fits</text>
+				<text>Clipped widget overflow</text>
+			</box>
+		);
+	};
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 12,
+		width: 36,
+	});
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const otherUi = environment.runtime.getPluginUI(
+			"plugin_ui_other_fixture",
+			environment.sessionId
+		);
+		let belowWidgetUnmounts = 0;
+		const belowWidget = () => {
+			useEffect(
+				() => () => {
+					belowWidgetUnmounts += 1;
+				},
+				[]
+			);
+			return <text>Bottom</text>;
+		};
+		await act(async () => {
+			ui.setWidget("live", liveWidget, { placement: "aboveEditor" });
+			otherUi.setWidget("live", belowWidget, {
+				placement: "belowEditor",
+			});
+			await flushTestRenderer(environment.setup, 4);
+		});
+		let frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Ready opencode");
+		expect(frame).not.toContain("Clipped widget overflow");
+		expect(frame).toContain("Fixture composer");
+		expect(frame).toContain("Bottom");
+		expect(frame.indexOf("Bottom")).toBeGreaterThan(
+			frame.indexOf("Fixture composer")
+		);
+		expect(receivedContext).toMatchObject({
+			height: 2,
+			theme: { name: "opencode" },
+			width: 34,
+		});
+		expect(environment.uiUpdates).not.toContainEqual(
+			expect.objectContaining({ key: "live" })
+		);
+
+		await act(() => environment.setup.resize(20, 8));
+		await flushTestRenderer(environment.setup, 2);
+		frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Ready opencode");
+		expect(frame).toContain("Fixture composer");
+		expect(receivedContext).toMatchObject({ height: 1, width: 18 });
+		await act(() =>
+			environment.setup.mockInput.typeText("composer keeps focus")
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"composer keeps focus"
+		);
+
+		await act(async () => {
+			ui.setWidget("live", ["Replaced"]);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Replaced");
+		expect(frame).not.toContain("Ready opencode");
+		expect(liveWidgetUnmounts).toBe(1);
+
+		await act(async () => {
+			ui.setWidget("live", undefined);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		frame = environment.setup.captureCharFrame();
+		expect(frame).not.toContain("Replaced");
+		expect(frame).toContain("Bottom");
+		await act(async () => {
+			otherUi.setWidget("live", undefined);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(environment.setup.captureCharFrame()).not.toContain("Bottom");
+		expect(belowWidgetUnmounts).toBe(1);
+		await act(async () => {
+			otherUi.setWidget("live", belowWidget, {
+				placement: "belowEditor",
+			});
+			await flushTestRenderer(environment.setup, 2);
+		});
+		await act(async () => {
+			environment.runtime.disablePlugin(
+				"plugin_ui_other_fixture",
+				"Widget owner unloaded."
+			);
+			await flushTestRenderer(environment.setup, 2);
+		});
+		expect(environment.setup.captureCharFrame()).not.toContain("Bottom");
+		expect(belowWidgetUnmounts).toBe(2);
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("a failed React widget is omitted without disrupting other widgets or the composer", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const ui = environment.runtime.getPluginUI(
+			"plugin_ui_fixture",
+			environment.sessionId
+		);
+		const brokenWidget = () => {
+			throw new Error("Widget rendering failed.");
+		};
+		await act(async () => {
+			ui.setWidget("broken", brokenWidget);
+			ui.setWidget("text", ["Text widget remains visible"]);
+			await flushTestRenderer(environment.setup, 3);
+		});
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Text widget remains visible");
+		expect(frame).toContain("Fixture composer");
+		expect(frame).not.toContain("Widget rendering failed");
+	} finally {
 		await environment.dispose();
 	}
 });
@@ -4106,6 +4259,90 @@ test("positioned overlay dimensions and presentation bounds remain aligned after
 	}
 });
 
+test("responsive overlay placement reevaluates on resize without remounting and keeps bounds in sync", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 16,
+		width: 64,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay-responsive"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const presentationHandle =
+			environment.customUIState.lastContext?.presentationHandle;
+		if (presentationHandle === undefined) {
+			throw new Error("The responsive overlay did not receive its handle.");
+		}
+		const initialMounts = environment.customUIState.componentMounts;
+		expect(presentationHandle.getBounds()).toEqual({
+			left: 32,
+			top: 1,
+			width: 31,
+			height: 6,
+		});
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			width: 31,
+			height: 6,
+		});
+		expect(environment.customUIState.placementSizes.at(-1)).toEqual({
+			width: 64,
+			height: 16,
+		});
+		expect(environment.customUIState.placementDimensionsFrozen.at(-1)).toBe(
+			true
+		);
+
+		await act(() => environment.setup.resize(40, 12));
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.getBounds()).toEqual({
+			left: 1,
+			top: 5,
+			width: 19,
+			height: 6,
+		});
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			width: 19,
+			height: 6,
+		});
+		expect(environment.customUIState.placementSizes.at(-1)).toEqual({
+			width: 40,
+			height: 12,
+		});
+		expect(environment.customUIState.componentMounts).toBe(initialMounts);
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("placement resolver failures settle through the host and release custom UI admission", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result: failureResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay-placement-failures"
+		);
+		expect(await failureResult).toBe(
+			"plugin_ui_custom_failed,plugin_ui_custom_failed"
+		);
+		expect(environment.pluginUIHost?.getCustomUI()).toBeNull();
+
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("overlay and full-screen component bounds track terminal resize", async () => {
 	for (const [command, isOverlay] of [
 		["custom-overlay", true],
@@ -4832,6 +5069,87 @@ test("Plugin UI timeouts resolve select, confirm, input, and editor defaults", a
 	}
 });
 
+test("timed Plugin select, confirm, and input dialogs show a countdown while untimed titles stay unchanged", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		for (const [command, title, expected] of [
+			["timed-dialog-title", "Plugin Selection (5s)", "undefined"],
+			["timed-confirm-title", "Timed confirmation title (2s)", "false"],
+			["timed-input-title", "Timed input title (5s)", "undefined"],
+		] as const) {
+			const { result } = await environment.executeCommand(
+				"plugin_ui_fixture",
+				command
+			);
+			await flushTestRenderer(environment.setup, 2);
+			expect(environment.setup.captureCharFrame()).toContain(title);
+			await environment.pressEscape();
+			expect(await result).toBe(expected);
+		}
+
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"input"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const frame = environment.setup.captureCharFrame();
+		expect(frame).toContain("Fixture input");
+		expect(frame).not.toContain("Fixture input (");
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("a timed Plugin editor shows the remaining seconds without losing its draft, focus, or observer title", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		kittyKeyboard: true,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"timed-editor-response"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain(
+			"Timed editor title (5s)"
+		);
+		await act(() => environment.setup.mockInput.typeText("e"));
+		let countdownFrame = environment.setup.captureCharFrame();
+		for (
+			let attempt = 0;
+			attempt < 100 && !timedEditorCountdownPattern.test(countdownFrame);
+			attempt++
+		) {
+			await flushTestRenderer(environment.setup, 1);
+			countdownFrame = environment.setup.captureCharFrame();
+		}
+		expect(timedEditorCountdownPattern.test(countdownFrame)).toBe(true);
+		expect(countdownFrame).toContain("eDraft");
+		await act(() => environment.setup.mockInput.typeText("dited "));
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("edited Draft");
+		await act(() => environment.setup.mockInput.pressEnter({ ctrl: true }));
+		await flushTestRenderer(environment.setup, 2);
+		expect(await result).toBe("edited Draft");
+
+		const promptEvents = environment.runtime.getResource<string[]>(
+			"plugin_ui_fixture",
+			"prompt_events"
+		);
+		if (promptEvents === undefined) {
+			throw new Error(
+				"The Plugin prompt lifecycle events were not registered."
+			);
+		}
+		expect(promptEvents).toContain("start:editor:Timed editor title");
+		expect(promptEvents).toContain("end:editor:Timed editor title");
+	} finally {
+		await environment.dispose();
+	}
+});
+
 test("a Plugin confirmation with a timeout above the timer limit stays open for a response", async () => {
 	const environment = await pluginUiTestEnvironment();
 	try {
@@ -4841,7 +5159,7 @@ test("a Plugin confirmation with a timeout above the timer limit stays open for 
 		);
 		await flushTestRenderer(environment.setup, 2);
 		expect(environment.setup.captureCharFrame()).toContain(
-			"Long timeout confirmation"
+			"Long timeout confirmation (2147484s)"
 		);
 		await act(() => environment.setup.mockInput.pressArrow("up"));
 		await act(() => environment.setup.mockInput.pressEnter());

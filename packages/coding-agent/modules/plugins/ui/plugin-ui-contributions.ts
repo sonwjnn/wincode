@@ -7,6 +7,7 @@ import type {
 	PluginUIHeaderComponent,
 	PluginUIStatusContribution,
 	PluginUIUpdate,
+	PluginUIWidgetComponent,
 	PluginUIWidgetContribution,
 	PluginUIWidgetOptions,
 	PluginUIWidgetPlacement,
@@ -122,30 +123,35 @@ export type PluginUIContributionStore = Readonly<{
 		sessionId: string,
 		pluginId: string,
 		key: string,
-		lines: readonly string[] | undefined,
+		content: readonly string[] | PluginUIWidgetComponent | undefined,
 		placement: PluginUIWidgetPlacement
 	) => void;
 	subscribe: (sessionId: string, listener: () => void) => () => void;
 }>;
 
+type MutablePluginUIWidget =
+	| Readonly<{
+			component: PluginUIWidgetComponent;
+			placement: PluginUIWidgetPlacement;
+	  }>
+	| Readonly<{
+			lines: readonly string[];
+			placement: PluginUIWidgetPlacement;
+	  }>;
+
 type MutablePluginUIView = {
 	hiddenThinkingLabel: PluginUIOwnedValue<string> | undefined;
 	statuses: Map<string, Map<string, string>>;
 	toolsExpanded: PluginUIOwnedValue<boolean> | undefined;
-	widgets: Map<
-		string,
-		Map<
-			string,
-			Readonly<{
-				lines: readonly string[];
-				placement: PluginUIWidgetPlacement;
-			}>
-		>
-	>;
+	widgets: Map<string, Map<string, MutablePluginUIWidget>>;
 	workingIndicator: PluginUIOwnedValue<PluginUIWorkingIndicator> | undefined;
 	workingMessage: PluginUIOwnedValue<string> | undefined;
 	workingVisible: PluginUIOwnedValue<boolean> | undefined;
 };
+
+const isWidgetComponent = (
+	content: readonly string[] | PluginUIWidgetComponent
+): content is PluginUIWidgetComponent => typeof content === "function";
 
 const sameLines = (
 	left: readonly string[],
@@ -153,6 +159,38 @@ const sameLines = (
 ): boolean =>
 	left.length === right.length &&
 	left.every((line, index) => line === right[index]);
+
+const setWidgetValue = (
+	ownerWidgets: Map<string, MutablePluginUIWidget>,
+	key: string,
+	content: readonly string[] | PluginUIWidgetComponent,
+	placement: PluginUIWidgetPlacement
+): boolean => {
+	const current = ownerWidgets.get(key);
+	if (isWidgetComponent(content)) {
+		if (
+			current !== undefined &&
+			"component" in current &&
+			current.component === content &&
+			current.placement === placement
+		) {
+			return false;
+		}
+		ownerWidgets.set(key, Object.freeze({ component: content, placement }));
+		return true;
+	}
+	const copiedLines = Object.freeze([...content]);
+	if (
+		current !== undefined &&
+		"lines" in current &&
+		current.placement === placement &&
+		sameLines(current.lines, copiedLines)
+	) {
+		return false;
+	}
+	ownerWidgets.set(key, Object.freeze({ lines: copiedLines, placement }));
+	return true;
+};
 
 const createSnapshot = (
 	view: MutablePluginUIView | undefined
@@ -176,9 +214,11 @@ const createSnapshot = (
 			[...values.entries()].map(([key, value]) =>
 				Object.freeze({
 					key,
-					lines: value.lines,
 					placement: value.placement,
 					pluginId,
+					...("lines" in value
+						? { lines: value.lines }
+						: { component: value.component }),
 				})
 			)
 		)
@@ -219,14 +259,17 @@ const resetUpdatesForPluginView = (
 	for (const key of view.statuses.get(pluginId)?.keys() ?? []) {
 		updates.push(Object.freeze({ type: "status", pluginId, key, value: null }));
 	}
-	for (const [key, { placement }] of view.widgets.get(pluginId) ?? []) {
+	for (const [key, widget] of view.widgets.get(pluginId) ?? []) {
+		if (!("lines" in widget)) {
+			continue;
+		}
 		updates.push(
 			Object.freeze({
 				type: "widget",
 				pluginId,
 				key,
 				value: null,
-				placement,
+				placement: widget.placement,
 			})
 		);
 	}
@@ -606,10 +649,10 @@ export const createPluginUIContributionStore =
 				removeEmptyView(sessionId, view);
 				publish(sessionId);
 			},
-			setWidget(sessionId, pluginId, key, lines, placement) {
+			setWidget(sessionId, pluginId, key, content, placement) {
 				const view = viewFor(sessionId);
 				let ownerWidgets = view.widgets.get(pluginId);
-				if (lines === undefined) {
+				if (content === undefined) {
 					if (ownerWidgets?.delete(key) !== true) {
 						return;
 					}
@@ -619,18 +662,9 @@ export const createPluginUIContributionStore =
 						ownerWidgets = new Map();
 						view.widgets.set(pluginId, ownerWidgets);
 					}
-					const copiedLines = Object.freeze([...lines]);
-					const current = ownerWidgets.get(key);
-					if (
-						current?.placement === placement &&
-						sameLines(current.lines, copiedLines)
-					) {
+					if (!setWidgetValue(ownerWidgets, key, content, placement)) {
 						return;
 					}
-					ownerWidgets.set(
-						key,
-						Object.freeze({ lines: copiedLines, placement })
-					);
 				}
 				removeEmptyView(sessionId, view);
 				publish(sessionId);
@@ -660,7 +694,8 @@ export type PluginUIUpdateSink = (update: PluginUIUpdate) => void;
 
 export const createPluginUIUpdateControls = (
 	pluginId: string,
-	publish: PluginUIUpdateSink
+	publish: PluginUIUpdateSink,
+	textWidgetKeys: Set<string> = new Set()
 ): Pick<PluginUI, "setStatus" | "setWidget" | "setTitle"> =>
 	Object.freeze({
 		setStatus(key, value) {
@@ -673,13 +708,20 @@ export const createPluginUIUpdateControls = (
 				})
 			);
 		},
-		setWidget(key, lines, options?: PluginUIWidgetOptions) {
+		setWidget(key, content, options?: PluginUIWidgetOptions) {
+			if (Array.isArray(content)) {
+				textWidgetKeys.add(key);
+			} else if (content !== undefined && !textWidgetKeys.delete(key)) {
+				return;
+			} else if (content === undefined) {
+				textWidgetKeys.delete(key);
+			}
 			publish(
 				Object.freeze({
 					type: "widget",
 					pluginId,
 					key,
-					value: lines === undefined ? null : Object.freeze([...lines]),
+					value: Array.isArray(content) ? Object.freeze([...content]) : null,
 					placement: options?.placement ?? "aboveEditor",
 				})
 			);

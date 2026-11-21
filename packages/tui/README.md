@@ -13,6 +13,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
   - `InputDialog`, `InputDialogProps` — render themed text entry and report submit/cancel events to the caller.
   - `ConfirmDialog`, `ConfirmDialogProps` — render themed Yes/No confirmation and report confirm/cancel events to the caller.
   - `InlineNotice`, `InlineNoticeProps`, `InlineNoticeVariant` — render a wrapped notice using the active theme.
+  - `InlineImage`, `InlineImageProps` — render already available image bytes in a bounded, renderer-owned Kitty placement or show a text fallback.
   - `EditorAutocomplete`, `EditorAutocompleteItem`, `EditorAutocompleteProps` — reusable editor suggestion presentation, keyboard navigation, apply, and dismissal; the host supplies candidates and owns edits.
   - `MultilineEditor`, `MultilineEditorProps` — reusable multiline text editing with paste and selection support; `onChange` reports the full edited text to the host.
   - `SearchablePicker`, `SearchablePickerProps`, `SearchablePickerItemState` — render a focused fuzzy-search input and selectable, scrollable results.
@@ -30,7 +31,7 @@ The public API is grouped by import path. OpenTUI-backed exports are re-exported
   - Clipboard: `ClipboardReadOptions`, `ClipboardReadResult`, `ClipboardService`, `ClipboardWriteOptions`, `ClipboardWriteResult`, `HostClipboardService`, `createClipboard`, `createHostClipboard`, `createRendererClipboardAdapter`.
   - Events and text: `Extmark`, `KeyEvent`, `MouseEvent`, `PasteEvent`, `RGBA`, `SimpleHighlight`, `StyleDefinitionInput`, `SyntaxStyle`, `TextAttributes`, `TextareaOptions`.
   - Utilities: `decodePasteBytes`, `getTreeSitterClient`, `pathToFiletype`, `TreeSitterClient`.
-- `@wincode/tui/testing`: `createTestRenderer`, `MockTreeSitterClient`, `MouseButtons`, `TestRecorder`, `TestRendererOptions`, `TestRendererSetup`, `testRender` — render and exercise terminal UI in tests.
+- `@wincode/tui/testing`: `createTestRenderer`, `MockTreeSitterClient`, `MouseButtons`, `setRendererCapabilities`, `TerminalCapabilitiesOverrides`, `TestRecorder`, `TestRendererOptions`, `TestRendererSetup`, `testRender` — render and exercise terminal UI in tests.
 - `@wincode/tui/jsx-runtime`: `Fragment`, `jsx`, `jsxs`, and the `JSX` type namespace.
 - `@wincode/tui/jsx-dev-runtime`: `Fragment`, `jsxDEV`, and the `JSX` type namespace.
 
@@ -129,6 +130,21 @@ import { BoundedContentPanel } from "@wincode/tui";
 ```
 
 The runnable independent consumer is [`examples/independent-app.tsx`](./examples/independent-app.tsx). The offline Markdown viewer is [`examples/offline-markdown-viewer.tsx`](./examples/offline-markdown-viewer.tsx); run it with `bun packages/tui/examples/offline-markdown-viewer.tsx`. It owns its renderer, wraps `BoundedContentPanel` in one `scrollbox`, and exits on Escape.
+
+## Inline image preview
+
+`InlineImage` accepts already available image bytes, a terminal-cell width and height, and the fallback text to show when placement is unavailable or decoding fails. It preserves the image aspect ratio and lets OpenTUI own image rendering, viewport clipping, placement updates, and teardown; it does not write protocol data to stdout or read files or URLs. Use a new `Uint8Array` when replacing the image bytes. Set `visible={false}` to remove the preview and its renderer-owned placement.
+
+The current support matrix intentionally enables Kitty graphics only on the renderer's alternate screen when OpenTUI reports Kitty support. Repaintable main-screen views, iTerm2, multiplexer fallbacks, unsupported formats, and renderers without Kitty support show the supplied text. iTerm2 placement is not enabled because OpenTUI does not expose safe placement deletion and source cropping for that protocol.
+
+```tsx
+<InlineImage
+  fallback="Image preview unavailable"
+  height={8}
+  source={imageBytes}
+  width={24}
+/>
+```
 
 ## Operation feedback
 

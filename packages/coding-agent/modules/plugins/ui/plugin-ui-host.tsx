@@ -69,9 +69,12 @@ import type {
 	PluginUICustomPresentationHandle,
 	PluginUICustomPresentationMode,
 	PluginUIDialogOptions,
+	PluginUIFooterComponent,
 	PluginUIFooterContext,
+	PluginUIHeaderComponent,
 	PluginUIPromptKind,
 	PluginUIUpdate,
+	PluginUIWidgetComponent,
 	PluginUIWidgetPlacement,
 } from "../public";
 import { PluginUICustomError } from "../public";
@@ -91,7 +94,10 @@ import type {
 	PluginUIHostBinding,
 	PluginUIOwner as PluginUIOwnerType,
 } from "./plugin-ui-host-contract";
-import { schedulePluginUITimeout } from "./plugin-ui-timeout";
+import {
+	schedulePluginUITimeout,
+	schedulePluginUITitleCountdown,
+} from "./plugin-ui-timeout";
 
 export type { PluginUIHandle, PluginUIOwner } from "./plugin-ui-host-contract";
 
@@ -566,9 +572,13 @@ class PluginUICustomErrorBoundary extends Component<
 
 type PluginUIChromeErrorBoundaryProps = Readonly<{
 	children: ReactNode;
+	component:
+		| PluginUIFooterComponent
+		| PluginUIHeaderComponent
+		| PluginUIWidgetComponent;
 	fallback: ReactNode;
 	pluginId: string;
-	surface: "header" | "footer";
+	surface: "header" | "footer" | "widget";
 }>;
 
 class PluginUIChromeErrorBoundary extends Component<
@@ -583,12 +593,20 @@ class PluginUIChromeErrorBoundary extends Component<
 
 	override componentDidCatch(error: Error): void {
 		void logger
-			.error("Plugin UI chrome failed to render", {
+			.error("Plugin UI contribution failed to render", {
 				cause: error.message,
 				operation: `plugin.ui.${this.props.surface}`,
 				pluginId: this.props.pluginId,
 			})
 			.catch(() => undefined);
+	}
+
+	override componentDidUpdate(
+		previousProps: PluginUIChromeErrorBoundaryProps
+	): void {
+		if (this.state.failed && previousProps.component !== this.props.component) {
+			this.setState({ failed: false });
+		}
 	}
 
 	override render(): ReactNode {
@@ -783,6 +801,17 @@ const validatePluginUICustomWidth = (
 	);
 };
 
+const validatePluginUICustomBehaviorOptions = (
+	options: PluginUICustomOptions
+): void => {
+	if (
+		options.resolvePlacement !== undefined &&
+		typeof options.resolvePlacement !== "function"
+	) {
+		invalidPluginUICustomOptions("resolvePlacement must be a function.");
+	}
+};
+
 const validatePluginUICustomOptions = (
 	options: PluginUICustomOptions | undefined
 ): PluginUICustomOptions => {
@@ -802,6 +831,7 @@ const validatePluginUICustomOptions = (
 		value.width,
 		value.maxHeight,
 		value.margin,
+		value.resolvePlacement,
 	];
 
 	if (
@@ -835,6 +865,7 @@ const validatePluginUICustomOptions = (
 	) {
 		invalidPluginUICustomOptions("anchor must be center or a named corner.");
 	}
+	validatePluginUICustomBehaviorOptions(value);
 	validatePluginUICustomWidth(value.width);
 	if (
 		value.maxHeight !== undefined &&
@@ -884,19 +915,47 @@ const getValidatedPluginUICustomOptions = (
 	}
 };
 
+type PluginUICustomBoundsResolution =
+	| Readonly<{ ok: true; bounds: PluginUICustomBounds | null }>
+	| Readonly<{ ok: false; error: unknown }>;
+
 const getPluginUICustomRequestBounds = (
 	request: PluginUICustomHostRequest | null,
 	width: number,
 	height: number
-): PluginUICustomBounds | null =>
-	request === null
-		? null
-		: getPluginUICustomBounds(
+): PluginUICustomBoundsResolution => {
+	if (request === null) {
+		return { bounds: null, ok: true };
+	}
+	try {
+		let options = request.options;
+		if (request.options.resolvePlacement !== undefined) {
+			const dimensions = Object.freeze({ width, height });
+			const placement = request.options.resolvePlacement(dimensions);
+			if (
+				placement === null ||
+				typeof placement !== "object" ||
+				Array.isArray(placement)
+			) {
+				invalidPluginUICustomOptions(
+					"resolvePlacement must return overlay placement options."
+				);
+			}
+			options = validatePluginUICustomOptions({ ...options, ...placement });
+		}
+		return {
+			bounds: getPluginUICustomBounds(
 				request.presentation,
 				width,
 				height,
-				request.options
-			);
+				options
+			),
+			ok: true,
+		};
+	} catch (error) {
+		return { error, ok: false };
+	}
+};
 
 const customUIContext = (
 	request: PluginUICustomHostRequest,
@@ -1066,11 +1125,18 @@ export function PluginUICustomPresentation({
 	const renderer = useRenderer();
 	const { currentTheme } = useTheme();
 	const dimensions = useTerminalDimensions();
-	const customBounds = getPluginUICustomRequestBounds(
-		activeRequest,
-		dimensions.width,
-		dimensions.height
+	const customBoundsResolution = useMemo(
+		() =>
+			getPluginUICustomRequestBounds(
+				activeRequest,
+				dimensions.width,
+				dimensions.height
+			),
+		[activeRequest, dimensions.height, dimensions.width]
 	);
+	const customBounds = customBoundsResolution.ok
+		? customBoundsResolution.bounds
+		: null;
 	const [loadedComponent, setLoadedComponent] = useState<Readonly<{
 		component: PluginUICustomComponent<unknown>;
 		requestId: string;
@@ -1087,6 +1153,12 @@ export function PluginUICustomPresentation({
 	const layerId =
 		activeRequest === null ? undefined : `plugin-custom-${activeRequest.id}`;
 
+	useLayoutEffect(() => {
+		if (activeRequest !== null && !customBoundsResolution.ok) {
+			activeRequest.fail(customBoundsResolution.error);
+		}
+	}, [activeRequest, customBoundsResolution]);
+
 	useEffect(() => {
 		if (host === null || pluginRuntime === undefined) {
 			return;
@@ -1095,26 +1167,24 @@ export function PluginUICustomPresentation({
 	}, [host, pluginRuntime, sessionId]);
 
 	useLayoutEffect(() => {
-		if (activeRequest === null || layerId === undefined) {
+		if (
+			activeRequest === null ||
+			layerId === undefined ||
+			!customBoundsResolution.ok
+		) {
 			return;
 		}
-		push(
-			layerId,
-			() => {
-				activeRequest.dismiss();
-				return true;
-			},
-			() => {
-				activeRequest.dismiss();
-				return true;
-			}
-		);
+		const dismiss = (): true => {
+			activeRequest.dismiss();
+			return true;
+		};
+		push(layerId, dismiss, dismiss);
 		return () => {
 			if (!renderer.isDestroyed) {
 				pop(layerId);
 			}
 		};
-	}, [activeRequest, layerId, pop, push, renderer]);
+	}, [activeRequest, layerId, pop, push, customBoundsResolution, renderer]);
 
 	useKeyboard((key) => {
 		const current = activeRequestRef.current;
@@ -1189,20 +1259,58 @@ export function PluginUICustomPresentation({
 		if (widgets.length === 0) {
 			return null;
 		}
+		const componentCount = widgets.filter(
+			(widget) => "component" in widget
+		).length;
+		const maxWidgetHeight =
+			componentCount === 0
+				? 0
+				: Math.max(
+						0,
+						Math.floor((dimensions.height - 4) / (3 * componentCount))
+					);
 		return (
 			<box flexDirection="column" flexShrink={0} width="100%">
-				{widgets.map(({ key, lines, pluginId }) => (
-					<box
-						flexDirection="column"
-						key={`${pluginId}:${key}`}
-						paddingX={1}
-						width="100%"
-					>
-						<text fg={currentTheme.colors.textMuted} wrapMode="word">
-							{lines.join("\n")}
-						</text>
-					</box>
-				))}
+				{widgets.map((widget) => {
+					let widgetContent: ReactNode;
+					if (widget.lines !== undefined) {
+						widgetContent = (
+							<text fg={currentTheme.colors.textMuted} wrapMode="word">
+								{widget.lines.join("\n")}
+							</text>
+						);
+					} else if (maxWidgetHeight === 0) {
+						widgetContent = null;
+					} else {
+						widgetContent = (
+							<box height={maxWidgetHeight} overflow="hidden" width="100%">
+								<PluginUIChromeErrorBoundary
+									component={widget.component}
+									fallback={null}
+									key={`${widget.pluginId}:${widget.key}:component`}
+									pluginId={widget.pluginId}
+									surface="widget"
+								>
+									{createElement(widget.component, {
+										height: maxWidgetHeight,
+										theme: currentTheme,
+										width: Math.max(0, dimensions.width - 2),
+									})}
+								</PluginUIChromeErrorBoundary>
+							</box>
+						);
+					}
+					return (
+						<box
+							flexDirection="column"
+							key={`${widget.pluginId}:${widget.key}`}
+							paddingX={1}
+							width="100%"
+						>
+							{widgetContent}
+						</box>
+					);
+				})}
 			</box>
 		);
 	};
@@ -1286,6 +1394,9 @@ const unsupportedThemeChange = (error: string): PluginThemeChangeResult => ({
 	success: false,
 });
 
+const getPluginUIDialogTitle = (title: string, seconds?: number): string =>
+	seconds === undefined ? title : `${title} (${seconds}s)`;
+
 const getPluginUIDialogTimeoutError = (
 	options: PluginUIDialogOptions | undefined
 ): RangeError | undefined => {
@@ -1293,6 +1404,187 @@ const getPluginUIDialogTimeoutError = (
 	return timeout !== undefined && (!Number.isFinite(timeout) || timeout < 0)
 		? new RangeError("Plugin UI timeout must be a finite non-negative number.")
 		: undefined;
+};
+
+const schedulePluginUIDialogTimers = (
+	deadline: number | undefined,
+	onExpire: () => void,
+	onTick: (remainingSeconds: number) => void,
+	isActive: () => boolean
+): (() => void) => {
+	if (deadline === undefined || !isActive()) {
+		return () => undefined;
+	}
+	const cancelTimeout = schedulePluginUITimeout(
+		Math.max(0, deadline - performance.now()),
+		onExpire
+	);
+	const cancelTitleCountdown = schedulePluginUITitleCountdown(
+		deadline,
+		onTick,
+		isActive
+	);
+	return () => {
+		cancelTimeout();
+		cancelTitleCountdown();
+	};
+};
+
+type PluginUIDialogSettlement<Value> = Readonly<{
+	cancel: () => void;
+	finish: (value: Value, closeDialog?: boolean) => void;
+	isSettled: () => boolean;
+	onAbort: () => void;
+	onDismiss: () => void;
+	setCancelTimers: (cancel: () => void) => void;
+	setEndPrompt: (end: () => void) => void;
+}>;
+
+const createPluginUIDialogSettlement = <Value,>(
+	defaultValue: Value,
+	activeRequests: Set<() => void>,
+	dialog: DialogContextValue,
+	layerId: string,
+	signal: AbortSignal | undefined,
+	resolve: (value: Value) => void
+): PluginUIDialogSettlement<Value> => {
+	let settled = false;
+	let endPrompt = (): void => undefined;
+	let cancelTimers = (): void => undefined;
+	let cancel = (): void => undefined;
+	const finish = (value: Value, closeDialog = true): void => {
+		if (settled) {
+			return;
+		}
+		settled = true;
+		cancelTimers();
+		signal?.removeEventListener("abort", onAbort);
+		activeRequests.delete(cancel);
+		endPrompt();
+		if (closeDialog) {
+			dialog.close(layerId);
+		}
+		resolve(value);
+	};
+	cancel = () => finish(defaultValue);
+	const onAbort = (): void => cancel();
+	const onDismiss = (): void => finish(defaultValue, false);
+	activeRequests.add(cancel);
+	return Object.freeze({
+		cancel,
+		finish,
+		isSettled: () => settled,
+		onAbort,
+		onDismiss,
+		setCancelTimers: (nextCancel) => {
+			cancelTimers = nextCancel;
+		},
+		setEndPrompt: (end) => {
+			endPrompt = end;
+		},
+	});
+};
+
+const updatePluginUIDialogCountdownTitle = (
+	dialog: DialogContextValue,
+	layerId: string,
+	dialogTitle: string,
+	displayedSeconds: { value: number | undefined },
+	nextSeconds: number
+): void => {
+	if (nextSeconds === displayedSeconds.value) {
+		return;
+	}
+	displayedSeconds.value = nextSeconds;
+	dialog.updateTitle(layerId, getPluginUIDialogTitle(dialogTitle, nextSeconds));
+};
+
+type PluginUIDialogRequestParameters<Value> = Readonly<{
+	activeRequests: Set<() => void>;
+	beginPrompt: (kind: PluginUIPromptKind, title: string) => () => void;
+	createContent: (resolve: (value: Value) => void) => ReactNode;
+	defaultValue: Value;
+	dialogTitle: string;
+	getDialog: () => DialogContextValue;
+	kind: PluginUIPromptKind;
+	options: PluginUIDialogOptions | undefined;
+	pluginId: string;
+	promptTitle: string;
+}>;
+
+const openPluginUIDialogRequest = <Value,>(
+	parameters: PluginUIDialogRequestParameters<Value>
+): Promise<Value> => {
+	const {
+		activeRequests,
+		beginPrompt,
+		createContent,
+		defaultValue,
+		dialogTitle,
+		getDialog,
+		kind,
+		options,
+		pluginId,
+		promptTitle,
+	} = parameters;
+	const signal = options?.signal;
+	const timeout = options?.timeout;
+	const result = Promise.withResolvers<Value>();
+	const dialog = getDialog();
+	const layerId = `plugin-ui-${pluginId}-${crypto.randomUUID()}`;
+	const displayedSeconds = {
+		value: timeout === undefined ? undefined : Math.ceil(timeout / 1000),
+	};
+	const settlement = createPluginUIDialogSettlement(
+		defaultValue,
+		activeRequests,
+		dialog,
+		layerId,
+		signal,
+		result.resolve
+	);
+	const { cancel, finish, onAbort, onDismiss } = settlement;
+	signal?.addEventListener("abort", onAbort, { once: true });
+	if (signal?.aborted) {
+		cancel();
+		return result.promise;
+	}
+	settlement.setEndPrompt(beginPrompt(kind, promptTitle));
+	try {
+		dialog.open({
+			children: createElement(
+				PluginDialogRequest,
+				{
+					escapeHandledByContent: isEscapeHandledByDialogContent(kind),
+					onDismiss,
+				},
+				createContent((value) => finish(value))
+			),
+			layerId,
+			title: getPluginUIDialogTitle(dialogTitle, displayedSeconds.value),
+		});
+	} catch (error) {
+		finish(defaultValue, false);
+		return Promise.reject(error);
+	}
+	const timeoutDeadline =
+		timeout === undefined ? undefined : performance.now() + timeout;
+	settlement.setCancelTimers(
+		schedulePluginUIDialogTimers(
+			timeoutDeadline,
+			cancel,
+			(nextSeconds) =>
+				updatePluginUIDialogCountdownTitle(
+					dialog,
+					layerId,
+					dialogTitle,
+					displayedSeconds,
+					nextSeconds
+				),
+			() => !settlement.isSettled()
+		)
+	);
+	return result.promise;
 };
 
 const isValidTheme = (candidate: unknown): candidate is Theme => {
@@ -1346,12 +1638,36 @@ const createPluginUIHost = ({
 	let hostClosed = false;
 	const shortcutSubscriptions = new Set<() => void>();
 	const terminalInputSubscriptions = new Set<() => void>();
+	const textWidgetKeysByOwner = new Map<
+		string,
+		Map<string | undefined, Set<string>>
+	>();
 	const composers = new Map<
 		string,
 		Readonly<{ composer: PluginComposerHost }>
 	>();
 	const editorContributions = new Map<string, PluginEditorContribution>();
 	const editorListeners = new Map<string, Set<() => void>>();
+	const getTextWidgetKeys = (owner: PluginUIOwnerType): Set<string> => {
+		let sessionKeys = textWidgetKeysByOwner.get(owner.pluginId);
+		if (sessionKeys === undefined) {
+			sessionKeys = new Map();
+			textWidgetKeysByOwner.set(owner.pluginId, sessionKeys);
+		}
+		let widgetKeys = sessionKeys.get(owner.sessionId);
+		if (widgetKeys === undefined) {
+			widgetKeys = new Set();
+			sessionKeys.set(owner.sessionId, widgetKeys);
+		}
+		return widgetKeys;
+	};
+	const clearTextWidgetKeys = (owner: PluginUIOwnerType): void => {
+		const sessionKeys = textWidgetKeysByOwner.get(owner.pluginId);
+		sessionKeys?.delete(owner.sessionId);
+		if (sessionKeys?.size === 0) {
+			textWidgetKeysByOwner.delete(owner.pluginId);
+		}
+	};
 	const autocompleteProviders = new Map<
 		string,
 		PluginAutocompleteRegistration[]
@@ -1426,6 +1742,7 @@ const createPluginUIHost = ({
 				).setTitle(undefined);
 			}
 			composers.clear();
+			textWidgetKeysByOwner.clear();
 			editorContributions.clear();
 			autocompleteProviders.clear();
 			autocompleteProviderSnapshots.clear();
@@ -1454,6 +1771,7 @@ const createPluginUIHost = ({
 			return unsubscribe;
 		},
 		clearPlugin(pluginId) {
+			textWidgetKeysByOwner.delete(pluginId);
 			for (const update of contributions.clearPlugin(pluginId)) {
 				onUpdate?.(update);
 			}
@@ -1550,7 +1868,8 @@ const createPluginUIHost = ({
 			let closed = false;
 			const updateControls = createPluginUIUpdateControls(
 				owner.pluginId,
-				(update) => onUpdate?.(update)
+				(update) => onUpdate?.(update),
+				getTextWidgetKeys(owner)
 			);
 			const getEditorComponent = (): PluginEditorComponent | undefined => {
 				if (closed || hostClosed || owner.sessionId === undefined) {
@@ -1644,57 +1963,18 @@ const createPluginUIHost = ({
 					return Promise.resolve(defaultValue);
 				}
 
-				const result = Promise.withResolvers<Value>();
-				const dialog = getDialog();
-				const layerId = `plugin-ui-${owner.pluginId}-${crypto.randomUUID()}`;
-				let endPrompt = (): void => undefined;
-				let settled = false;
-				let cancelTimeout: (() => void) | undefined;
-				const finish = (value: Value, closeDialog = true): void => {
-					if (settled) {
-						return;
-					}
-					settled = true;
-					cancelTimeout?.();
-					signal?.removeEventListener("abort", onAbort);
-					activeRequests.delete(cancel);
-					endPrompt();
-					if (closeDialog) {
-						dialog.close(layerId);
-					}
-					result.resolve(value);
-				};
-				const cancel = (): void => finish(defaultValue);
-				const onAbort = (): void => cancel();
-				const onDismiss = (): void => finish(defaultValue, false);
-				activeRequests.add(cancel);
-				signal?.addEventListener("abort", onAbort, { once: true });
-				if (signal?.aborted) {
-					cancel();
-					return result.promise;
-				}
-				endPrompt = beginPrompt(kind, promptTitle);
-				try {
-					dialog.open({
-						children: createElement(
-							PluginDialogRequest,
-							{
-								escapeHandledByContent: isEscapeHandledByDialogContent(kind),
-								onDismiss,
-							},
-							createContent((value) => finish(value))
-						),
-						layerId,
-						title: dialogTitle,
-					});
-				} catch (error) {
-					finish(defaultValue, false);
-					return Promise.reject(error);
-				}
-				if (timeout !== undefined && !settled) {
-					cancelTimeout = schedulePluginUITimeout(timeout, cancel);
-				}
-				return result.promise;
+				return openPluginUIDialogRequest({
+					activeRequests,
+					beginPrompt,
+					createContent,
+					defaultValue,
+					dialogTitle,
+					getDialog,
+					kind,
+					options,
+					pluginId: owner.pluginId,
+					promptTitle,
+				});
 			};
 
 			const requestCustom = <Value,>(
@@ -1919,7 +2199,7 @@ const createPluginUIHost = ({
 					contributions.setStatus(owner.sessionId, owner.pluginId, key, value);
 					updateControls.setStatus(key, value);
 				},
-				setWidget: (key, lines, options) => {
+				setWidget: (key, content, options) => {
 					if (closed || hostClosed || owner.sessionId === undefined) {
 						return;
 					}
@@ -1928,10 +2208,10 @@ const createPluginUIHost = ({
 						owner.sessionId,
 						owner.pluginId,
 						key,
-						lines,
+						content,
 						placement
 					);
-					updateControls.setWidget(key, lines, { placement });
+					updateControls.setWidget(key, content, { placement });
 				},
 				setHeader: (component) => {
 					if (closed || hostClosed) {
@@ -2104,6 +2384,7 @@ const createPluginUIHost = ({
 						unsubscribe();
 					}
 					if (owner.sessionId !== undefined) {
+						clearTextWidgetKeys(owner);
 						for (const update of contributions.clearView(
 							owner.sessionId,
 							owner.pluginId
@@ -2194,6 +2475,7 @@ export function PluginUIHeader({
 	});
 	return (
 		<PluginUIChromeErrorBoundary
+			component={chrome.header.component}
 			fallback={children ?? null}
 			key={chrome.header.revision}
 			pluginId={chrome.header.pluginId}
@@ -2229,6 +2511,7 @@ export function PluginUIFooter({
 	});
 	return (
 		<PluginUIChromeErrorBoundary
+			component={chrome.footer.component}
 			fallback={children ?? null}
 			key={chrome.footer.revision}
 			pluginId={chrome.footer.pluginId}
