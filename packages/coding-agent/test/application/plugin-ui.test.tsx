@@ -228,6 +228,9 @@ type CustomUIState = {
 		| undefined;
 	resolveAsyncFactory: (component: PluginUICustomComponent<string>) => void;
 	throwComponent: boolean;
+	componentMounts: number;
+	placementSizes: Readonly<{ height: number; width: number }>[];
+	placementDimensionsFrozen: boolean[];
 };
 
 type PluginKeyboardState = {
@@ -390,6 +393,7 @@ const pluginUiTestEnvironment = async (
 		context: undefined,
 		submittedTexts: [],
 	};
+
 	const realComposerEditor: PluginEditorComponent = (context) => {
 		realComposerState.context = context;
 		return (
@@ -4099,6 +4103,90 @@ test("positioned overlay dimensions and presentation bounds remain aligned after
 			height: 2,
 		});
 
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("responsive overlay placement reevaluates on resize without remounting and keeps bounds in sync", async () => {
+	const environment = await pluginUiTestEnvironment("interactive", {
+		height: 16,
+		width: 64,
+	});
+	try {
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay-responsive"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		const presentationHandle =
+			environment.customUIState.lastContext?.presentationHandle;
+		if (presentationHandle === undefined) {
+			throw new Error("The responsive overlay did not receive its handle.");
+		}
+		const initialMounts = environment.customUIState.componentMounts;
+		expect(presentationHandle.getBounds()).toEqual({
+			left: 32,
+			top: 1,
+			width: 31,
+			height: 6,
+		});
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			width: 31,
+			height: 6,
+		});
+		expect(environment.customUIState.placementSizes.at(-1)).toEqual({
+			width: 64,
+			height: 16,
+		});
+		expect(environment.customUIState.placementDimensionsFrozen.at(-1)).toBe(
+			true
+		);
+
+		await act(() => environment.setup.resize(40, 12));
+		await flushTestRenderer(environment.setup, 2);
+		expect(presentationHandle.getBounds()).toEqual({
+			left: 1,
+			top: 5,
+			width: 19,
+			height: 6,
+		});
+		expect(environment.customUIState.lastComponentDimensions).toEqual({
+			width: 19,
+			height: 6,
+		});
+		expect(environment.customUIState.placementSizes.at(-1)).toEqual({
+			width: 40,
+			height: 12,
+		});
+		expect(environment.customUIState.componentMounts).toBe(initialMounts);
+		await environment.pressEscape();
+		expect(await result).toBe("undefined");
+	} finally {
+		await environment.dispose();
+	}
+});
+
+test("placement resolver failures settle through the host and release custom UI admission", async () => {
+	const environment = await pluginUiTestEnvironment();
+	try {
+		const { result: failureResult } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay-placement-failures"
+		);
+		expect(await failureResult).toBe(
+			"plugin_ui_custom_failed,plugin_ui_custom_failed"
+		);
+		expect(environment.pluginUIHost?.getCustomUI()).toBeNull();
+
+		const { result } = await environment.executeCommand(
+			"plugin_ui_fixture",
+			"custom-overlay"
+		);
+		await flushTestRenderer(environment.setup, 2);
+		expect(environment.setup.captureCharFrame()).toContain("Fixture custom UI");
 		await environment.pressEscape();
 		expect(await result).toBe("undefined");
 	} finally {

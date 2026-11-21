@@ -10,7 +10,7 @@ import type {
 } from "@wincode/coding-agent";
 import { useKeyboard } from "@wincode/tui";
 import type { InputRenderable } from "@wincode/tui/core";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 
 const fixtureHeader: PluginUIHeaderComponent = ({ height, theme, width }) => (
@@ -55,6 +55,9 @@ const createCustomUIFixture = () => {
 		resolveAsyncFactory: customFactoryResult.resolve,
 		startAsyncFactory: customFactoryStarted.resolve,
 		throwComponent: false,
+		componentMounts: 0,
+		placementSizes: [] as Readonly<{ height: number; width: number }>[],
+		placementDimensionsFrozen: [] as boolean[],
 	};
 	const component: PluginUICustomComponent<string> = ({
 		done,
@@ -77,6 +80,9 @@ const createCustomUIFixture = () => {
 			throw new Error("Fixture custom component failed.");
 		}
 		const input = useRef<InputRenderable>(null);
+		useEffect(() => {
+			state.componentMounts += 1;
+		}, []);
 		useKeyboard((key) => {
 			if (key.name === "escape" || (key.ctrl && key.name === "c")) {
 				key.preventDefault();
@@ -574,6 +580,54 @@ const pluginUiFixture: PluginFactory = (api) => {
 				presentation: "overlay",
 				title: "Fixture custom overlay",
 			})) ?? "undefined",
+	});
+	plugin.registerCommand({
+		description: "Open a responsive custom React overlay from a user command.",
+		name: "custom-overlay-responsive",
+		handler: async ({ ui }) =>
+			(await ui.custom(customFactory, {
+				anchor: "top-left",
+				margin: 1,
+				maxHeight: 6,
+				presentation: "overlay",
+				resolvePlacement: (dimensions) => {
+					customUIState.placementSizes.push(dimensions);
+					customUIState.placementDimensionsFrozen.push(
+						Object.isFrozen(dimensions)
+					);
+					return {
+						anchor: dimensions.width <= 40 ? "bottom-left" : "top-right",
+						width: "50%",
+					};
+				},
+				title: "Fixture responsive custom overlay",
+				width: 10,
+			})) ?? "undefined",
+	});
+	plugin.registerCommand({
+		description:
+			"Verify placement resolver errors release custom UI admission.",
+		name: "custom-overlay-placement-failures",
+		handler: async ({ ui }) => {
+			const failures: string[] = [];
+			for (const resolvePlacement of [
+				() => {
+					throw new Error("Fixture placement resolver failed.");
+				},
+				() => ({ margin: -1 }),
+			]) {
+				try {
+					await ui.custom(customFactory, {
+						presentation: "overlay",
+						resolvePlacement,
+					});
+					failures.push("unexpected-success");
+				} catch (error) {
+					failures.push(errorCode(error));
+				}
+			}
+			return failures.join(",");
+		},
 	});
 	plugin.registerCommand({
 		description: "Open a positioned custom React overlay from a user command.",

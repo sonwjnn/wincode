@@ -783,6 +783,17 @@ const validatePluginUICustomWidth = (
 	);
 };
 
+const validatePluginUICustomBehaviorOptions = (
+	options: PluginUICustomOptions
+): void => {
+	if (
+		options.resolvePlacement !== undefined &&
+		typeof options.resolvePlacement !== "function"
+	) {
+		invalidPluginUICustomOptions("resolvePlacement must be a function.");
+	}
+};
+
 const validatePluginUICustomOptions = (
 	options: PluginUICustomOptions | undefined
 ): PluginUICustomOptions => {
@@ -802,6 +813,7 @@ const validatePluginUICustomOptions = (
 		value.width,
 		value.maxHeight,
 		value.margin,
+		value.resolvePlacement,
 	];
 
 	if (
@@ -835,6 +847,7 @@ const validatePluginUICustomOptions = (
 	) {
 		invalidPluginUICustomOptions("anchor must be center or a named corner.");
 	}
+	validatePluginUICustomBehaviorOptions(value);
 	validatePluginUICustomWidth(value.width);
 	if (
 		value.maxHeight !== undefined &&
@@ -884,19 +897,47 @@ const getValidatedPluginUICustomOptions = (
 	}
 };
 
+type PluginUICustomBoundsResolution =
+	| Readonly<{ ok: true; bounds: PluginUICustomBounds | null }>
+	| Readonly<{ ok: false; error: unknown }>;
+
 const getPluginUICustomRequestBounds = (
 	request: PluginUICustomHostRequest | null,
 	width: number,
 	height: number
-): PluginUICustomBounds | null =>
-	request === null
-		? null
-		: getPluginUICustomBounds(
+): PluginUICustomBoundsResolution => {
+	if (request === null) {
+		return { bounds: null, ok: true };
+	}
+	try {
+		let options = request.options;
+		if (request.options.resolvePlacement !== undefined) {
+			const dimensions = Object.freeze({ width, height });
+			const placement = request.options.resolvePlacement(dimensions);
+			if (
+				placement === null ||
+				typeof placement !== "object" ||
+				Array.isArray(placement)
+			) {
+				invalidPluginUICustomOptions(
+					"resolvePlacement must return overlay placement options."
+				);
+			}
+			options = validatePluginUICustomOptions({ ...options, ...placement });
+		}
+		return {
+			bounds: getPluginUICustomBounds(
 				request.presentation,
 				width,
 				height,
-				request.options
-			);
+				options
+			),
+			ok: true,
+		};
+	} catch (error) {
+		return { error, ok: false };
+	}
+};
 
 const customUIContext = (
 	request: PluginUICustomHostRequest,
@@ -1066,11 +1107,18 @@ export function PluginUICustomPresentation({
 	const renderer = useRenderer();
 	const { currentTheme } = useTheme();
 	const dimensions = useTerminalDimensions();
-	const customBounds = getPluginUICustomRequestBounds(
-		activeRequest,
-		dimensions.width,
-		dimensions.height
+	const customBoundsResolution = useMemo(
+		() =>
+			getPluginUICustomRequestBounds(
+				activeRequest,
+				dimensions.width,
+				dimensions.height
+			),
+		[activeRequest, dimensions.height, dimensions.width]
 	);
+	const customBounds = customBoundsResolution.ok
+		? customBoundsResolution.bounds
+		: null;
 	const [loadedComponent, setLoadedComponent] = useState<Readonly<{
 		component: PluginUICustomComponent<unknown>;
 		requestId: string;
@@ -1087,6 +1135,12 @@ export function PluginUICustomPresentation({
 	const layerId =
 		activeRequest === null ? undefined : `plugin-custom-${activeRequest.id}`;
 
+	useLayoutEffect(() => {
+		if (activeRequest !== null && !customBoundsResolution.ok) {
+			activeRequest.fail(customBoundsResolution.error);
+		}
+	}, [activeRequest, customBoundsResolution]);
+
 	useEffect(() => {
 		if (host === null || pluginRuntime === undefined) {
 			return;
@@ -1095,26 +1149,24 @@ export function PluginUICustomPresentation({
 	}, [host, pluginRuntime, sessionId]);
 
 	useLayoutEffect(() => {
-		if (activeRequest === null || layerId === undefined) {
+		if (
+			activeRequest === null ||
+			layerId === undefined ||
+			!customBoundsResolution.ok
+		) {
 			return;
 		}
-		push(
-			layerId,
-			() => {
-				activeRequest.dismiss();
-				return true;
-			},
-			() => {
-				activeRequest.dismiss();
-				return true;
-			}
-		);
+		const dismiss = (): true => {
+			activeRequest.dismiss();
+			return true;
+		};
+		push(layerId, dismiss, dismiss);
 		return () => {
 			if (!renderer.isDestroyed) {
 				pop(layerId);
 			}
 		};
-	}, [activeRequest, layerId, pop, push, renderer]);
+	}, [activeRequest, layerId, pop, push, customBoundsResolution, renderer]);
 
 	useKeyboard((key) => {
 		const current = activeRequestRef.current;

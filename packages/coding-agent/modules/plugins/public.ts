@@ -296,6 +296,18 @@ export type PluginUICustomOverlayAnchor =
 
 export type PluginUICustomOverlayWidth = number | `${number}%`;
 
+export type PluginUICustomOverlayPlacement = Readonly<{
+	anchor?: PluginUICustomOverlayAnchor;
+	width?: PluginUICustomOverlayWidth;
+	maxHeight?: number;
+	margin?: number;
+}>;
+
+export type PluginUICustomTerminalDimensions = Readonly<{
+	width: number;
+	height: number;
+}>;
+
 export type PluginUICustomOptions = Readonly<{
 	/** Overlay-only position. Defaults to `center`. */
 	anchor?: PluginUICustomOverlayAnchor;
@@ -305,6 +317,10 @@ export type PluginUICustomOptions = Readonly<{
 	maxHeight?: number;
 	/** Overlay-only uniform margin in terminal cells. Defaults to the host margin. */
 	margin?: number;
+	/** Overlay-only resolver, reevaluated on the initial layout and terminal resize. */
+	resolvePlacement?: (
+		dimensions: PluginUICustomTerminalDimensions
+	) => PluginUICustomOverlayPlacement;
 	/**
 	 * Selects where the host presents custom UI: `editor` replaces the composer,
 	 * `overlay` uses a bounded layer, and `full-screen` covers the app. All modes
