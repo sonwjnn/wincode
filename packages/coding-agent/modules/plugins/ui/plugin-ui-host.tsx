@@ -51,7 +51,9 @@ import { useToast } from "../../../shared/providers/toast/toast-provider";
 import { DialogFooterHint } from "../../../shared/ui/dialog-footer-hint";
 import { DialogInset } from "../../../shared/ui/dialog-inset";
 import type {
+	PluginAutocompleteContext,
 	PluginAutocompleteProviderFactory,
+	PluginAutocompleteProviderOptions,
 	PluginEditorComponent,
 	PluginEditorContext,
 	PluginNotificationLevel,
@@ -131,6 +133,7 @@ type PluginUICustomHostRequest = Readonly<{
 	signal: AbortSignal;
 	title: string;
 	presentation: PluginUICustomPresentationMode;
+	options: PluginUICustomOptions;
 	presentationHandle: PluginUICustomPresentationState;
 }>;
 
@@ -165,6 +168,43 @@ const createPluginUICustomStore = (): PluginUICustomStore => {
 			return () => listeners.delete(listener);
 		},
 	});
+};
+
+const presentPluginUICustomRequest = (
+	request: PluginUICustomHostRequest,
+	pluginId: string,
+	invocation: "command" | "event",
+	customUI: PluginUICustomStore,
+	getDialog: () => DialogContextValue,
+	onAccept: () => void,
+	onDismiss: () => void,
+	onDecline: () => void,
+	onFailure: (error: unknown) => void
+): DialogContextValue | undefined => {
+	if (invocation === "command") {
+		customUI.set(request);
+		return;
+	}
+	const dialog = getDialog();
+	try {
+		dialog.open({
+			children: createElement(
+				PluginDialogRequest,
+				{ onDismiss },
+				createElement(PluginUICustomInvitation, {
+					onAccept,
+					onDecline,
+					pluginId,
+					title: request.title,
+				})
+			),
+			layerId: `${request.id}-invitation`,
+			title: "Plugin UI invitation",
+		});
+	} catch (error) {
+		onFailure(error);
+	}
+	return dialog;
 };
 
 const createPluginUICustomPresentationState =
@@ -570,6 +610,7 @@ type PluginUICustomPresentationProps = Readonly<{
 }>;
 
 type PluginUICustomPresentationLayerProps = Readonly<{
+	bounds: PluginUICustomBounds;
 	component: PluginUICustomComponent<unknown> | null;
 	context: PluginUICustomContext<unknown>;
 	height: number;
@@ -582,6 +623,82 @@ type PluginUICustomPresentationLayerProps = Readonly<{
 const CUSTOM_UI_OVERLAY_MAX_WIDTH = 80;
 const CUSTOM_UI_OVERLAY_MAX_HEIGHT = 24;
 const CUSTOM_UI_OVERLAY_MARGIN = 2;
+const AUTOCOMPLETE_INVALID_TRIGGER_PATTERN = /[\s\p{C}]/u;
+const AUTOCOMPLETE_WHITESPACE_PATTERN = /\s/;
+const PLUGIN_UI_OVERLAY_PERCENT_PATTERN = /^(?:\d+(?:\.\d+)?|\.\d+)%$/;
+
+const normalizeAutocompleteTriggerCharacters = (
+	options: PluginAutocompleteProviderOptions | undefined
+): readonly string[] | undefined => {
+	const characters = options?.triggerCharacters;
+	if (characters === undefined) {
+		return;
+	}
+	if (!Array.isArray(characters) || characters.length === 0) {
+		throw new TypeError("triggerCharacters must be a nonempty character list.");
+	}
+	const normalized = new Set<string>();
+	for (const character of characters) {
+		if (
+			typeof character !== "string" ||
+			[...character].length !== 1 ||
+			AUTOCOMPLETE_INVALID_TRIGGER_PATTERN.test(character) ||
+			character === "/" ||
+			character === "@"
+		) {
+			throw new TypeError(
+				"Each autocomplete trigger must be one printable non-whitespace character other than / or @."
+			);
+		}
+		normalized.add(character);
+	}
+	return Object.freeze([...normalized]);
+};
+
+const matchesAutocompleteTrigger = (
+	context: PluginAutocompleteContext,
+	triggerCharacters: readonly string[]
+): boolean => {
+	const beforeCursor = context.text.slice(0, context.cursorOffset);
+	let tokenStart = beforeCursor.length;
+	while (
+		tokenStart > 0 &&
+		!AUTOCOMPLETE_WHITESPACE_PATTERN.test(beforeCursor[tokenStart - 1] ?? "")
+	) {
+		tokenStart -= 1;
+	}
+	const token = beforeCursor.slice(tokenStart);
+	return triggerCharacters.some((character) => token.startsWith(character));
+};
+
+const createTriggeredAutocompleteProvider =
+	(
+		factory: PluginAutocompleteProviderFactory,
+		triggerCharacters: readonly string[]
+	): PluginAutocompleteProviderFactory =>
+	(current) => {
+		const provider = factory(current);
+		const shouldTrigger = (context: PluginAutocompleteContext): boolean =>
+			matchesAutocompleteTrigger(context, triggerCharacters);
+		return {
+			...provider,
+			getSuggestions(context) {
+				return shouldTrigger(context)
+					? provider.getSuggestions(context)
+					: current.getSuggestions(context);
+			},
+			applyCompletion(context, item, prefix) {
+				return shouldTrigger(context)
+					? provider.applyCompletion(context, item, prefix)
+					: current.applyCompletion(context, item, prefix);
+			},
+			shouldTriggerFileCompletion(context) {
+				const activeProvider = shouldTrigger(context) ? provider : current;
+				// The composer treats an absent hook as permission to complete files.
+				return activeProvider.shouldTriggerFileCompletion?.(context) !== false;
+			},
+		};
+	};
 
 const getCustomUIFooterHint = (
 	presentation: PluginUICustomHostRequest["presentation"]
@@ -593,36 +710,200 @@ const getCustomUIFooterHint = (
 const getPluginUICustomBounds = (
 	presentation: PluginUICustomHostRequest["presentation"],
 	width: number,
-	height: number
+	height: number,
+	options: PluginUICustomOptions
 ): PluginUICustomBounds => {
-	if (presentation === "overlay") {
-		const boundedWidth = Math.min(
-			CUSTOM_UI_OVERLAY_MAX_WIDTH,
-			Math.max(1, width - CUSTOM_UI_OVERLAY_MARGIN * 2)
-		);
-		const boundedHeight = Math.min(
-			CUSTOM_UI_OVERLAY_MAX_HEIGHT,
-			Math.max(1, height - CUSTOM_UI_OVERLAY_MARGIN * 2)
-		);
-		return {
-			height: boundedHeight,
-			left: Math.floor((width - boundedWidth) / 2),
-			top: Math.floor((height - boundedHeight) / 2),
-			width: boundedWidth,
-		};
+	if (presentation !== "overlay") {
+		return { height, left: 0, top: 0, width };
 	}
-	return { height, left: 0, top: 0, width };
+	const requestedMargin = options.margin ?? CUSTOM_UI_OVERLAY_MARGIN;
+	const margin = Math.min(
+		requestedMargin,
+		Math.floor(Math.max(0, width - 1) / 2),
+		Math.floor(Math.max(0, height - 1) / 2)
+	);
+	const availableWidth = Math.max(1, width - margin * 2);
+	const availableHeight = Math.max(1, height - margin * 2);
+	const requestedWidth =
+		typeof options.width === "string"
+			? Math.floor((availableWidth * Number.parseFloat(options.width)) / 100)
+			: (options.width ?? CUSTOM_UI_OVERLAY_MAX_WIDTH);
+	const boundedWidth = Math.min(availableWidth, Math.max(1, requestedWidth));
+	const boundedHeight = Math.min(
+		availableHeight,
+		options.maxHeight ?? CUSTOM_UI_OVERLAY_MAX_HEIGHT
+	);
+	const anchor = options.anchor ?? "center";
+	let left: number;
+	if (anchor.endsWith("right")) {
+		left = width - margin - boundedWidth;
+	} else if (anchor.endsWith("left")) {
+		left = margin;
+	} else {
+		left = Math.floor((width - boundedWidth) / 2);
+	}
+	let top: number;
+	if (anchor.startsWith("top")) {
+		top = margin;
+	} else if (anchor.startsWith("bottom")) {
+		top = height - margin - boundedHeight;
+	} else {
+		top = Math.floor((height - boundedHeight) / 2);
+	}
+	return { height: boundedHeight, left, top, width: boundedWidth };
 };
+
+const invalidPluginUICustomOptions = (reason: string): never => {
+	throw new PluginUICustomError(
+		"plugin_ui_custom_invalid_options",
+		new TypeError(reason)
+	);
+};
+
+const validatePluginUICustomWidth = (
+	width: PluginUICustomOptions["width"]
+): void => {
+	if (width === undefined) {
+		return;
+	}
+	if (typeof width === "number" && Number.isInteger(width) && width > 0) {
+		return;
+	}
+	if (
+		typeof width === "string" &&
+		PLUGIN_UI_OVERLAY_PERCENT_PATTERN.test(width) &&
+		Number.parseFloat(width) > 0 &&
+		Number.parseFloat(width) <= 100
+	) {
+		return;
+	}
+	invalidPluginUICustomOptions(
+		"width must be a positive whole number of cells or a percentage up to 100%."
+	);
+};
+
+const validatePluginUICustomOptions = (
+	options: PluginUICustomOptions | undefined
+): PluginUICustomOptions => {
+	if (
+		options !== undefined &&
+		(typeof options !== "object" || options === null || Array.isArray(options))
+	) {
+		throw new PluginUICustomError(
+			"plugin_ui_custom_invalid_options",
+			new TypeError("options must be an object.")
+		);
+	}
+	const value = options ?? {};
+	const presentation = value.presentation;
+	const overlayOptions = [
+		value.anchor,
+		value.width,
+		value.maxHeight,
+		value.margin,
+	];
+
+	if (
+		presentation !== undefined &&
+		!(["editor", "overlay", "full-screen"] as const).includes(presentation)
+	) {
+		invalidPluginUICustomOptions(
+			"presentation must be editor, overlay, or full-screen."
+		);
+	}
+	const presentationMode = presentation ?? "editor";
+	if (
+		presentationMode !== "overlay" &&
+		overlayOptions.some((entry) => entry !== undefined)
+	) {
+		invalidPluginUICustomOptions(
+			"Overlay placement options require presentation: overlay."
+		);
+	}
+	if (
+		value.anchor !== undefined &&
+		!(
+			[
+				"center",
+				"top-left",
+				"top-right",
+				"bottom-left",
+				"bottom-right",
+			] as const
+		).includes(value.anchor)
+	) {
+		invalidPluginUICustomOptions("anchor must be center or a named corner.");
+	}
+	validatePluginUICustomWidth(value.width);
+	if (
+		value.maxHeight !== undefined &&
+		(!Number.isInteger(value.maxHeight) || value.maxHeight <= 0)
+	) {
+		invalidPluginUICustomOptions(
+			"maxHeight must be a positive whole number of cells."
+		);
+	}
+	if (
+		value.margin !== undefined &&
+		(!Number.isInteger(value.margin) || value.margin < 0)
+	) {
+		invalidPluginUICustomOptions(
+			"margin must be a nonnegative whole number of cells."
+		);
+	}
+	return Object.freeze({ ...value, presentation: presentationMode });
+};
+
+const getAvailablePluginUISessionId = (
+	closed: boolean,
+	hostClosed: boolean,
+	sessionId: string | undefined
+): string | undefined => {
+	if (closed || hostClosed) {
+		return;
+	}
+	return sessionId;
+};
+
+const canAcceptPluginUICustomInvitation = (
+	settled: boolean,
+	accepted: boolean,
+	presentation: PluginUICustomHostRequest | undefined
+): boolean => !(settled || accepted) && presentation !== undefined;
+
+const getValidatedPluginUICustomOptions = (
+	options: PluginUICustomOptions | undefined
+):
+	| Readonly<{ options: PluginUICustomOptions }>
+	| Readonly<{ error: unknown }> => {
+	try {
+		return { options: validatePluginUICustomOptions(options) };
+	} catch (error) {
+		return { error };
+	}
+};
+
+const getPluginUICustomRequestBounds = (
+	request: PluginUICustomHostRequest | null,
+	width: number,
+	height: number
+): PluginUICustomBounds | null =>
+	request === null
+		? null
+		: getPluginUICustomBounds(
+				request.presentation,
+				width,
+				height,
+				request.options
+			);
 
 const customUIContext = (
 	request: PluginUICustomHostRequest,
 	sessionId: string,
-	width: number,
-	height: number,
+	bounds: PluginUICustomBounds,
 	theme: Theme
-): PluginUICustomContext<unknown> => {
-	const bounds = getPluginUICustomBounds(request.presentation, width, height);
-	return Object.freeze({
+): PluginUICustomContext<unknown> =>
+	Object.freeze({
 		done: request.done,
 		environment: Object.freeze({
 			executionMode: "interactive",
@@ -636,6 +917,34 @@ const customUIContext = (
 		theme,
 		width: bounds.width,
 	});
+
+type PluginUICustomRenderContent = Readonly<{
+	bounds: PluginUICustomBounds;
+	component: PluginUICustomComponent<unknown> | null;
+	context: PluginUICustomContext<unknown>;
+}>;
+
+const getPluginUICustomRenderContent = (
+	request: PluginUICustomHostRequest | null,
+	bounds: PluginUICustomBounds | null,
+	loadedComponent: Readonly<{
+		component: PluginUICustomComponent<unknown>;
+		requestId: string;
+	}> | null,
+	sessionId: string,
+	theme: Theme
+): PluginUICustomRenderContent | null => {
+	if (request === null || bounds === null) {
+		return null;
+	}
+	return {
+		bounds,
+		component:
+			loadedComponent?.requestId === request.id
+				? loadedComponent.component
+				: null,
+		context: customUIContext(request, sessionId, bounds, theme),
+	};
 };
 
 const updateCustomUIPresentationBounds = (
@@ -654,6 +963,7 @@ const updateCustomUIPresentationBounds = (
 };
 
 function PluginUICustomPresentationLayer({
+	bounds,
 	component,
 	context,
 	height,
@@ -662,12 +972,9 @@ function PluginUICustomPresentationLayer({
 	theme,
 	width,
 }: PluginUICustomPresentationLayerProps) {
-	const bounds = getPluginUICustomBounds(request.presentation, width, height);
 	useLayoutEffect(() => {
-		request.presentationHandle.setBounds(
-			getPluginUICustomBounds(request.presentation, width, height)
-		);
-	}, [height, request.presentation, request.presentationHandle, width]);
+		request.presentationHandle.setBounds(bounds);
+	}, [bounds, request.presentationHandle]);
 	const content =
 		component === null ? (
 			<text fg={theme.colors.textMuted}>Loading custom Plugin UI…</text>
@@ -758,21 +1065,24 @@ export function PluginUICustomPresentation({
 	const renderer = useRenderer();
 	const { currentTheme } = useTheme();
 	const dimensions = useTerminalDimensions();
-	const factoryContextRef = useRef<PluginUICustomContext<unknown> | null>(null);
-	factoryContextRef.current =
-		activeRequest === null
-			? null
-			: customUIContext(
-					activeRequest,
-					sessionId,
-					dimensions.width,
-					dimensions.height,
-					currentTheme
-				);
+	const customBounds = getPluginUICustomRequestBounds(
+		activeRequest,
+		dimensions.width,
+		dimensions.height
+	);
 	const [loadedComponent, setLoadedComponent] = useState<Readonly<{
 		component: PluginUICustomComponent<unknown>;
 		requestId: string;
 	}> | null>(null);
+	const customContent = getPluginUICustomRenderContent(
+		activeRequest,
+		customBounds,
+		loadedComponent,
+		sessionId,
+		currentTheme
+	);
+	const factoryContextRef = useRef<PluginUICustomContext<unknown> | null>(null);
+	factoryContextRef.current = customContent?.context ?? null;
 	const layerId =
 		activeRequest === null ? undefined : `plugin-custom-${activeRequest.id}`;
 
@@ -871,22 +1181,6 @@ export function PluginUICustomPresentation({
 		return children;
 	}
 
-	const customContent =
-		activeRequest === null
-			? null
-			: {
-					component:
-						loadedComponent?.requestId === activeRequest.id
-							? loadedComponent.component
-							: null,
-					context: customUIContext(
-						activeRequest,
-						sessionId,
-						dimensions.width,
-						dimensions.height,
-						currentTheme
-					),
-				};
 	const renderWidgets = (placement: PluginUIWidgetPlacement) => {
 		const widgets = contributions.widgets.filter(
 			(widget) => widget.placement === placement
@@ -957,6 +1251,7 @@ export function PluginUICustomPresentation({
 			? null
 			: createPortal(
 					<PluginUICustomPresentationLayer
+						bounds={customContent.bounds}
 						component={customContent.component}
 						context={customContent.context}
 						height={dimensions.height}
@@ -1292,12 +1587,22 @@ const createPluginUIHost = ({
 				return { success: true };
 			};
 			const addAutocompleteProvider = (
-				provider: PluginAutocompleteProviderFactory
+				provider: PluginAutocompleteProviderFactory,
+				options?: PluginAutocompleteProviderOptions
 			): (() => void) => {
 				if (closed || hostClosed || owner.sessionId === undefined) {
 					return () => undefined;
 				}
-				const registration = Object.freeze({ owner, provider });
+				const triggerCharacters =
+					normalizeAutocompleteTriggerCharacters(options);
+				const registeredProvider =
+					triggerCharacters === undefined
+						? provider
+						: createTriggeredAutocompleteProvider(provider, triggerCharacters);
+				const registration = Object.freeze({
+					owner,
+					provider: registeredProvider,
+				});
 				const registrations = autocompleteProviders.get(owner.sessionId) ?? [];
 				autocompleteProviders.set(owner.sessionId, [
 					...registrations,
@@ -1397,9 +1702,19 @@ const createPluginUIHost = ({
 				factory: PluginUICustomFactory<Value>,
 				options: PluginUICustomOptions | undefined
 			): Promise<Value | undefined> => {
-				if (closed || hostClosed || owner.sessionId === undefined) {
+				const sessionId = getAvailablePluginUISessionId(
+					closed,
+					hostClosed,
+					owner.sessionId
+				);
+				if (sessionId === undefined) {
 					return Promise.resolve(undefined);
 				}
+				const validation = getValidatedPluginUICustomOptions(options);
+				if ("error" in validation) {
+					return Promise.reject(validation.error);
+				}
+				const { options: validatedOptions } = validation;
 				if (activeCustomRequest !== undefined) {
 					return Promise.reject(
 						new PluginUICustomError("plugin_ui_custom_busy")
@@ -1410,8 +1725,8 @@ const createPluginUIHost = ({
 				const controller = new AbortController();
 				const requestId = `plugin-custom-${crypto.randomUUID()}`;
 				const invitationLayerId = `${requestId}-invitation`;
-				const title = options?.title ?? "Custom Plugin UI";
-				const presentationMode = options?.presentation ?? "editor";
+				const title = validatedOptions.title ?? "Custom Plugin UI";
+				const presentationMode = validatedOptions.presentation ?? "editor";
 				const presentationHandle = createPluginUICustomPresentationState();
 				let accepted = invocation === "command";
 				let settled = false;
@@ -1497,10 +1812,11 @@ const createPluginUIHost = ({
 					factory: hostFactory,
 					fail,
 					id: requestId,
-					sessionId: owner.sessionId,
+					sessionId,
 					signal: controller.signal,
 					title,
 					presentation: presentationMode,
+					options: validatedOptions,
 					presentationHandle,
 				});
 				activeCustomRequest = cancel;
@@ -1512,45 +1828,35 @@ const createPluginUIHost = ({
 					return result.promise;
 				}
 
-				if (invocation === "command") {
-					customUI.set(presentation);
-				} else {
-					invitationDialog = getDialog();
-					invitationOpen = true;
-					const dismissInvitation = (): void => {
-						invitationOpen = false;
-						if (!accepted) {
-							finish(undefined, undefined, false);
-						}
-					};
-					const accept = (): void => {
-						if (settled || accepted || presentation === undefined) {
-							return;
-						}
-						accepted = true;
-						invitationOpen = false;
-						invitationDialog?.close(invitationLayerId);
-						customUI.set(presentation);
-					};
-					try {
-						invitationDialog.open({
-							children: createElement(
-								PluginDialogRequest,
-								{ onDismiss: dismissInvitation },
-								createElement(PluginUICustomInvitation, {
-									onAccept: accept,
-									onDecline: cancel,
-									pluginId: owner.pluginId,
-									title,
-								})
-							),
-							layerId: invitationLayerId,
-							title: "Plugin UI invitation",
-						});
-					} catch (error) {
-						fail(error);
+				invitationOpen = invocation !== "command";
+				const dismissInvitation = (): void => {
+					invitationOpen = false;
+					if (!accepted) {
+						finish(undefined, undefined, false);
 					}
-				}
+				};
+				const accept = (): void => {
+					if (
+						!canAcceptPluginUICustomInvitation(settled, accepted, presentation)
+					) {
+						return;
+					}
+					accepted = true;
+					invitationOpen = false;
+					invitationDialog?.close(invitationLayerId);
+					customUI.set(presentation);
+				};
+				invitationDialog = presentPluginUICustomRequest(
+					presentation,
+					owner.pluginId,
+					invocation,
+					customUI,
+					getDialog,
+					accept,
+					dismissInvitation,
+					cancel,
+					fail
+				);
 				return result.promise;
 			};
 

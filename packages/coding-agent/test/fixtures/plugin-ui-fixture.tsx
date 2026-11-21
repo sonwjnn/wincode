@@ -566,6 +566,39 @@ const pluginUiFixture: PluginFactory = (api) => {
 			})) ?? "undefined",
 	});
 	plugin.registerCommand({
+		description: "Open a positioned custom React overlay from a user command.",
+		name: "custom-overlay-positioned",
+		handler: async ({ ui }) =>
+			(await ui.custom(customFactory, {
+				anchor: "top-right",
+				margin: 1,
+				maxHeight: 6,
+				presentation: "overlay",
+				title: "Fixture positioned custom overlay",
+				width: "50%",
+			})) ?? "undefined",
+	});
+	plugin.registerCommand({
+		description: "Reject invalid custom overlay options before admission.",
+		name: "custom-overlay-invalid",
+		handler: async ({ ui }) => {
+			const failures: string[] = [];
+			for (const options of [
+				{ presentation: "overlay", width: 0 },
+				{ presentation: "editor", width: 10 },
+				{ presentation: "full-screen", margin: 1 },
+			] as const) {
+				try {
+					await ui.custom(customFactory, options);
+					failures.push("unexpected-success");
+				} catch (error) {
+					failures.push(errorCode(error));
+				}
+			}
+			return failures.join(",");
+		},
+	});
+	plugin.registerCommand({
 		description: "Open full-screen custom React UI from a user command.",
 		name: "custom-full-screen",
 		handler: async ({ ui }) =>
