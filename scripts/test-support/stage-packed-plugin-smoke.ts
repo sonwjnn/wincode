@@ -132,6 +132,14 @@ if (installedVersion !== manifest.version) {
 	);
 }
 
+// npm 0.1.0 predates the flag rename; packed builds must use the new flag.
+const trustFlag =
+	published && installedVersion === "0.1.0" ? "--trust-project" : "--trust";
+const denyFlag =
+	published && installedVersion === "0.1.0"
+		? "--no-trust-project"
+		: "--no-trust";
+await Bun.write(path.join(path.dirname(workspace), "trust-flag"), trustFlag);
 const runRpc = (...options: string[]) =>
 	$`${cli} --mode rpc ${options} < /dev/null`.cwd(workspace).quiet();
 const probe = path.join(fixture, "probe.ts");
@@ -150,7 +158,7 @@ export default probe;
 `
 );
 try {
-	await runRpc("--trust-project");
+	await runRpc(trustFlag);
 	if (await marker.exists()) {
 		throw new Error("A Plugin ran merely because it was present.");
 	}
@@ -161,11 +169,11 @@ try {
 			plugins: ["./plugins/external-smoke/probe.ts"],
 		})
 	);
-	await runRpc("--no-trust-project");
+	await runRpc(denyFlag);
 	if (await marker.exists()) {
 		throw new Error("A Plugin ran through untrusted project config.");
 	}
-	await runRpc("--trust-project");
+	await runRpc(trustFlag);
 	if (!(await marker.exists())) {
 		throw new Error("Trusted config did not enable the Plugin.");
 	}

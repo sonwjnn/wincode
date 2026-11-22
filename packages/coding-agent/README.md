@@ -68,8 +68,8 @@ shows the same per-root status and offers the same choices: trust the project,
 trust its parent folder, or keep it untrusted. Decisions are stored outside the
 project in `~/.wincode/project-trust.json`. Run `/reload` afterward to apply a
 changed decision; `/reload` never prompts or grants trust. Print, JSON, RPC, and
-SDK entry points never prompt or silently trust. Use `--trust-project` or
-`--no-trust-project` for an explicit CLI invocation decision; SDK callers use the
+SDK entry points never prompt or silently trust. Use `--trust` or
+`--no-trust` for an explicit CLI invocation decision; SDK callers use the
 `projectTrust` option. `AGENTS.md` remains contextual guidance and does not
 trigger trust.
 

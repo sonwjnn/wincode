@@ -48,6 +48,21 @@ const noOpRunners: DispatchModeRunners = {
 };
 
 describe("application dispatch", () => {
+	test("rejects conflicting invocation trust choices", async () => {
+		const stdout = capture();
+		const stderr = capture();
+		const exitCode = await dispatch(
+			input(stdout.writer, stderr.writer, ["--trust", "--no-trust"]),
+			async () => {
+				throw new Error("Conflicting trust flags must not start the runtime.");
+			}
+		);
+		expect(exitCode).toBe(2);
+		expect(stderr.output).toContain(
+			"Use either --trust or --no-trust, not both."
+		);
+	});
+
 	test("routes MCP management help before loading an execution mode", async () => {
 		const stdout = capture();
 		const stderr = capture();
@@ -135,7 +150,7 @@ describe("application dispatch", () => {
 		let processRequest:
 			| { args: readonly string[]; cwd: string; mode: string }
 			| undefined;
-		const args = ["--mode", mode, "--trust-project"];
+		const args = ["--mode", mode, "--trust"];
 		const exitCode = await dispatch(
 			input(stdout.writer, stderr.writer, args),
 			async () => {
