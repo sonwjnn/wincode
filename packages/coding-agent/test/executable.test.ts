@@ -36,8 +36,8 @@ describe("wincode executable", () => {
 		expect(result.exitCode).toBe(0);
 		expect(output(result.stdout)).toContain("Usage: wincode");
 		expect(output(result.stdout)).toContain("-m, --mode");
-		expect(output(result.stdout)).toContain("--trust-project");
-		expect(output(result.stdout)).toContain("--no-trust-project");
+		expect(output(result.stdout)).toContain("--trust");
+		expect(output(result.stdout)).toContain("--no-trust");
 		expect(output(result.stderr)).toBe("");
 	});
 

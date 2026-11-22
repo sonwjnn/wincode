@@ -31,7 +31,7 @@ const HELP_TEXT = [
 	"",
 	"Options:",
 	"  --scope user|project  Select the config scope (default: user)",
-	"  --trust-project       Explicitly trust project config for this command",
+	"  --trust       Explicitly trust project config for this command",
 ].join("\n");
 
 const outputLine = (writer: TextWriter, text: string): void =>
@@ -123,7 +123,7 @@ const parseScopeAndTrust = (
 		if (argument === undefined) {
 			continue;
 		}
-		if (argument === "--trust-project") {
+		if (argument === "--trust") {
 			trustProject = true;
 			continue;
 		}
@@ -244,7 +244,7 @@ const parseAddOptions = (
 	};
 	for (let index = 0; index < args.length; index += 1) {
 		const argument = args[index];
-		if (argument === undefined || argument === "--trust-project") {
+		if (argument === undefined || argument === "--trust") {
 			continue;
 		}
 		const nextIndex =
@@ -395,7 +395,7 @@ const managementForRuntime = (
 			if (scope === "project") {
 				requireTrustedProjectWrite(
 					runtime,
-					"Project MCP configuration requires a trusted project; use --trust-project explicitly."
+					"Project MCP configuration requires a trusted project; use --trust explicitly."
 				);
 			}
 		},
@@ -424,8 +424,7 @@ const runAdd = async (
 	io: McpCliIo
 ): Promise<void> => {
 	const serverArgs = args.filter(
-		(argument) =>
-			argument !== "--trust-project" && !argument.startsWith("--scope")
+		(argument) => argument !== "--trust" && !argument.startsWith("--scope")
 	);
 	const name = serverArgs[0];
 	if (name === undefined) {

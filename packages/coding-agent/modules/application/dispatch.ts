@@ -84,8 +84,8 @@ const HELP_TEXT = [
 	"      --model <id>     Select a Model",
 	"      --max-model-steps <n>  Limit Provider requests for this turn",
 	"      --thinking-level <id>  Select a Thinking Level",
-	"      --trust-project  Trust project resources for this invocation",
-	"      --no-trust-project  Refuse project resources for this invocation",
+	"      --trust  Trust project resources for this invocation",
+	"      --no-trust  Refuse project resources for this invocation",
 	"      --plugin <path>  Enable a Plugin (repeatable)",
 	"      --no-plugin <id> Disable a distributed Plugin by Identifier",
 	"  -h, --help           Show this help",
@@ -178,14 +178,14 @@ function parseInvocation(args: readonly string[]): ParsedInvocation {
 			version = true;
 			continue;
 		}
-		if (argument === "--trust-project" || argument === "--no-trust-project") {
-			const nextDecision = argument === "--trust-project" ? "trust" : "deny";
+		if (argument === "--trust" || argument === "--no-trust") {
+			const nextDecision = argument === "--trust" ? "trust" : "deny";
 			if (
 				projectTrustOverride !== undefined &&
 				projectTrustOverride !== nextDecision
 			) {
 				throw new InvocationError(
-					"Use either --trust-project or --no-trust-project, not both.",
+					"Use either --trust or --no-trust, not both.",
 					USAGE_EXIT_CODE
 				);
 			}

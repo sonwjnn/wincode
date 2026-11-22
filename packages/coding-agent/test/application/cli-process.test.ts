@@ -24,7 +24,7 @@ test("mode launcher routes to the correct entrypoint and forwards CLI process st
 	const executionEntrypoint = path.join(directory, "execution.ts");
 	const interactiveEntrypoint = path.join(directory, "interactive.ts");
 	const executionArgs = ["--mode", "rpc"];
-	const interactiveArgs = ["--mode", "interactive", "--trust-project"];
+	const interactiveArgs = ["--mode", "interactive", "--trust"];
 	const writeEntrypoint = async (
 		filePath: string,
 		entrypoint: string,

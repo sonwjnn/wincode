@@ -58,10 +58,10 @@ bun run /path/to/wincode/packages/coding-agent/bin/wincode.ts
 ```
 
 > [!TIP]
-> Interactive mode prompts before loading protected project resources and can remember the decision in user-owned data. Use `--trust-project` to trust them for one invocation or `--no-trust-project` to refuse them for one invocation. Non-interactive modes never prompt or silently trust.
+> Interactive mode prompts before loading protected project resources and can remember the decision in user-owned data. Use `--trust` to trust them for one invocation or `--no-trust` to refuse them for one invocation. Non-interactive modes never prompt or silently trust.
 >
 > ```bash
-> bun run /path/to/wincode/packages/coding-agent/bin/wincode.ts --trust-project
+> bun run /path/to/wincode/packages/coding-agent/bin/wincode.ts --trust
 > ```
 
 ### Supported providers
@@ -150,7 +150,7 @@ Place prompt templates in `.wincode/commands/*.md`. The filename becomes the com
 
 ### MCP servers
 
-MCP Server configuration follows the `mcpServers` format documented in [MCP servers](packages/mcp/README.md), with stdio `command` / `args` / `env` entries or Streamable HTTP `url` / `headers` entries. The MCP Plugin also supports resources, OAuth-backed remote servers, direct/hidden exposure, and management through `/mcps`. Tool exposure controls visibility; existing Tool Gate authorization remains a separate policy boundary. Non-TUI administration is available through `wincode mcp add|remove|list|login|logout`; project writes require explicit trust with `--trust-project`.
+MCP Server configuration follows the `mcpServers` format documented in [MCP servers](packages/mcp/README.md), with stdio `command` / `args` / `env` entries or Streamable HTTP `url` / `headers` entries. The MCP Plugin also supports resources, OAuth-backed remote servers, direct/hidden exposure, and management through `/mcps`. Tool exposure controls visibility; existing Tool Gate authorization remains a separate policy boundary. Non-TUI administration is available through `wincode mcp add|remove|list|login|logout`; project writes require explicit trust with `--trust`.
 
 ## Commands
 

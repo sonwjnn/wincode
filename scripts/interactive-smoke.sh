@@ -10,6 +10,7 @@ PLUGIN_UI_SMOKE=0
 PACKED_PLUGIN_SMOKE=0
 PUBLISHED_PLUGIN_SMOKE=0
 PACKED_CLI=""
+TRUST_FLAG="--trust"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --live) LIVE=1; shift ;;
@@ -122,6 +123,7 @@ if [[ "$PACKED_PLUGIN_SMOKE" == 1 ]]; then
   HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_HOME/config" XDG_DATA_HOME="$TEST_HOME/data" \
     "$BUN_PATH" --no-env-file "$ROOT/scripts/test-support/stage-packed-plugin-smoke.ts" "${STAGE_ARGS[@]}"
   PACKED_CLI="$WORKSPACE/node_modules/.bin/wincode"
+  TRUST_FLAG=$(<"$TEST_HOME/trust-flag")
   SMOKE_PLUGIN="$WORKSPACE/interactive-smoke-provider.ts"
   EXTRA_PLUGIN="$WORKSPACE/.wincode/plugins/external-smoke/interactive-plugin-ui-smoke.tsx"
 fi
@@ -130,6 +132,7 @@ tmux new-session -d -s "$SESSION" -x 80 -y 24 -c "$WORKSPACE" \
   -e "WINCODE_SMOKE_BUN=$BUN_PATH" \
   -e "WINCODE_SMOKE_BINARY=$BINARY" \
   -e "WINCODE_SMOKE_PACKED_CLI=$PACKED_CLI" \
+  -e "WINCODE_SMOKE_TRUST_FLAG=$TRUST_FLAG" \
   -e "WINCODE_SMOKE_PLUGIN=$SMOKE_PLUGIN" \
   -e "WINCODE_SMOKE_LIVE=$LIVE" \
   -e "WINCODE_SMOKE_APPROVED=$APPROVED" \

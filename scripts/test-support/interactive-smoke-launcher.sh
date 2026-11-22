@@ -108,7 +108,7 @@ if env -i \
   WINCODE_SMOKE_HISTORY="${WINCODE_SMOKE_HISTORY:-0}" \
   TMPDIR="$TEST_HOME/tmp" \
   "${COMMAND[@]}" \
-  --trust-project \
+  "${WINCODE_SMOKE_TRUST_FLAG:---trust}" \
   ${PLUGIN_ARGS[@]+"${PLUGIN_ARGS[@]}"}; then
   EXIT_STATUS=0
 else

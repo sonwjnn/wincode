@@ -86,7 +86,7 @@ test("project MCP writes require explicit trust and stay in the project namespac
 				"https://mcp.example.test",
 				"--scope",
 				"project",
-				"--trust-project",
+				"--trust",
 			],
 			workspace,
 			trusted.io,
@@ -150,7 +150,7 @@ test("MCP remove honors an explicitly selected scope without deleting another sc
 	try {
 		const userRemoval = makeIo();
 		const userCode = await runMcpCli(
-			["remove", "projectOnly", "--scope", "user", "--trust-project"],
+			["remove", "projectOnly", "--scope", "user", "--trust"],
 			workspace,
 			userRemoval.io,
 			{ homeRoot, userDataDir: path.join(homeRoot, "data") }
@@ -165,7 +165,7 @@ test("MCP remove honors an explicitly selected scope without deleting another sc
 
 		const projectRemoval = makeIo();
 		const projectCode = await runMcpCli(
-			["remove", "userOnly", "--scope", "project", "--trust-project"],
+			["remove", "userOnly", "--scope", "project", "--trust"],
 			workspace,
 			projectRemoval.io,
 			{ homeRoot, userDataDir: path.join(homeRoot, "data") }
@@ -203,7 +203,7 @@ test("MCP remove without a scope removes the effective project server only", asy
 	try {
 		const { io, stdout } = makeIo();
 		const code = await runMcpCli(
-			["remove", "projectOnly", "--trust-project"],
+			["remove", "projectOnly", "--trust"],
 			workspace,
 			io,
 			{ homeRoot, userDataDir: path.join(homeRoot, "data") }
