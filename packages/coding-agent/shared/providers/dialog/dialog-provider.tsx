@@ -15,6 +15,7 @@ import {
 	useLayoutEffect,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from "react";
 import { useKeyboardLayer } from "../keyboard-layer/keyboard-layer-provider";
 import { useTheme } from "../theme/theme-provider";
@@ -26,12 +27,40 @@ import type { DialogConfig, DialogPadding } from "./types";
 
 export type DialogContextValue = {
 	open: (config: DialogConfig) => void;
+	updateTitle: (layerId: string, title: string) => void;
 	close: (layerId?: string) => void;
 	closeAll: () => void;
 };
 
 const DialogContext = createContext<DialogContextValue | null>(null);
 const DialogLayerContext = createContext<string>("dialog");
+
+type DialogTitleStore = Readonly<{
+	getSnapshot: () => string;
+	set: (title: string) => void;
+	subscribe: (listener: () => void) => () => void;
+}>;
+
+const createDialogTitleStore = (initialTitle: string): DialogTitleStore => {
+	let title = initialTitle;
+	const listeners = new Set<() => void>();
+	return Object.freeze({
+		getSnapshot: () => title,
+		set(nextTitle) {
+			if (title === nextTitle) {
+				return;
+			}
+			title = nextTitle;
+			for (const listener of [...listeners]) {
+				listener();
+			}
+		},
+		subscribe(listener) {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+	});
+};
 
 export function useDialog(): DialogContextValue {
 	const value = useContext(DialogContext);
@@ -69,6 +98,7 @@ export function DialogProvider({ children }: DialogProviderProps) {
 	const [dialogStack, setDialogStack] = useState<DialogConfig[]>([]);
 	const dialogStackRef = useRef<DialogConfig[]>([]);
 	const layerIdsRef = useRef<string[]>([]);
+	const titleStores = useRef(new Map<string, DialogTitleStore>());
 	const counter = useRef(0);
 	const { push, pop } = useKeyboardLayer();
 	const baseLayerId = useId();
@@ -92,12 +122,17 @@ export function DialogProvider({ children }: DialogProviderProps) {
 				return;
 			}
 			pop(targetId);
+			titleStores.current.delete(targetId);
 			updateStack((prev) =>
 				prev.filter((dialog) => dialog.layerId !== targetId)
 			);
 		},
 		[pop, updateStack]
 	);
+
+	const updateTitle = useCallback((layerId: string, title: string) => {
+		titleStores.current.get(layerId)?.set(title);
+	}, []);
 
 	const closeAll = useCallback(() => {
 		const currentStack = dialogStackRef.current;
@@ -107,6 +142,7 @@ export function DialogProvider({ children }: DialogProviderProps) {
 
 		layerIdsRef.current = [];
 		dialogStackRef.current = [];
+		titleStores.current.clear();
 		setDialogStack([]);
 
 		for (let index = currentStack.length - 1; index >= 0; index -= 1) {
@@ -121,6 +157,7 @@ export function DialogProvider({ children }: DialogProviderProps) {
 		(config: DialogConfig) => {
 			const layerId = config.layerId ?? `${baseLayerId}-${counter.current++}`;
 			const configWithLayer = { ...config, layerId };
+			titleStores.current.set(layerId, createDialogTitleStore(config.title));
 			updateStack((prev) => [...prev, configWithLayer]);
 			push(layerId, () => {
 				close(layerId);
@@ -132,6 +169,7 @@ export function DialogProvider({ children }: DialogProviderProps) {
 
 	const value: DialogContextValue = {
 		open,
+		updateTitle,
 		close,
 		closeAll,
 	};
@@ -145,6 +183,7 @@ export function DialogProvider({ children }: DialogProviderProps) {
 					config={dialog}
 					isTop={index === dialogStack.length - 1}
 					key={dialog.layerId}
+					titleStore={titleStores.current.get(dialog.layerId ?? "")}
 					zIndex={100 + index}
 				/>
 			))}
@@ -156,6 +195,7 @@ type DialogProps = {
 	config: DialogConfig;
 	close: () => void;
 	isTop: boolean;
+	titleStore: DialogTitleStore | undefined;
 	zIndex: number;
 };
 
@@ -171,7 +211,26 @@ function resolvePadding(
 	};
 }
 
-function Dialog({ config, close, isTop, zIndex }: DialogProps) {
+function DialogTitle({
+	color,
+	store,
+}: {
+	color: string;
+	store: DialogTitleStore;
+}) {
+	const title = useSyncExternalStore(
+		store.subscribe,
+		store.getSnapshot,
+		store.getSnapshot
+	);
+	return (
+		<text attributes={TextAttributes.BOLD} fg={color}>
+			{title}
+		</text>
+	);
+}
+
+function Dialog({ config, close, isTop, titleStore, zIndex }: DialogProps) {
 	const dimensions = useTerminalDimensions();
 	const renderer = useRenderer();
 	const previousFocusedRenderable = useRef(
@@ -197,7 +256,7 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 		[]
 	);
 
-	const { title, children, padding } = config;
+	const { children, padding } = config;
 	const resolvedPadding = resolvePadding(DEFAULT_DIALOG_PADDING, padding);
 	const defaultWidth =
 		dimensions.width >= 120
@@ -225,9 +284,9 @@ function Dialog({ config, close, isTop, zIndex }: DialogProps) {
 					justifyContent="space-between"
 					marginX={DEFAULT_DIALOG_CONTENT_MARGIN.left}
 				>
-					<text attributes={TextAttributes.BOLD} fg={colors.text}>
-						{title}
-					</text>
+					{titleStore === undefined ? null : (
+						<DialogTitle color={colors.text} store={titleStore} />
+					)}
 					{/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text handles terminal mouse events. */}
 					<text fg={colors.textMuted} onMouseDown={() => close()}>
 						esc

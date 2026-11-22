@@ -16,7 +16,10 @@ import {
 import { createRpcPluginUIChannel } from "../modules/application/rpc/plugin-ui-channel";
 import { runRpc } from "../modules/application/rpc/runner";
 import type { RpcAssembly } from "../modules/application/rpc/types";
-import type { PluginUICustomFactory } from "../modules/plugins/public";
+import type {
+	PluginUICustomFactory,
+	PluginUIWidgetComponent,
+} from "../modules/plugins/public";
 import {
 	createPluginRuntime,
 	type LoadedPlugin,
@@ -391,6 +394,56 @@ test("RPC UI routes only matching, kind-valid responses to each interaction", as
 		throw new Error("RPC must never invoke custom React factories.");
 	};
 	expect(await handle.ui.custom(factory)).toBeUndefined();
+	host.close();
+});
+
+test("RPC widgets retain text updates and never serialize React contributions", () => {
+	const updates: PluginUIUpdate[] = [];
+	const host = createRpcPluginUIHost({
+		request: async () => null,
+		notify: () => undefined,
+		update: (update) => updates.push(update),
+	});
+	const handle = host.create(
+		{ pluginId: "rpc_widget_test" },
+		() => () => undefined,
+		"command"
+	);
+	const laterHandle = host.create(
+		{ pluginId: "rpc_widget_test" },
+		() => () => undefined,
+		"command"
+	);
+	const component: PluginUIWidgetComponent = () => null;
+
+	handle.ui.setWidget("react-only", component);
+	handle.ui.setWidget("progress", ["Syncing"]);
+	laterHandle.ui.setWidget("progress", component);
+	handle.ui.setWidget("progress", ["Complete"]);
+
+	expect(updates).toEqual([
+		{
+			key: "progress",
+			placement: "aboveEditor",
+			pluginId: "rpc_widget_test",
+			type: "widget",
+			value: ["Syncing"],
+		},
+		{
+			key: "progress",
+			placement: "aboveEditor",
+			pluginId: "rpc_widget_test",
+			type: "widget",
+			value: null,
+		},
+		{
+			key: "progress",
+			placement: "aboveEditor",
+			pluginId: "rpc_widget_test",
+			type: "widget",
+			value: ["Complete"],
+		},
+	]);
 	host.close();
 });
 

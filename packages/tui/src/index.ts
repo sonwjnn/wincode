@@ -3,6 +3,7 @@ export * from "./dialog-frame";
 export * from "./dialogs";
 export * from "./editor-autocomplete";
 export * from "./feedback";
+export * from "./inline-image";
 export * from "./inline-notice";
 export * from "./multiline-editor";
 export * from "./react-hooks";

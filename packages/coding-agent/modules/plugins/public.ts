@@ -296,6 +296,18 @@ export type PluginUICustomOverlayAnchor =
 
 export type PluginUICustomOverlayWidth = number | `${number}%`;
 
+export type PluginUICustomOverlayPlacement = Readonly<{
+	anchor?: PluginUICustomOverlayAnchor;
+	width?: PluginUICustomOverlayWidth;
+	maxHeight?: number;
+	margin?: number;
+}>;
+
+export type PluginUICustomTerminalDimensions = Readonly<{
+	width: number;
+	height: number;
+}>;
+
 export type PluginUICustomOptions = Readonly<{
 	/** Overlay-only position. Defaults to `center`. */
 	anchor?: PluginUICustomOverlayAnchor;
@@ -305,6 +317,10 @@ export type PluginUICustomOptions = Readonly<{
 	maxHeight?: number;
 	/** Overlay-only uniform margin in terminal cells. Defaults to the host margin. */
 	margin?: number;
+	/** Overlay-only resolver, reevaluated on the initial layout and terminal resize. */
+	resolvePlacement?: (
+		dimensions: PluginUICustomTerminalDimensions
+	) => PluginUICustomOverlayPlacement;
 	/**
 	 * Selects where the host presents custom UI: `editor` replaces the composer,
 	 * `overlay` uses a bounded layer, and `full-screen` covers the app. All modes
@@ -348,12 +364,21 @@ export type PluginUIStatusContribution = Readonly<{
 	value: string;
 }>;
 
-export type PluginUIWidgetContribution = Readonly<{
-	key: string;
-	lines: readonly string[];
-	placement: PluginUIWidgetPlacement;
-	pluginId: string;
-}>;
+export type PluginUIWidgetContribution =
+	| Readonly<{
+			component?: never;
+			key: string;
+			lines: readonly string[];
+			placement: PluginUIWidgetPlacement;
+			pluginId: string;
+	  }>
+	| Readonly<{
+			component: PluginUIWidgetComponent;
+			key: string;
+			lines?: never;
+			placement: PluginUIWidgetPlacement;
+			pluginId: string;
+	  }>;
 
 /** Data-only status, widget, and title payloads for RPC UI update mapping. */
 export type PluginUIUpdate =
@@ -383,6 +408,8 @@ export type PluginUIChromeContext = Readonly<{
 }>;
 
 export type PluginUIHeaderComponent = ComponentType<PluginUIChromeContext>;
+export type PluginUIWidgetContext = PluginUIChromeContext;
+export type PluginUIWidgetComponent = ComponentType<PluginUIWidgetContext>;
 
 export type PluginUIFooterContext = PluginUIChromeContext &
 	Readonly<{
@@ -548,7 +575,7 @@ export type PluginUI = Readonly<{
 	/** Sets or clears one Plugin-owned widget above or below the composer. */
 	setWidget: (
 		key: string,
-		lines: readonly string[] | undefined,
+		content: readonly string[] | PluginUIWidgetComponent | undefined,
 		options?: PluginUIWidgetOptions
 	) => void;
 	/** Registers or clears the Plugin-owned React header replacement. */
