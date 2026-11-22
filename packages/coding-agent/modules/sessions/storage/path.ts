@@ -4,12 +4,12 @@ import {
 	isValidSessionId,
 	type SessionId,
 	toSessionId,
-} from "@/shared/identifiers";
+} from "../../../shared/identifiers";
 import {
 	resolveOperatingSystemUserDataDir,
 	resolveUserDataDir,
-} from "@/shared/paths/user-data-dir";
-import { getErrorCode } from "@/shared/utils/error-log-fields";
+} from "../../../shared/paths/user-data-dir";
+import { getErrorCode } from "../../../shared/utils/error-log-fields";
 import { SessionWriterLockFailureError } from "./session-writer-lock";
 
 const DATABASE_FILE_NAME = "sessions.db";

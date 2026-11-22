@@ -7,25 +7,6 @@ import {
 import { modelUsageSchema, thinkingLevelSchema } from "@wincode/ai";
 import { stableStringifyJson } from "@wincode/utils";
 import { z } from "zod";
-import { providerModelSelectionSchema } from "@/modules/providers/provider-model-selection";
-import { attachmentReferenceSchema } from "@/modules/sessions/attachment-reference";
-import type { SessionCompaction } from "@/modules/sessions/compaction/types";
-import { assertCompactionMessageReferences } from "@/modules/sessions/compaction/validation";
-import { sessionContextEditSchema } from "@/modules/sessions/context-edits";
-import { SESSION_LOG_IDENTIFIER_PATTERN } from "@/modules/sessions/session-log-identifiers";
-import {
-	serializePluginSessionHistoryPayload,
-	validatePluginSessionHistoryPluginId,
-	validatePluginSessionHistoryType,
-} from "@/modules/sessions/session-plugin-history";
-import {
-	type PluginSessionStateJsonValue,
-	serializePluginSessionStateValue,
-	validatePluginSessionStateKey,
-	validatePluginSessionStatePluginId,
-	validatePluginSessionStateSchemaVersion,
-} from "@/modules/sessions/session-plugin-state";
-import { editModeSchema } from "@/modules/tools/versioned/contracts";
 import {
 	type CompactionId,
 	isValidSessionId,
@@ -33,7 +14,26 @@ import {
 	type SessionId,
 	toSessionHistoryEntryId,
 	type WorkspaceId,
-} from "@/shared/identifiers";
+} from "../../../shared/identifiers";
+import { providerModelSelectionSchema } from "../../providers/provider-model-selection";
+import { editModeSchema } from "../../tools/versioned/contracts";
+import { attachmentReferenceSchema } from "../attachment-reference";
+import type { SessionCompaction } from "../compaction/types";
+import { assertCompactionMessageReferences } from "../compaction/validation";
+import { sessionContextEditSchema } from "../context-edits";
+import { SESSION_LOG_IDENTIFIER_PATTERN } from "../session-log-identifiers";
+import {
+	serializePluginSessionHistoryPayload,
+	validatePluginSessionHistoryPluginId,
+	validatePluginSessionHistoryType,
+} from "../session-plugin-history";
+import {
+	type PluginSessionStateJsonValue,
+	serializePluginSessionStateValue,
+	validatePluginSessionStateKey,
+	validatePluginSessionStatePluginId,
+	validatePluginSessionStateSchemaVersion,
+} from "../session-plugin-state";
 import { getSessionRecordValidationError } from "./session-record";
 
 export const SESSION_LOG_FORMAT_VERSION = 5;

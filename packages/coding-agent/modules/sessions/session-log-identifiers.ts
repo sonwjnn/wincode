@@ -1,4 +1,4 @@
-import { SESSION_IDENTIFIER_PATTERN } from "@/shared/identifiers";
+import { SESSION_IDENTIFIER_PATTERN } from "../../shared/identifiers";
 
 export const SESSION_LOG_IDENTIFIER_PATTERN = SESSION_IDENTIFIER_PATTERN;
 

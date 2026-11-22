@@ -10,6 +10,7 @@ import type {
 import { useKeyboard } from "@wincode/tui";
 import type { InputRenderable, KeyEvent } from "@wincode/tui/core";
 import { useEffect, useRef } from "react";
+import { z } from "zod";
 
 const TERMINAL_AGENT_TURN_EVENTS: ReadonlySet<SessionSdkEvent["type"]> =
 	new Set([
@@ -195,9 +196,42 @@ const createSmokeEditorFactory =
 
 const interactivePluginUISmoke: PluginFactory = (api) => {
 	const plugin = api.definePlugin({ id: "interactive_plugin_ui_smoke" });
+	plugin.registerTool({
+		name: "probe",
+		description: "Return the independent Plugin smoke marker.",
+		inputSchema: z.object({}),
+		handler: async () => ({
+			output: "independent-tool-output",
+			type: "success",
+		}),
+	});
 	let sessionSdk: PluginSessionContext["sessionSdk"];
 	plugin.onSessionStart(({ sessionSdk: operations }) => {
 		sessionSdk = operations;
+	});
+	plugin.registerCommand({
+		description: "Open a standalone smoke overlay.",
+		name: "smoke-overlay",
+		handler: async ({ ui }) => {
+			const result = await ui.custom<string>(
+				() =>
+					function SmokeOverlay({ done, theme }) {
+						useKeyboard((key) => {
+							if (key.name === "x") {
+								key.preventDefault();
+								done("dismissed");
+							}
+						});
+						return (
+							<box padding={1}>
+								<text fg={theme.colors.text}>Independent Plugin overlay</text>
+							</box>
+						);
+					},
+				{ presentation: "overlay" }
+			);
+			return result ?? "Overlay cancelled.";
+		},
 	});
 	plugin.registerCommand({
 		description: "Show custom overlay while a fake Agent Turn completes.",

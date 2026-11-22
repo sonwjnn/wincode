@@ -8,10 +8,10 @@ import type {
 	SubmissionId,
 } from "@wincode/agent-core";
 import type { ThinkingLevel } from "@wincode/ai";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
-import type { SessionMessage } from "@/modules/sessions/message";
-import type { EditMode } from "@/modules/tools";
-import type { CompactionId, SessionId } from "@/shared/identifiers";
+import type { CompactionId, SessionId } from "../../../shared/identifiers";
+import type { ProviderModelSelection } from "../../providers/provider-model-selection";
+import type { EditMode } from "../../tools";
+import type { SessionMessage } from "../message";
 import type {
 	SessionBundleExportScope,
 	SessionBundleImportResult,

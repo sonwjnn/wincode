@@ -1,9 +1,6 @@
 import type { ReadonlyDeep } from "type-fest";
-import type {
-	SessionMessage,
-	SessionToolPart,
-} from "@/modules/sessions/message";
-import { toolFileOperations } from "@/modules/tools";
+import { toolFileOperations } from "../../tools";
+import type { SessionMessage, SessionToolPart } from "../message";
 
 /**
  * The cumulative file sets a compaction hands to the next one. They are

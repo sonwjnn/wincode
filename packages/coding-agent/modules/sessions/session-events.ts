@@ -4,7 +4,7 @@ import type {
 	ModelStepRetryEndOutcome,
 	OperationalFailure,
 } from "@wincode/agent-core";
-import type { CompactionId, SessionId } from "@/shared/identifiers";
+import type { CompactionId, SessionId } from "../../shared/identifiers";
 
 export type CompactionSummaryRetryStatus = Readonly<{
 	attempt: number;

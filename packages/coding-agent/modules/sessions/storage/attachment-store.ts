@@ -13,12 +13,7 @@ import {
 } from "@wincode/utils";
 import { eq } from "drizzle-orm";
 import type { Except, Merge, UnknownRecord } from "type-fest";
-import type {
-	SessionFilePart,
-	SessionMessage,
-	SessionPart,
-} from "@/modules/sessions/message";
-import { throwIfAborted } from "@/shared/utils/abort";
+import { throwIfAborted } from "../../../shared/utils/abort";
 import {
 	ATTACHMENT_ID_PATTERN,
 	type AttachmentReference,
@@ -33,6 +28,7 @@ import {
 	MAX_IMAGE_DIMENSION,
 	MAX_MEDIA_TYPE_LENGTH,
 } from "../attachment-reference";
+import type { SessionFilePart, SessionMessage, SessionPart } from "../message";
 import type { SessionDatabase } from "./client";
 import { parseSessionLogFileName, resolveSessionLogFilePath } from "./path";
 import { promptHistory, sessionAttachment } from "./schema";

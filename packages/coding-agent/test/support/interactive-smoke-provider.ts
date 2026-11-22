@@ -205,22 +205,28 @@ const toolResponse = (
 	if (!prompt.includes("terminal smoke tool")) {
 		return;
 	}
+	const external = prompt.includes("terminal smoke tool external");
 	const result = request.messages.at(-1);
 	if (result?.role !== "tool") {
 		return completedResponse({
 			events: [
 				{
-					input: { path: "smoke-fixture.txt" },
-					toolCallId: "smoke-read",
-					toolName: "read",
+					input: external ? {} : { path: "smoke-fixture.txt" },
+					toolCallId: external ? "smoke-external" : "smoke-read",
+					toolName: external
+						? "plugin_interactive_plugin_ui_smoke_probe"
+						: "read",
 					type: "tool-call",
 				},
 			],
 		});
 	}
-	return JSON.stringify(result.content).includes("smoke-file-content")
-		? completedResponse(fauxText("tool-roundtrip-ok"))
-		: { error: "Read tool did not return the smoke fixture" };
+	const expected = external ? "independent-tool-output" : "smoke-file-content";
+	return JSON.stringify(result.content).includes(expected)
+		? completedResponse(
+				fauxText(external ? "external-tool-roundtrip-ok" : "tool-roundtrip-ok")
+			)
+		: { error: `Tool did not return ${expected}` };
 };
 
 const scriptedResponse = (

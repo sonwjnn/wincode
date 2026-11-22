@@ -26,6 +26,21 @@ Breaking change: `PluginDefinitionAPI.secrets` and `PluginSecretStore` have been
 
 Enabling a path is a trust decision: Plugin code runs with Wincode's process privileges, including code executed while the module loads. Plugins are not sandboxed, and Wincode does not install their dependencies. Local imports and dependencies already available to the Plugin may be used. `--no-plugin <id>` and configured `disabledPlugins` entries disable known default/distribution Plugins before loading them; they do not disable explicitly selected file paths. Remove a file path from the CLI or the configuration source that declares it to stop that Plugin from loading.
 
+### Install from an independent repository
+
+For a published release, use the Bun-installed CLI. The first verified pair is Bun `1.4.4` and Coding-Agent `0.1.0` from the release tarballs. Use the Plugin repository's documented host peer range when choosing a release. From the workspace root:
+
+```sh
+bun add @wincode/coding-agent@0.1.0
+git clone "$PLUGIN_REPO_URL" .wincode/plugins/example
+```
+
+Add `.wincode/plugins/example` to the workspace root's `package.json` `workspaces` list. Run `bun install` at the root so Bun installs the Plugin's dependencies and resolves its host peers alongside Wincode. Do not separately install a second copy of the UI peers in the Plugin checkout. Then run `bun run wincode --plugin .wincode/plugins/example/index.ts`.
+
+To enable it for a trusted project, add `"plugins": ["./plugins/example/index.ts"]` to `.wincode/settings.json`. The path is relative to that settings file. The directory itself is not scanned, and Wincode does not install Plugin dependencies. Review the repository before installing or enabling it: a loaded Plugin runs in-process, not in a sandbox. Standalone binaries are not verified for independent Plugins.
+
+For release verification, run `bun run test:tui --packed-plugin` before publishing and `bun run test:tui --published-plugin` on the release revision after publishing. Both run the same external consumer scenarios; the latter installs from the registry without tarball overrides.
+
 ## Author a Plugin
 
 Export one default factory. The authoring types are available from the installed Wincode package; Plugin code does not need internal Coding-Agent imports.
@@ -172,6 +187,7 @@ Keep these packages external when bundling; at runtime, the Plugin must resolve 
 ```json
 {
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "jsxImportSource": "@wincode/tui"
   }

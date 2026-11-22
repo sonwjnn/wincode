@@ -22,10 +22,12 @@ import {
 import { openInteractiveSmokeSessionStore } from "./interactive-smoke-session-store";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../..");
-const pluginPath = path.join(
-	repositoryRoot,
-	"packages/coding-agent/test/support/interactive-smoke-provider.ts"
-);
+const pluginPath =
+	process.env.WINCODE_SMOKE_PACKED_PROVIDER ||
+	path.join(
+		repositoryRoot,
+		"packages/coding-agent/test/support/interactive-smoke-provider.ts"
+	);
 const storageId = pluginProviderStorageId({
 	pluginId: "interactive_smoke",
 	providerId: "terminal-smoke",

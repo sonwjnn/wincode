@@ -33,20 +33,19 @@ import { z } from "zod";
 import {
 	type ProviderModelSelection,
 	providerModelSelectionSchema,
-} from "@/modules/providers/provider-model-selection";
+} from "../providers/provider-model-selection";
+import { isSkillToolPart, sanitizeSkillToolPart } from "../skills/activation";
+import {
+	skillActivationSchema,
+	skillActivationSourceSchema,
+	skillContextSchema,
+} from "../skills/context";
 import type {
 	SkillActivation,
 	SkillContext,
 	SkillToolPart,
-} from "@/modules/skills";
-import {
-	isSkillToolPart,
-	sanitizeSkillToolPart,
-	skillActivationSchema,
-	skillActivationSourceSchema,
-	skillContextSchema,
-} from "@/modules/skills";
-import type { CodingToolName } from "@/modules/tools";
+} from "../skills/types";
+import type { CodingToolName } from "../tools";
 
 export type SessionFilePart = {
 	readonly available?: boolean;

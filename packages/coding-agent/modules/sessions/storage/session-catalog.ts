@@ -1,10 +1,10 @@
 import type { ModelUsage } from "@wincode/ai";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
 import type {
 	CompactionId,
 	SessionId,
 	SessionUsageEntryId,
-} from "@/shared/identifiers";
+} from "../../../shared/identifiers";
+import type { ProviderModelSelection } from "../../providers/provider-model-selection";
 import type {
 	Session,
 	SessionCatalogPage,

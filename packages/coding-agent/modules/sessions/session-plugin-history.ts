@@ -1,5 +1,5 @@
 import { isNonEmptyStringWithinUtf8ByteLimit } from "@wincode/utils";
-import type { SessionHistoryEntryId } from "@/shared/identifiers";
+import type { SessionHistoryEntryId } from "../../shared/identifiers";
 import type { SessionPageOptions } from "./session-pagination-types";
 import {
 	type PluginSessionStateJsonValue,

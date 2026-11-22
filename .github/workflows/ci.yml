@@ -65,6 +65,8 @@ jobs:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
       - run: bun run test
+      - name: Smoke test external Plugins against packed packages
+        run: bun run test:tui --packed-plugin
 
   e2e:
     name: E2E tests

@@ -15,8 +15,8 @@ import {
 	unique,
 } from "drizzle-orm/sqlite-core";
 import type { Jsonify } from "type-fest";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
-import type { EditMode, FileVersion } from "@/modules/tools";
+import type { ProviderModelSelection } from "../../providers/provider-model-selection";
+import type { EditMode, FileVersion } from "../../tools";
 import type { SessionCompaction } from "../compaction/types";
 import type { PromptHistoryEntry } from "./prompt-history";
 import type { SessionUsageEntry } from "./session-catalog";

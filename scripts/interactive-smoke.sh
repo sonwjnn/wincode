@@ -7,6 +7,9 @@ APPROVED=0
 BINARY=""
 MODEL=""
 PLUGIN_UI_SMOKE=0
+PACKED_PLUGIN_SMOKE=0
+PUBLISHED_PLUGIN_SMOKE=0
+PACKED_CLI=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --live) LIVE=1; shift ;;
@@ -18,6 +21,8 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 && -x "$2" && "$2" == /* ]] || { printf 'Expected an absolute executable binary path.\n' >&2; exit 1; }
       BINARY="$2"; shift 2 ;;
     --plugin-ui) PLUGIN_UI_SMOKE=1; shift ;;
+    --packed-plugin) PACKED_PLUGIN_SMOKE=1; PLUGIN_UI_SMOKE=1; shift ;;
+    --published-plugin) PACKED_PLUGIN_SMOKE=1; PUBLISHED_PLUGIN_SMOKE=1; PLUGIN_UI_SMOKE=1; shift ;;
     *) printf 'Unknown smoke option: %s\n' "$1" >&2; exit 1 ;;
   esac
 done
@@ -30,7 +35,7 @@ if [[ "$LIVE" == 0 && -n "$MODEL" ]]; then
   exit 1
 fi
 if [[ "$PLUGIN_UI_SMOKE" == 1 && ( "$LIVE" == 1 || -n "$BINARY" ) ]]; then
-  printf '%s\n' '--plugin-ui requires the source fake-provider smoke (no --live or --binary).' >&2
+  printf '%s\n' 'Plugin UI smoke requires the fake Provider and does not support --binary.' >&2
   exit 1
 fi
 BRANCH_EXPORT_SMOKE=0
@@ -109,10 +114,22 @@ if [[ "$LIVE" == 1 ]]; then
   )
 fi
 printf 'smoke-file-content\n' > "$WORKSPACE/smoke-fixture.txt"
+if [[ "$PACKED_PLUGIN_SMOKE" == 1 ]]; then
+  STAGE_ARGS=("$WORKSPACE")
+  if [[ "$PUBLISHED_PLUGIN_SMOKE" == 1 ]]; then
+    STAGE_ARGS+=(--published)
+  fi
+  HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_HOME/config" XDG_DATA_HOME="$TEST_HOME/data" \
+    "$BUN_PATH" --no-env-file "$ROOT/scripts/test-support/stage-packed-plugin-smoke.ts" "${STAGE_ARGS[@]}"
+  PACKED_CLI="$WORKSPACE/node_modules/.bin/wincode"
+  SMOKE_PLUGIN="$WORKSPACE/interactive-smoke-provider.ts"
+  EXTRA_PLUGIN="$WORKSPACE/.wincode/plugins/external-smoke/interactive-plugin-ui-smoke.tsx"
+fi
 tmux new-session -d -s "$SESSION" -x 80 -y 24 -c "$WORKSPACE" \
   -e "WINCODE_SMOKE_HOME=$TEST_HOME" \
   -e "WINCODE_SMOKE_BUN=$BUN_PATH" \
   -e "WINCODE_SMOKE_BINARY=$BINARY" \
+  -e "WINCODE_SMOKE_PACKED_CLI=$PACKED_CLI" \
   -e "WINCODE_SMOKE_PLUGIN=$SMOKE_PLUGIN" \
   -e "WINCODE_SMOKE_LIVE=$LIVE" \
   -e "WINCODE_SMOKE_APPROVED=$APPROVED" \
@@ -222,6 +239,11 @@ wait_for_text 'after-cancel-ok'
 tmux send-keys -l -t "$SESSION" 'terminal smoke tool'
 tmux send-keys -t "$SESSION" Enter
 wait_for_text 'tool-roundtrip-ok'
+if [[ "$PACKED_PLUGIN_SMOKE" == 1 ]]; then
+  tmux send-keys -l -t "$SESSION" 'terminal smoke tool external'
+  tmux send-keys -t "$SESSION" Enter
+  wait_for_text 'external-tool-roundtrip-ok'
+fi
 tmux send-keys -l -t "$SESSION" 'terminal smoke error'
 tmux send-keys -t "$SESSION" Enter
 wait_for_text 'The model request failed.'
@@ -272,7 +294,7 @@ if [[ "$BRANCH_EXPORT_SMOKE" == 1 ]]; then
   tmux send-keys -t "$SESSION" Enter
   wait_for_text 'imported-branch-only' 150
 fi
-if [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
+if [[ "$PLUGIN_UI_SMOKE" == 1 && "$PACKED_PLUGIN_SMOKE" == 0 ]]; then
   tmux send-keys -l -t "$SESSION" '/smoke-editor-turn'
   wait_for_text 'smoke-editor-turn' 150
   tmux send-keys -t "$SESSION" Tab
@@ -319,7 +341,13 @@ if [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
     sleep 0.1
   done
   grep -Fq '"hidden":true' "$OVERLAY_STATE_FILE" || fail_with_frame 'The custom overlay did not become hidden.'
-  capture_frame
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    capture_frame
+    if ! printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom overlay'; then
+      break
+    fi
+    sleep 0.1
+  done
   printf '%s\n' "$FRAME" | grep -Fq 'Smoke custom overlay' && fail_with_frame 'A hidden custom overlay remained visible.'
   printf '%s\n' "$FRAME" | grep -Fq 'Ask anything...' || fail_with_frame 'Hiding the custom overlay did not reveal the application.'
 
@@ -349,6 +377,33 @@ if [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
   wait_for_text 'Ask anything...' 150
 
 fi
+  if [[ "$PACKED_PLUGIN_SMOKE" == 1 ]]; then
+    tmux resize-window -t "$SESSION" -x 100 -y 30
+    for phase in before-reload after-reload; do
+      printf 'Checking independent Plugin overlay (%s).\n' "$phase"
+      tmux send-keys -l -t "$SESSION" '/smoke-overlay'
+      wait_for_text 'Open a standalone smoke overlay.' 150
+      tmux send-keys -t "$SESSION" Tab
+      tmux send-keys -t "$SESSION" Enter
+      wait_for_text 'Independent Plugin overlay' 150
+      tmux send-keys -t "$SESSION" x
+      for ((attempt = 0; attempt < 120; attempt++)); do
+        capture_frame
+        if ! printf '%s\n' "$FRAME" | grep -Fq 'Independent Plugin overlay'; then
+          break
+        fi
+        sleep 0.1
+      done
+      if printf '%s\n' "$FRAME" | grep -Fq 'Independent Plugin overlay'; then
+        fail_with_frame "A Plugin overlay remained visible after dismissal ($phase)."
+      fi
+      if [[ "$phase" == before-reload ]]; then
+        tmux send-keys -l -t "$SESSION" '/reload'
+        tmux send-keys -t "$SESSION" Enter
+        wait_for_text 'Reloaded keybindings, plugins' 150
+      fi
+    done
+  fi
 fi
 tmux send-keys -l -t "$SESSION" '/exit'
 tmux send-keys -t "$SESSION" Enter
@@ -394,6 +449,8 @@ if [[ "$LIVE" == 1 ]]; then
   printf 'PASS: live Provider reply and clean /exit.\n'
 elif [[ -n "$BINARY" ]]; then
   printf 'PASS: release executable TUI startup and clean /exit; no Provider request sent.\n'
+elif [[ "$PACKED_PLUGIN_SMOKE" == 1 ]]; then
+  printf 'PASS: installed CLI, explicit Plugin admission, Tool roundtrip, TSX overlay and reload.\n'
 elif [[ "$PLUGIN_UI_SMOKE" == 1 ]]; then
   printf 'PASS: faux streaming, cancellation, tool roundtrip, error recovery, overlay resize/focus/visibility/dismissal/restoration, clean /exit.\n'
 else

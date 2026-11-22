@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import { tryLockExclusive } from "@deepseek-ai/node-addon-system/flock";
-import { getErrorCode } from "@/shared/utils/error-log-fields";
+import { getErrorCode } from "../../../shared/utils/error-log-fields";
 import type { SessionWriterLockAdapter } from "./session-writer-lock-adapter";
 
 const acquire = async (lockPath: string) => {

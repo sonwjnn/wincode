@@ -1,10 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
-import { EXECUTION_MODES, type ExecutionMode } from "@/shared/execution-mode";
-import type { SessionId } from "@/shared/identifiers";
-import { throwIfAborted } from "@/shared/utils/abort";
-import { createKeyedSerialQueue } from "@/shared/utils/keyed-serial-queue";
+import {
+	EXECUTION_MODES,
+	type ExecutionMode,
+} from "../../../shared/execution-mode";
+import type { SessionId } from "../../../shared/identifiers";
+import { throwIfAborted } from "../../../shared/utils/abort";
+import { createKeyedSerialQueue } from "../../../shared/utils/keyed-serial-queue";
 import type {
 	SessionWriterLockAdapter,
 	SessionWriterLockAdapterHandle,

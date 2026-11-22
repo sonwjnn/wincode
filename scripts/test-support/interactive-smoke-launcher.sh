@@ -56,7 +56,9 @@ WORKSPACE="$PWD"
 PATH_VALUE="$(dirname "$BUN_PATH"):/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"
 PREPARE="$ROOT/scripts/test-support/prepare-interactive-smoke-provider.ts"
 COMMAND=("$BUN_PATH" --no-env-file "$ROOT/packages/coding-agent/bin/wincode.ts")
-if [[ -n "${WINCODE_SMOKE_BINARY:-}" ]]; then
+if [[ -n "${WINCODE_SMOKE_PACKED_CLI:-}" ]]; then
+  COMMAND=("$WINCODE_SMOKE_PACKED_CLI")
+elif [[ -n "${WINCODE_SMOKE_BINARY:-}" ]]; then
   COMMAND=("$WINCODE_SMOKE_BINARY")
 fi
 PLUGIN_ARGS=(--plugin "${WINCODE_SMOKE_PLUGIN:-$ROOT/packages/coding-agent/test/support/interactive-smoke-provider.ts}")
@@ -78,6 +80,7 @@ OS_USERNAME="${USER:-${LOGNAME:-$(id -un)}}"
     XDG_DATA_HOME="$TEST_HOME/data" \
     APPDATA="$TEST_HOME/appdata" \
     WINCODE_SMOKE_MODEL="${WINCODE_SMOKE_MODEL:-}" \
+    WINCODE_SMOKE_PACKED_PROVIDER="${WINCODE_SMOKE_PACKED_CLI:+${WINCODE_SMOKE_PLUGIN}}" \
     WINCODE_SMOKE_WORKSPACE="$WORKSPACE" \
     WINCODE_SMOKE_HOME="$TEST_HOME" \
     WINCODE_SMOKE_INVALID_ENDPOINT="${WINCODE_SMOKE_INVALID_ENDPOINT:-0}" \

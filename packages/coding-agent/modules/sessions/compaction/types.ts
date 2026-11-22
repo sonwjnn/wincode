@@ -6,12 +6,9 @@ import type {
 import type { ThinkingLevel } from "@wincode/ai";
 import { MODEL_OUTPUT_TOKEN_LIMIT } from "@wincode/ai";
 import type { Except, ReadonlyDeep } from "type-fest";
-import type { ProviderModelSelection } from "@/modules/providers/provider-model-selection";
-import type {
-	SessionMessage,
-	SessionMessageUsage,
-} from "@/modules/sessions/message";
-import type { CompactionId, SessionId } from "@/shared/identifiers";
+import type { CompactionId, SessionId } from "../../../shared/identifiers";
+import type { ProviderModelSelection } from "../../providers/provider-model-selection";
+import type { SessionMessage, SessionMessageUsage } from "../message";
 import type { SessionCompactionRetryEvent } from "../session-events";
 import type {
 	AttachmentExternalizationLease,

@@ -3,13 +3,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { omitUndefined } from "@wincode/utils";
 import { z } from "zod";
-import type { AttachmentReference } from "@/modules/sessions/attachment-reference";
 import {
 	isValidSessionId,
 	type SessionId,
 	toSessionId,
-} from "@/shared/identifiers";
-import { throwIfAborted } from "@/shared/utils/abort";
+} from "../../../shared/identifiers";
+import { throwIfAborted } from "../../../shared/utils/abort";
+import type { AttachmentReference } from "../attachment-reference";
 import { MAX_ATTACHMENT_BYTES } from "../attachment-reference";
 import type {
 	SessionBundleAttachment,
