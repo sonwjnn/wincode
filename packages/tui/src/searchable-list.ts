@@ -218,43 +218,48 @@ export function useSearchableList<T>({
 			if (selectableIndices.length === 0) {
 				return;
 			}
-			setSelectedIndex((currentIndex) => {
-				const currentPosition = selectableIndices.indexOf(currentIndex);
-				let nextPosition: number;
-				if (direction === "down") {
-					nextPosition =
-						currentPosition < 0 ||
-						currentPosition === selectableIndices.length - 1
-							? 0
-							: currentPosition + 1;
-				} else {
-					nextPosition =
-						currentPosition <= 0
-							? selectableIndices.length - 1
-							: currentPosition - 1;
-				}
-				const nextIndex = selectableIndices[nextPosition] ?? currentIndex;
-				selectedIndexRef.current = nextIndex;
-				return nextIndex;
-			});
+			const currentIndex = selectedIndexRef.current;
+			const currentPosition = selectableIndices.indexOf(currentIndex);
+			let nextPosition: number;
+			if (direction === "down") {
+				nextPosition =
+					currentPosition < 0 ||
+					currentPosition === selectableIndices.length - 1
+						? 0
+						: currentPosition + 1;
+			} else {
+				nextPosition =
+					currentPosition <= 0
+						? selectableIndices.length - 1
+						: currentPosition - 1;
+			}
+			const nextIndex = selectableIndices[nextPosition] ?? currentIndex;
+			// The next terminal key can arrive before React commits this render.
+			selectedIndexRef.current = nextIndex;
+			setSelectedIndex(nextIndex);
 		},
 		[selectableIndices]
 	);
 	const moveUp = useCallback(() => moveSelection("up"), [moveSelection]);
 	const moveDown = useCallback(() => moveSelection("down"), [moveSelection]);
+	const getHighlightedItem = useCallback(
+		() => filteredItems[selectedIndexRef.current],
+		[filteredItems]
+	);
 	const handleEnter = useCallback(
 		(onSelect: (item: T) => void) => {
-			const item = filteredItems[selectedIndexRef.current];
+			const item = getHighlightedItem();
 			if (item !== undefined && isItemSelectable(item)) {
 				onSelect(item);
 			}
 		},
-		[filteredItems, isItemSelectable]
+		[getHighlightedItem, isItemSelectable]
 	);
 
 	return {
 		contentHeight,
 		filteredItems,
+		getHighlightedItem,
 		handleContentChange,
 		handleEnter,
 		inputRef,
