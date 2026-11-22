@@ -116,6 +116,7 @@ export function SearchListDialogWrapper<T>({
 	const {
 		contentHeight,
 		filteredItems: filtered,
+		getHighlightedItem,
 		handleContentChange,
 		handleEnter,
 		inputRef,
@@ -155,7 +156,7 @@ export function SearchListDialogWrapper<T>({
 		if (!isTopLayer(layerId)) {
 			return;
 		}
-		if (onKey?.(key, highlightedItem, searchValue.length > 0)) {
+		if (onKey?.(key, getHighlightedItem(), searchValue.length > 0)) {
 			key.preventDefault();
 			return;
 		}

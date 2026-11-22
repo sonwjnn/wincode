@@ -188,6 +188,22 @@ const createHistoryTreeDialogHarness = async (
 	return { navigationTargets, reads, setup, readSessionHistoryTreePage };
 };
 
+test("a History preview after rapid navigation opens the new highlight", async () => {
+	const { setup } = await createHistoryTreeDialogHarness();
+	try {
+		await act(() => {
+			setup.mockInput.pressArrow("down");
+			setup.mockInput.pressKey("p");
+		});
+		await flushTestRenderer(setup, 2);
+		expect(setup.captureCharFrame()).toContain(
+			"Plugin State payload is intentionally hidden"
+		);
+	} finally {
+		act(() => setup.renderer.destroy());
+	}
+});
+
 test("History preview neutralizes terminal controls and hides Plugin State payloads", async () => {
 	const { navigationTargets, setup } = await createHistoryTreeDialogHarness();
 	try {
